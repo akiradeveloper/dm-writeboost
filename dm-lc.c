@@ -548,7 +548,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 		mb->sector = mbdev->sector;
 		mb->device_id = mbdev->device_id;
 		mb->dirty_bits = mbdev->dirty_bits;
-		mb->recover = mb->recover;
+		mb->recover = mbdev->recover;
 		
 		struct lookup_key key = {
 			.device_id = mb->device_id,

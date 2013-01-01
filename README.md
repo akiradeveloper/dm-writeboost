@@ -4,7 +4,7 @@
 ## Overview
 This is an implementation of Disk Caching Disk(DCD).  
 DCD is a logical block layer that converts coming random writes into sequential writes
-which archives high latency/throughput especially on HDD.  
+which archives high latency/throughput especially on HDD.
 For more detail, please read the published papar([1]).  
 Althogh the first paper was published 15 years ago,
 researches for DCD is still continuing.

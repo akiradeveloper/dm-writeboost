@@ -170,6 +170,9 @@ struct lc_cache {
 
 	size_t last_migrated_segment_id;
 	struct list_head migrate_wait_queue;
+	
+	struct workqueue_struct *migrate_wq; /* TODO */
+	struct work_struct migrate_work; /* TODO */
 };
 
 static void ht_empty_init(struct lc_cache *cache)

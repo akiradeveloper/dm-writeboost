@@ -17,7 +17,7 @@
 
 #define NR_CACHES_INSEG 255
 
-struct dm_io_client *lc_io_client;
+static struct dm_io_client *lc_io_client;
 
 struct safe_io {
 	struct work_struct work;

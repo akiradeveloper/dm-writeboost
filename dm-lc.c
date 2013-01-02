@@ -110,12 +110,16 @@ struct metablock {
 
 	sector_t sector; 
 	device_id device_id;
-	u8 dirty_bits; /* eight bit flags */
+
 	/*
-	 * A metablock with recover flag true
-	 * will be counted in recovery.
+	 * In this version,
+	 * we recover only dirty caches 
+	 * in crash recovery.
+	 *
+	 * TODO recover clean cache.
+	 * Adding recover flag will do.
 	 */
-	bool recover;
+	u8 dirty_bits; /* eight bit flags */
 
 	struct hlist_node ht_list;
 };
@@ -125,7 +129,6 @@ struct metablock_device {
 	device_id device_id;
 
 	u8 dirty_bits;
-	u8 recover;
 };
 
 struct segment_header {
@@ -205,9 +208,9 @@ static void mb_array_empty_init(struct lc_cache *cache)
 	for(i=0; i<cache->nr_caches; i++){
 		struct metablock *mb = flex_array_get(cache->mb_array, i);
 		mb->idx = i;
-		mb->dirty_bits = 0;
-		mb->recover = false;
 		INIT_HLIST_NODE(&mb->ht_list);
+		
+		mb->dirty_bits = 0;
 	}
 }
 
@@ -227,6 +230,9 @@ static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct m
 	cache_nr k = ht_hash(cache, key);
 	struct ht_head *hd = flex_array_get(cache->htable, k);
 	hlist_add_head(&mb->ht_list, &hd->ht_list);				
+
+	mb->sector = key->sector;
+	mb->device_id = key->device_id;
 };
 
 static struct metablock *ht_lookup(struct lc_cache *cache, struct lookup_key *key)
@@ -257,12 +263,11 @@ static void init_segment_header_array(struct lc_cache *cache)
 	for(segment_idx=0; segment_idx<nr_segments; segment_idx++){
 		struct segment_header *seg =
 			flex_array_get(cache->segment_header_array, segment_idx);
-		seg->nr_dirty_caches_remained = 0;
-		
 		seg->global_id = (segment_idx + 1);
 		seg->start = NR_CACHES_INSEG * segment_idx;
-		
 		INIT_LIST_HEAD(&seg->list);
+		
+		seg->nr_dirty_caches_remained = 0;
 	}
 }
 
@@ -290,11 +295,10 @@ static void prepare_segment_header_device(
 		mbdev->sector = mb->sector;	
 		mbdev->device_id = mb->device_id;
 		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->recover = mb->recover;
 		
 		/* For a segment that was partially flushed. */
 		if(i > (cache->cursor % NR_CACHES_INSEG)){
-			mbdev->recover = false;
+			mbdev->dirty_bits = 0;
 		}
 	}
 }
@@ -363,6 +367,9 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 {
 	unsigned long err_bits = 0;
 	struct backing_device *backing = backing_tbl[mb->device_id];
+
+	DMDEBUG("mb->idx: %u", mb->idx);
+	DMDEBUG("backing id: %u", mb->device_id);
 
 	if(! mb->dirty_bits){
 		return;
@@ -448,10 +455,13 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		cache_nr idx = seg->start + i;	
 		struct metablock *mb = flex_array_get(cache->mb_array, idx);
 		migrate_mb(cache, mb); 
-		cleanup_segment_of(cache, mb->idx);
+		cleanup_segment_of(cache, mb);
 		mb->dirty_bits = 0;
 	}
 	if(seg->nr_dirty_caches_remained){
+		DMERR("nr_dirty_caches_remained is nonzero(%lu)\ 
+				after migrating whole segment",
+				seg->nr_dirty_caches_remained);
 		BUG();
 	}
 	list_del(&seg->list);
@@ -549,18 +559,21 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	/* Update in-memory structures */
 	cache_nr i;
 	cache_nr offset = seg->start;
+
+	size_t nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		struct metablock *mb = flex_array_get(cache->mb_array, offset + i); 
+		
+		if(! mb->dirty_bits){
+			continue;
+		}
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
 		mb->sector = mbdev->sector;
 		mb->device_id = mbdev->device_id;
 		mb->dirty_bits = mbdev->dirty_bits;
-		mb->recover = mbdev->recover;
 		
-		if(! mb->recover){
-			continue;		
-		}
+		nr_dirties++;
 		
 		struct lookup_key key = {
 			.device_id = mb->device_id,
@@ -572,6 +585,10 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 			hlist_del(&mb->ht_list);
 		}
 		ht_register(cache, &key, mb);	
+	}
+
+	if(seg->nr_dirty_caches_remained != nr_dirties){
+		DMERR("nr_dirty_caches_remained inconsistent");
 	}
 }
 
@@ -612,7 +629,7 @@ static void recover_cache(struct lc_cache *cache)
 	 * If no segments have been flushed
 	 * then there is nothing to recover.
 	 */
-	size_t init_segment_id = 1;
+	size_t init_segment_id = 0;
 	if(oldest_id == max_id){
 		init_segment_id = 1;
 		goto setup_init_segment;
@@ -766,7 +783,7 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
-	DMDEBUG("bio->bi_size :%lu", bio->bi_size);
+	DMDEBUG("bio->bi_size :%u", bio->bi_size);
 
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
@@ -819,8 +836,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		/* Read found */
 		
 		if(unlikely(on_buffer)){
-			/* TODO: Flush the buffer element */
-			BUG();
+			/* FIXME Flush the buffer element */
 			goto read_on_cache;
 		}
 read_on_cache:	
@@ -829,7 +845,7 @@ read_on_cache:
 			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
 		}else{
 			migrate_mb(cache, mb);
-			cleanup_segment_of(cache, mb->idx);
+			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
 			bio_remap(bio, orig, bio->bi_sector);
 		}
@@ -857,13 +873,12 @@ read_on_cache:
 			
 			/* Delete the old mb from hashtable */
 			hlist_del(&mb->ht_list);
-			mb->recover = false;
 			
 			/*
 			 * Fullsize dirty cache
 			 * can be discarded without migration.
 			 */
-			cleanup_segment_of(cache, mb->idx);
+			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
 			goto write_not_found;
 		}
@@ -901,8 +916,10 @@ write_not_found:
 	/* Update hashtable */
 	struct metablock *new_mb = flex_array_get(cache->mb_array, cache->cursor);
 	ht_register(cache, &key, new_mb);
-	update_mb_idx = cache->cursor; /* Update the new metablock */
+	new_mb->dirty_bits = 0;
 	mb = new_mb;
+
+	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
 	;

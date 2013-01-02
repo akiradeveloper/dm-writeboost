@@ -1,0 +1,2 @@
+#!/bin/sh
+dd if=/dev/zero of=/dev/mapper/perflv oflag=direct bs=512 count=100

@@ -334,10 +334,6 @@ static void flush_current_segment(struct lc_cache *cache)
 
 	struct segment_header *new_seg = 
 		get_segment_header_by_id(cache, current_seg->global_id + 1);
-
-	/* FIXME This is needless */
-	new_seg->nr_dirty_caches_remained = 0;
-
 	cache->current_seg = new_seg;
 }
 
@@ -353,6 +349,14 @@ static sector_t calc_mb_start_sector(struct lc_cache *cache, cache_nr mb_idx)
 	size_t segment_idx = mb_idx / NR_CACHES_INSEG;	
 	size_t segment_id = segment_idx + 1;
 	return (1 << 11) * segment_id + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
+}
+
+static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
+{
+	if(mb->dirty_bits){
+		struct segment_header *seg = segment_of(cache, mb->idx);
+		seg->nr_dirty_caches_remained--;
+	}
 }
 
 static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
@@ -399,11 +403,10 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 
 	}else {
 		
+		void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 		size_t i;
 		for(i=0; i<8; i++){
 			/* Migrate one sector for each */
-			void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
-						
 			if(mb->dirty_bits & (1 << i)){
 				struct dm_io_request io_req_r = {
 					.client = lc_io_client,
@@ -434,12 +437,8 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 				dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
 			}
 		}
+		kfree(buf);
 	}
-
-	mb->dirty_bits = 0;
-		
-	struct segment_header *seg = segment_of(cache, mb->idx);
-	seg->nr_dirty_caches_remained--;
 }
 
 static void migrate_whole_segment(struct lc_cache *cache, struct segment_header *seg)
@@ -449,6 +448,8 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		cache_nr idx = seg->start + i;	
 		struct metablock *mb = flex_array_get(cache->mb_array, idx);
 		migrate_mb(cache, mb); 
+		cleanup_segment_of(cache, mb->idx);
+		mb->dirty_bits = 0;
 	}
 	if(seg->nr_dirty_caches_remained){
 		BUG();
@@ -765,6 +766,8 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
+	DMDEBUG("bio->bi_size :%lu", bio->bi_size);
+
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
 	bool bio_fullsize = (bio_count == (1 << 3));
@@ -788,13 +791,13 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	struct metablock *mb = ht_lookup(cache, &key);
 
 	bool found = (mb != NULL);
-	DMDEBUG("found: %d\n", found);
+	DMDEBUG("found: %d", found);
 
 	bool on_buffer = false;
 	if(found){
 		on_buffer = is_on_buffer(cache, mb->idx);
 	}
-	DMDEBUG("on_buffer: %d\n", on_buffer);
+	DMDEBUG("on_buffer: %d", on_buffer);
 
 	/* 
 	 * [Read]
@@ -802,7 +805,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	 * which should be processed before write.
 	 */
 	if(! rw){
-		DMDEBUG("read\n");
+		DMDEBUG("read");
 		/*
 		 * TODO
 		 * current version doesn't support Read operations.
@@ -817,6 +820,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		
 		if(unlikely(on_buffer)){
 			/* TODO: Flush the buffer element */
+			BUG();
 			goto read_on_cache;
 		}
 read_on_cache:	
@@ -825,6 +829,8 @@ read_on_cache:
 			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
 		}else{
 			migrate_mb(cache, mb);
+			cleanup_segment_of(cache, mb->idx);
+			mb->dirty_bits = 0;
 			bio_remap(bio, orig, bio->bi_sector);
 		}
 		goto remapped;
@@ -833,9 +839,10 @@ read_on_cache:
 	/* [Write] */
 	DMDEBUG("write");
 
-	cache_nr update_mb_idx = mb->idx;
+	cache_nr update_mb_idx;
 	if(found){
 		if(unlikely(on_buffer)){
+			update_mb_idx = mb->idx;
 			goto write_on_buffer;
 		}else{
 			/*
@@ -852,6 +859,12 @@ read_on_cache:
 			hlist_del(&mb->ht_list);
 			mb->recover = false;
 			
+			/*
+			 * Fullsize dirty cache
+			 * can be discarded without migration.
+			 */
+			cleanup_segment_of(cache, mb->idx);
+			mb->dirty_bits = 0;
 			goto write_not_found;
 		}
 	}
@@ -873,13 +886,13 @@ write_not_found:
 	/* Migrate the head of migrate list if needed */
 	bool migrate_segment = refresh_segment && flush_overwrite;
 	if(migrate_segment){
-		DMDEBUG("migrate_segment id:%lu\n", first_migrate->global_id);
+		DMDEBUG("migrate_segment id:%lu", first_migrate->global_id);
 		migrate_whole_segment(cache, first_migrate);
 	}
 
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
-		DMDEBUG("flush_segment id:%lu\n", cache->current_seg->global_id);
+		DMDEBUG("flush_segment id:%lu", cache->current_seg->global_id);
 		flush_current_segment(cache);
 	}
 
@@ -889,6 +902,7 @@ write_not_found:
 	struct metablock *new_mb = flex_array_get(cache->mb_array, cache->cursor);
 	ht_register(cache, &key, new_mb);
 	update_mb_idx = cache->cursor; /* Update the new metablock */
+	mb = new_mb;
 
 write_on_buffer:
 	;
@@ -897,6 +911,11 @@ write_on_buffer:
 	sector_t s = (1 << 3) * idx_inseg; 
 
 	sector_t offset = bio->bi_sector % (1 << 3); 
+
+	if(! mb->dirty_bits){
+		struct segment_header *seg = segment_of(cache, mb->idx);
+		seg->nr_dirty_caches_remained++;
+	}
 
 	if(likely(bio_fullsize)){
 		mb->dirty_bits = 255;
@@ -910,9 +929,11 @@ write_on_buffer:
 		mb->dirty_bits |= flag;
 	}
 
-	void *start = (void *)(s << SECTOR_SHIFT);	
+	DMDEBUG("mb->dirty_bits :%u", mb->dirty_bits);
+
+	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
-	memcpy(start, data, bio->bi_size);
+	memcpy(cache->writebuffer + start, data, bio->bi_size);
 	bio_endio(bio, 0);
 
 	up(&cache->io_lock);

@@ -221,7 +221,9 @@ static cache_nr ht_hash(struct lc_cache *cache, struct lookup_key *key)
 
 static bool mb_hit(struct metablock *mb, struct lookup_key *key)
 {
-	return (mb->sector == key->sector) & (mb->device_id == key->device_id);
+	/* DMDEBUG("mb->sector(%lu) <=> key->sector(%lu)", mb->sector, key->sector); */
+	/* DMDEBUG("mb->device_id(%u) <=> key->device_id(%u)", mb->device_id, key->device_id); */
+	return (mb->sector == key->sector) && (mb->device_id == key->device_id);
 }
 
 static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct metablock *mb)
@@ -240,15 +242,17 @@ static struct metablock *ht_lookup(struct lc_cache *cache, struct lookup_key *ke
 	cache_nr k = ht_hash(cache, key);
 	struct ht_head *hd = flex_array_get(cache->htable, k);
 	
-	struct metablock *mb = NULL;
+	struct metablock *found = NULL;
+	struct metablock *mb;
 	struct hlist_node *pos, *tmp;
 	hlist_for_each_entry_safe(mb, pos, tmp, &hd->ht_list, ht_list){
 		if(! mb_hit(mb, key)){
 			continue;
 		}
+		found = mb;
 		break;
 	}
-	return mb;
+	return found;
 }
 
 static void init_segment_header_array(struct lc_cache *cache)
@@ -459,8 +463,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		mb->dirty_bits = 0;
 	}
 	if(seg->nr_dirty_caches_remained){
-		DMERR("nr_dirty_caches_remained is nonzero(%lu)\ 
-				after migrating whole segment",
+		DMERR("nr_dirty_caches_remained is nonzero(%lu) after migrating whole segment",
 				seg->nr_dirty_caches_remained);
 		BUG();
 	}
@@ -922,6 +925,8 @@ write_not_found:
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
+	DMDEBUG("cache->cursor :%u", cache->cursor);
+
 	;
 	/* Update the buffer element */
 	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;

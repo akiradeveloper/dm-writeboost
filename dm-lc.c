@@ -106,12 +106,11 @@ struct ht_head {
  * commit full 4KB page to block layer.
  */
 struct metablock {
-	u8 dirty_bits; /* eight bit flags */
+	cache_nr idx; /* const */
+
 	sector_t sector; 
 	device_id device_id;
-
-	cache_nr idx;
-
+	u8 dirty_bits; /* eight bit flags */
 	/*
 	 * A metablock with recover flag true
 	 * will be counted in recovery.
@@ -122,9 +121,10 @@ struct metablock {
 };
 
 struct metablock_device {
-	u8 dirty_bits;
 	sector_t sector;
 	device_id device_id;
+
+	u8 dirty_bits;
 	u8 recover;
 };
 
@@ -261,6 +261,8 @@ static void init_segment_header_array(struct lc_cache *cache)
 		
 		seg->global_id = (segment_idx + 1);
 		seg->start = NR_CACHES_INSEG * segment_idx;
+		
+		INIT_LIST_HEAD(&seg->list);
 	}
 }
 
@@ -280,10 +282,9 @@ static void prepare_segment_header_device(
 	dest->global_id = src->global_id;
 	dest->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
 
-	size_t i;
+	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb =
-			flex_array_get(cache->mb_array, src->start + i);
+		struct metablock *mb = flex_array_get(cache->mb_array, src->start + i);
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		
 		mbdev->sector = mb->sector;	
@@ -291,6 +292,7 @@ static void prepare_segment_header_device(
 		mbdev->dirty_bits = mb->dirty_bits;
 		mbdev->recover = mb->recover;
 		
+		/* For a segment that was partially flushed. */
 		if(i > (cache->cursor % NR_CACHES_INSEG)){
 			mbdev->recover = false;
 		}
@@ -326,16 +328,20 @@ static void flush_current_segment(struct lc_cache *cache)
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
 
 	list_add_tail(&current_seg->list, &cache->migrate_wait_queue);
-	cache->cursor = current_seg->start + (NR_CACHES_INSEG - 1);
 
+	/* Set the cursor to the last of the flushed segment. */
+	cache->cursor = current_seg->start + (NR_CACHES_INSEG - 1);
 
 	struct segment_header *new_seg = 
 		get_segment_header_by_id(cache, current_seg->global_id + 1);
+
+	/* FIXME This is needless */
 	new_seg->nr_dirty_caches_remained = 0;
 
 	cache->current_seg = new_seg;
 }
 
+/* Get the segment that the passed mb belongs to. */
 static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx)
 {
 	size_t seg_idx = mb_idx / NR_CACHES_INSEG;
@@ -438,7 +444,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 
 static void migrate_whole_segment(struct lc_cache *cache, struct segment_header *seg)
 {
-	size_t i;
+	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		cache_nr idx = seg->start + i;	
 		struct metablock *mb = flex_array_get(cache->mb_array, idx);
@@ -459,8 +465,7 @@ static void commit_super_block(struct lc_cache *cache)
 {
 	struct superblock_device o;
 
-	o.last_migrated_segment_id = 
-		cache->last_migrated_segment_id;
+	o.last_migrated_segment_id = cache->last_migrated_segment_id;
 
 	void *buf = kzalloc(1 << 20, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
@@ -541,17 +546,20 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	list_add(&seg->list, &cache->migrate_wait_queue);
 
 	/* Update in-memory structures */
-	size_t i;
+	cache_nr i;
 	cache_nr offset = seg->start;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = 
-			flex_array_get(cache->mb_array, offset + i); 
+		struct metablock *mb = flex_array_get(cache->mb_array, offset + i); 
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
 		mb->sector = mbdev->sector;
 		mb->device_id = mbdev->device_id;
 		mb->dirty_bits = mbdev->dirty_bits;
 		mb->recover = mbdev->recover;
+		
+		if(! mb->recover){
+			continue;		
+		}
 		
 		struct lookup_key key = {
 			.device_id = mb->device_id,
@@ -581,23 +589,21 @@ static void recover_cache(struct lc_cache *cache)
 	 * Refactoring this chaotic code.
 	 */
 
-	size_t old_idx = 0;
+	size_t oldest_idx = 0;
 	size_t max_id = SIZE_MAX; /* This global_id is forbidden. */
 
 	struct segment_header_device *o = kmalloc(sizeof(*o), GFP_KERNEL);
-	/* 
-	 * Finding the minimum valid id
-	 * and its index.
-	 */
-	size_t old_id = max_id;
+	
+	/* Finding the oldest valid(non-zero) id and its index. */
+	size_t oldest_id = max_id;
 	for(i=0; i<nr_segments; i++){
 		read_segment_header_device(o, cache, i);
 		if(o->global_id < 1){
 			continue;
 		}
-		if(o->global_id < old_id){
-			old_idx = i;
-			old_id = o->global_id;
+		if(o->global_id < oldest_id){
+			oldest_idx = i;
+			oldest_id = o->global_id;
 		}
 	}
 
@@ -606,7 +612,7 @@ static void recover_cache(struct lc_cache *cache)
 	 * then there is nothing to recover.
 	 */
 	size_t init_segment_id = 1;
-	if(old_id == max_id){
+	if(oldest_id == max_id){
 		init_segment_id = 1;
 		goto setup_init_segment;
 	}
@@ -614,9 +620,9 @@ static void recover_cache(struct lc_cache *cache)
 	/* At least one segment has been flushed */
 	size_t j;
 	size_t current_id = 0;
-	for(i=old_idx; i<(nr_segments + old_idx); i++){
+	for(i=oldest_idx; i<(nr_segments + oldest_idx); i++){
 		j = i % nr_segments;
-		read_segment_header_device(o, cache, i);
+		read_segment_header_device(o, cache, j);
 		/* 
 		 * If the segments are too old. Needless to recover. 
 		 * Because the data is on the backing storage.
@@ -636,10 +642,10 @@ static void recover_cache(struct lc_cache *cache)
 		init_segment_id = current_id + 1;
 	}
 
-	kfree(o);
 
 setup_init_segment:
-	;
+	kfree(o);
+
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
 	cache->current_seg = seg;
 
@@ -669,6 +675,8 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	 * We discard first 1024KB for superblock.
 	 * Maybe the cache device is effient in 1024KB aligned write
 	 * e.g. erase unit of flash device is 256K, 512K.. 
+	 *
+	 * and simplify the code :)
 	 */
 	return devsize / ( 1 << (20 - SECTOR_SHIFT) ) - 1;
 }
@@ -750,20 +758,27 @@ static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 	bio->bi_sector = sector;
 }
 
+static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector)
+{
+	return (bio_sector / (1 << 3)) * (1 << 3);
+}
+
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
-	bool bio_fullsize = bio_count == (1 << 3);
+	bool bio_fullsize = (bio_count == (1 << 3));
 	int rw = bio_data_dir(bio);
 
-	struct lookup_key key = {
-		.sector = bio->bi_sector,
-		.device_id = lc->backing->id, 
-	};
-
-	struct dm_dev *orig = lc->backing->device;
 	struct lc_cache *cache = lc->cache;
+
+	struct lookup_key key = {
+		.sector = calc_cache_alignment(cache, bio->bi_sector),
+		.device_id = lc->backing->id,
+	};
+	
+	struct dm_dev *orig = lc->backing->device;
+
 	/*
 	 * Any good ideas for better locking?
 	 * This version persues simplicity.
@@ -772,7 +787,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	down(&cache->io_lock);
 	struct metablock *mb = ht_lookup(cache, &key);
 
-	bool found = mb;
+	bool found = (mb == NULL);
 	bool on_buffer = false;
 	if(found){
 		on_buffer = is_on_buffer(cache, mb->idx);
@@ -814,6 +829,7 @@ read_on_cache:
 
 	/* [Write] */
 
+	cache_nr update_mb_idx = mb->idx;
 	if(found){
 		if(unlikely(on_buffer)){
 			goto write_on_buffer;
@@ -839,11 +855,11 @@ read_on_cache:
 write_not_found:
 	;
 	/* Write not found */
-	bool refresh_segment = (cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1); 
+	bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1)); 
 
 	/* Does it conflict if current buffer flushed? */
 	bool flush_overwrite = false;
-	struct segment_header *first_migrate;
+	struct segment_header *first_migrate = NULL;
 	if(! list_empty(&cache->migrate_wait_queue)){
 		first_migrate = list_first_entry(&cache->migrate_wait_queue, struct segment_header, list);
 		flush_overwrite = id_conflict(cache, 
@@ -851,7 +867,7 @@ write_not_found:
 	}
 		
 	/* Migrate the head of migrate list if needed */
-	bool migrate_segment = refresh_segment & flush_overwrite;
+	bool migrate_segment = refresh_segment && flush_overwrite;
 	if(migrate_segment){
 		migrate_whole_segment(cache, first_migrate);
 	}
@@ -861,34 +877,40 @@ write_not_found:
 		flush_current_segment(cache);
 	}
 
-	/* Update hashtable */
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
+
+	/* Update hashtable */
 	struct metablock *new_mb = flex_array_get(cache->mb_array, cache->cursor);
 	ht_register(cache, &key, new_mb);
+	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
 	;
 	/* Update the buffer element */
-	cache_nr idx_inseg = cache->cursor % NR_CACHES_INSEG;
+	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;
 	sector_t s = (1 << 3) * idx_inseg; 
 
-	sector_t offset = bio->bi_sector % 8; 
-	if(! bio_fullsize){
+	sector_t offset = bio->bi_sector % (1 << 3); 
+
+	if(likely(bio_fullsize)){
+		mb->dirty_bits = 255;
+	}else{
 		s += offset;
-		size_t i;
+		u8 i;
 		u8 flag = 0;
 		for(i=offset; i<bio_count; i++){
 			flag += (1 << i);	
 		}
 		mb->dirty_bits |= flag;
-	}else{
-		mb->dirty_bits = 255;
 	}
 
-	void *start = (void *) (s << SECTOR_SHIFT);	
+	void *start = (void *)(s << SECTOR_SHIFT);	
 	void *data = bio_data(bio);
 	memcpy(start, data, bio->bi_size);
 	bio_endio(bio, 0);
+
+	up(&cache->io_lock);
+	return DM_MAPIO_SUBMITTED;
 
 remapped:
 	up(&cache->io_lock);
@@ -1023,7 +1045,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 * <path>
 	 * @path path to the cache device
 	 */
-	if(! strcmp(cmd, "format_cache_device")){
+	if(! strcasecmp(cmd, "format_cache_device")){
 		struct dm_dev *dev;
 		if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 			return -EINVAL;
@@ -1037,10 +1059,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 	/*
 	 * <id> <path> 
-	 * @id
-	 * @path
 	 */
-	if(! strcmp(cmd, "resume_cache")){
+	if(! strcasecmp(cmd, "resume_cache")){
 		struct lc_cache *cache = kmalloc(sizeof(*cache), GFP_KERNEL);
 		unsigned id;
 		if(sscanf(argv[1], "%u", &id) != 1){ 
@@ -1072,7 +1092,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	/*
 	 * <id> <path>
 	 */
-	if(! strcmp(cmd, "add_device")){
+	if(! strcasecmp(cmd, "add_device")){
 		struct backing_device *b = kmalloc(sizeof(*b), GFP_KERNEL);
 		
 		unsigned id;
@@ -1091,7 +1111,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;
 	}
 
-	if(! strcmp(cmd, "remove_device")){
+	if(! strcasecmp(cmd, "remove_device")){
 		/* TODO This version doesn't support this command. */
 		bool still_remained = true;
 		if(still_remained){

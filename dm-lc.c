@@ -787,11 +787,14 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	down(&cache->io_lock);
 	struct metablock *mb = ht_lookup(cache, &key);
 
-	bool found = (mb == NULL);
+	bool found = (mb != NULL);
+	DMDEBUG("found: %d\n", found);
+
 	bool on_buffer = false;
 	if(found){
 		on_buffer = is_on_buffer(cache, mb->idx);
 	}
+	DMDEBUG("on_buffer: %d\n", on_buffer);
 
 	/* 
 	 * [Read]
@@ -799,12 +802,12 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	 * which should be processed before write.
 	 */
 	if(! rw){
+		DMDEBUG("read\n");
 		/*
 		 * TODO
 		 * current version doesn't support Read operations.
 		 */
-		BUG();
-		if(!found){
+		if(! found){
 			/* To the backing storage */
 			bio_remap(bio, orig, bio->bi_sector);	
 			goto remapped;
@@ -828,6 +831,7 @@ read_on_cache:
 	}
 
 	/* [Write] */
+	DMDEBUG("write");
 
 	cache_nr update_mb_idx = mb->idx;
 	if(found){
@@ -869,11 +873,13 @@ write_not_found:
 	/* Migrate the head of migrate list if needed */
 	bool migrate_segment = refresh_segment && flush_overwrite;
 	if(migrate_segment){
+		DMDEBUG("migrate_segment id:%lu\n", first_migrate->global_id);
 		migrate_whole_segment(cache, first_migrate);
 	}
 
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
+		DMDEBUG("flush_segment id:%lu\n", cache->current_seg->global_id);
 		flush_current_segment(cache);
 	}
 

@@ -311,6 +311,9 @@ static void flush_current_segment(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
 
+	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %lu",
+			current_seg->nr_dirty_caches_remained);
+
 	/* segment_header_device is too big to alloc in stack */
 	struct segment_header_device *mbdev = kmalloc(sizeof(*mbdev), GFP_NOIO); 
 	prepare_segment_header_device(mbdev, cache, current_seg);
@@ -363,6 +366,8 @@ static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
 {
 	if(mb->dirty_bits){
 		struct segment_header *seg = segment_of(cache, mb->idx);
+		/* DMDEBUG("cleanup segment id: %lu", seg->global_id); */
+		DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
 		seg->nr_dirty_caches_remained--;
 	}
 }
@@ -373,13 +378,15 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 	struct backing_device *backing = backing_tbl[mb->device_id];
 
 	DMDEBUG("mb->idx: %u", mb->idx);
-	DMDEBUG("backing id: %u", mb->device_id);
+	/* DMDEBUG("backing id: %u", mb->device_id); */
 
 	if(! mb->dirty_bits){
+		/* DMDEBUG("not migrate mb(dirty_bits=0)"); */
 		return;
 	}
 
 	if(mb->dirty_bits == 255){
+		/* DMDEBUG("full migrate(dirty_bits=255)"); */
 		void *buf = kmalloc(1 << 12, GFP_NOIO);
 		
 		struct dm_io_request io_req_r = {
@@ -454,10 +461,13 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 
 static void migrate_whole_segment(struct lc_cache *cache, struct segment_header *seg)
 {
+	DMDEBUG("nr_dirty_caches_remained: %lu", seg->nr_dirty_caches_remained);
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		cache_nr idx = seg->start + i;	
+		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = flex_array_get(cache->mb_array, idx);
+		DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits);
 		migrate_mb(cache, mb); 
 		cleanup_segment_of(cache, mb);
 		mb->dirty_bits = 0;
@@ -786,7 +796,7 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
-	DMDEBUG("bio->bi_size :%u", bio->bi_size);
+	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
 
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
@@ -817,7 +827,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	if(found){
 		on_buffer = is_on_buffer(cache, mb->idx);
 	}
-	DMDEBUG("on_buffer: %d", on_buffer);
+	/* DMDEBUG("on_buffer: %d", on_buffer); */
 
 	/* 
 	 * [Read]
@@ -856,7 +866,7 @@ read_on_cache:
 	}
 
 	/* [Write] */
-	DMDEBUG("write");
+	/* DMDEBUG("write"); */
 
 	cache_nr update_mb_idx;
 	if(found){
@@ -892,13 +902,41 @@ write_not_found:
 	/* Write not found */
 	bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1)); 
 
-	/* Does it conflict if current buffer flushed? */
+	/*
+	 * Why does the code operate '+1'?
+	 *
+	 * We must consinder overwriting
+	 * not only the segment on cache
+	 * but also the in-memory segment. 
+	 * Overwriting either will cause serious crash.
+	 *
+	 * There are several choice to solve this problem.
+	 * for brevity,
+	 * I chose design that 
+	 * cleaning up the in-memory segment
+	 * before next global id touching it.
+	 *
+	 * For these reason,
+	 * a client must prepare cache device
+	 * with at least two segments that
+	 * is 3MB in size, including superblock.
+	 *
+	 * If we had only one segment,
+	 * Following steps will lead to inconsistency.
+	 * 1. Flushing segment[0] on cache device.
+	 * 2. Select in-memory segment[0] for the next segment.
+	 * 3. Update the segment[0] along with buffer writes.
+	 * 4. Let's migrate the segment[0] on cache device.
+	 * 5. Hell, the in-memory segment[0] is not correct!!! (screaming)
+	 */
 	bool flush_overwrite = false;
 	struct segment_header *first_migrate = NULL;
 	if(! list_empty(&cache->migrate_wait_queue)){
 		first_migrate = list_first_entry(&cache->migrate_wait_queue, struct segment_header, list);
+		/* FIXME Little bit harsh name */
 		flush_overwrite = id_conflict(cache, 
-				cache->current_seg->global_id, first_migrate->global_id);
+				cache->current_seg->global_id + 1, /* '+1' is not abvious. see above */
+				first_migrate->global_id);
 	}
 		
 	/* Migrate the head of migrate list if needed */
@@ -906,6 +944,7 @@ write_not_found:
 	if(migrate_segment){
 		DMDEBUG("migrate_segment id:%lu", first_migrate->global_id);
 		migrate_whole_segment(cache, first_migrate);
+		/* BUG(); */
 	}
 
 	/* Flushing the current buffer if needed */
@@ -925,7 +964,7 @@ write_not_found:
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
-	DMDEBUG("cache->cursor :%u", cache->cursor);
+	DMDEBUG("the cursor to buffer write. cache->cursor :%u", cache->cursor);
 
 	;
 	/* Update the buffer element */
@@ -951,7 +990,7 @@ write_on_buffer:
 		mb->dirty_bits |= flag;
 	}
 
-	DMDEBUG("mb->dirty_bits :%u", mb->dirty_bits);
+	DMDEBUG("after write on buffer. mb->dirty_bits :%u", mb->dirty_bits);
 
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);

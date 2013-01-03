@@ -139,8 +139,9 @@ struct segment_header {
 	 * id = 0 is used to tell that the segment is invalid
 	 * and valid id starts from 1.
 	 */
-	size_t global_id; /* const */
-	cache_nr start; /* const */
+	size_t global_id;
+	cache_nr start_idx; /* const */
+	sector_t start_sector; /* const */
 
 	struct list_head list;
 };
@@ -267,7 +268,8 @@ static void init_segment_header_array(struct lc_cache *cache)
 	for(segment_idx=0; segment_idx<nr_segments; segment_idx++){
 		struct segment_header *seg =
 			flex_array_get(cache->segment_header_array, segment_idx);
-		seg->start = NR_CACHES_INSEG * segment_idx;
+		seg->start_idx = NR_CACHES_INSEG * segment_idx;
+		seg->start_sector = ((segment_idx % cache->nr_segments) + 1) * (1 << 11);
 		INIT_LIST_HEAD(&seg->list);
 		
 		seg->nr_dirty_caches_remained = 0;
@@ -292,7 +294,7 @@ static void prepare_segment_header_device(
 
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = flex_array_get(cache->mb_array, src->start + i);
+		struct metablock *mb = flex_array_get(cache->mb_array, src->start_idx + i);
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		
 		mbdev->sector = mb->sector;	
@@ -331,7 +333,7 @@ static void flush_current_segment(struct lc_cache *cache)
 	};
 	struct dm_io_region region = {
 		.bdev = cache->device->bdev,	
-		.sector = (1 << 11) * (current_seg->global_id % cache->nr_segments),
+		.sector = current_seg->start_sector,
 		.count = (1 << 11),
 	};
 	unsigned long err_bits = 0;
@@ -340,7 +342,7 @@ static void flush_current_segment(struct lc_cache *cache)
 	list_add_tail(&current_seg->list, &cache->migrate_wait_queue);
 
 	/* Set the cursor to the last of the flushed segment. */
-	cache->cursor = current_seg->start + (NR_CACHES_INSEG - 1);
+	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 
 	size_t next_id = current_seg->global_id + 1;
 	struct segment_header *new_seg = 
@@ -358,9 +360,8 @@ static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx
 
 static sector_t calc_mb_start_sector(struct lc_cache *cache, cache_nr mb_idx)
 {
-	size_t segment_idx = mb_idx / NR_CACHES_INSEG;	
-	size_t segment_id = segment_idx + 1;
-	return (1 << 11) * segment_id + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
+	struct segment_header *seg = segment_of(cache, mb_idx);
+	return seg->start_sector + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
 }
 
 static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
@@ -465,7 +466,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	DMDEBUG("nr_dirty_caches_remained: %lu", seg->nr_dirty_caches_remained);
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		cache_nr idx = seg->start + i;	
+		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = flex_array_get(cache->mb_array, idx);
 		DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits);
@@ -572,7 +573,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 
 	/* Update in-memory structures */
 	cache_nr i;
-	cache_nr offset = seg->start;
+	cache_nr offset = seg->start_idx;
 
 	size_t nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
@@ -674,7 +675,6 @@ static void recover_cache(struct lc_cache *cache)
 		init_segment_id = current_id + 1;
 	}
 
-
 setup_init_segment:
 	kfree(o);
 
@@ -687,7 +687,7 @@ setup_init_segment:
 	 * This means that we will not use the element.
 	 * I believe this is the simplest principle to implement.
 	 */
-	cache->cursor = seg->start;
+	cache->cursor = seg->start_idx;
 }
 
 static sector_t dm_devsize(struct dm_dev *dev)
@@ -966,7 +966,7 @@ write_not_found:
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
-	DMDEBUG("the cursor to buffer write. cache->cursor: %u", cache->cursor);
+	DMDEBUG("The cursor to buffer write. cache->cursor: %u", cache->cursor);
 
 	;
 	/* Update the buffer element */
@@ -992,7 +992,7 @@ write_on_buffer:
 		mb->dirty_bits |= flag;
 	}
 
-	DMDEBUG("after write on buffer. mb->dirty_bits: %u", mb->dirty_bits);
+	DMDEBUG("After write on buffer. mb->dirty_bits: %u", mb->dirty_bits);
 
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);

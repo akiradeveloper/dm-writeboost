@@ -9,11 +9,70 @@
 
 #include <linux/module.h>
 #include <linux/version.h>
-#include <linux/flex_array.h>
 #include <linux/list.h>
 
 #include <device-mapper.h>
 #include <dm-io.h>
+
+/*
+ * Reinventing the wheel.
+ * flex_array is too complicated and
+ * was beyond my expectation.
+ */
+struct part {
+	void *memory;
+};
+
+struct arr {
+	struct part *parts;
+	size_t nr_elems;
+	size_t elemsize;
+};
+
+static size_t nr_elems_in_part(struct arr *arr)
+{
+	return PAGE_SIZE / arr->elemsize;
+};
+
+static size_t nr_parts(struct arr *arr)
+{
+	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
+}
+
+static struct arr *make_arr(size_t elemsize, size_t nr_elems)
+{
+	struct arr* arr = kmalloc(sizeof(*arr), GFP_KERNEL);
+	arr->elemsize = elemsize;
+	arr->nr_elems = nr_elems;
+	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
+
+	size_t i;
+	for(i=0; i<nr_parts(arr); i++){
+		struct part *part = arr->parts + i;
+		part->memory = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	}
+	return arr;
+}
+
+static void kill_arr(struct arr *arr)
+{
+	size_t i;
+	for(i=0; i<nr_parts(arr); i++){
+		struct part *part = arr->parts + i;
+		kfree(part->memory);
+	}
+	kfree(arr->parts);
+	kfree(arr);
+}
+
+static void *arr_at(struct arr *arr, size_t i)
+{
+	size_t n = nr_elems_in_part(arr);
+	size_t j = i / n;
+	size_t k = i % n;
+	struct part *part = arr->parts + j;
+	return part->memory + (arr->elemsize * k);
+}
 
 #define NR_CACHES_INSEG 255
 
@@ -163,10 +222,10 @@ struct lc_cache {
 	struct dm_dev *device;
 	struct semaphore io_lock;
 	cache_nr nr_caches; /* const */
-	struct flex_array *mb_array;		
+	struct arr *mb_array;
 	size_t nr_segments; /* const */
-	struct flex_array *segment_header_array;
-	struct flex_array *htable;
+	struct arr *segment_header_array;
+	struct arr *htable;
 	size_t htsize;
 
 	cache_nr cursor; /* Index that has done write */
@@ -182,7 +241,7 @@ struct lc_cache {
 
 static struct ht_head *ht_get_null_head(struct lc_cache *cache)
 {
-	return flex_array_get(cache->htable, cache->htsize);
+	return arr_at(cache->htable, cache->htsize);
 }
 
 static void ht_empty_init(struct lc_cache *cache)
@@ -190,17 +249,13 @@ static void ht_empty_init(struct lc_cache *cache)
 	cache->htsize = cache->nr_caches;
 
 	size_t nr_heads = (cache->htsize + 1);
-	struct flex_array *arr = flex_array_alloc(
-			sizeof(struct ht_head),
-			nr_heads,
-			GFP_KERNEL);
+	struct arr *arr = make_arr(sizeof(struct ht_head), nr_heads);
+	
 	cache->htable = arr;
-
-	flex_array_prealloc(arr, 0, nr_heads, GFP_KERNEL);
 
 	size_t i;
 	for(i=0; i<nr_heads; i++){
-		struct ht_head *hd = flex_array_get(arr, i);
+		struct ht_head *hd = arr_at(arr, i);
 		INIT_HLIST_HEAD(&hd->ht_list);
 	}
 
@@ -208,22 +263,18 @@ static void ht_empty_init(struct lc_cache *cache)
 	cache_nr idx;
 	for(idx=0; idx<cache->nr_caches; idx++){
 		struct metablock *mb =
-			flex_array_get(cache->mb_array, idx);
+			arr_at(cache->mb_array, idx);
 		hlist_add_head(&mb->ht_list, &null_head->ht_list);
 	}
 }
 
 static void mb_array_empty_init(struct lc_cache *cache)
 {
-	cache->mb_array = flex_array_alloc(
-			sizeof(struct metablock),
-			cache->nr_caches,
-			GFP_KERNEL);
-	flex_array_prealloc(cache->mb_array, 0, cache->nr_caches, GFP_KERNEL);
+	cache->mb_array = make_arr(sizeof(struct metablock), cache->nr_caches);
 			
 	size_t i;
 	for(i=0; i<cache->nr_caches; i++){
-		struct metablock *mb = flex_array_get(cache->mb_array, i);
+		struct metablock *mb = arr_at(cache->mb_array, i);
 		mb->idx = i;
 		INIT_HLIST_NODE(&mb->ht_list);
 		
@@ -255,7 +306,7 @@ static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct m
 {
 	/* This routine doesn't care duplicated keys */
 	cache_nr k = ht_hash(cache, key);
-	struct ht_head *hd = flex_array_get(cache->htable, k);
+	struct ht_head *hd = arr_at(cache->htable, k);
 
 	ht_del(cache, mb);
 
@@ -269,7 +320,7 @@ static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct m
 static struct metablock *ht_lookup(struct lc_cache *cache, struct lookup_key *key)
 {
 	cache_nr k = ht_hash(cache, key);
-	struct ht_head *hd = flex_array_get(cache->htable, k);
+	struct ht_head *hd = arr_at(cache->htable, k);
 	
 	struct metablock *found = NULL;
 	struct metablock *mb;
@@ -287,14 +338,11 @@ static void init_segment_header_array(struct lc_cache *cache)
 {
 	size_t nr_segments = cache->nr_segments;
 
-	cache->segment_header_array = 
-		flex_array_alloc(sizeof(struct segment_header), nr_segments, GFP_KERNEL);
-	flex_array_prealloc(cache->segment_header_array, 0, nr_segments, GFP_KERNEL);
+	cache->segment_header_array = make_arr(sizeof(struct segment_header), nr_segments);
 
 	size_t segment_idx;
 	for(segment_idx=0; segment_idx<nr_segments; segment_idx++){
-		struct segment_header *seg =
-			flex_array_get(cache->segment_header_array, segment_idx);
+		struct segment_header *seg = arr_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = NR_CACHES_INSEG * segment_idx;
 		seg->start_sector = ((segment_idx % cache->nr_segments) + 1) * (1 << 11);
 		INIT_LIST_HEAD(&seg->list);
@@ -306,9 +354,7 @@ static void init_segment_header_array(struct lc_cache *cache)
 static struct segment_header *get_segment_header_by_id(struct lc_cache *cache, size_t segment_id)
 {
 	struct segment_header *r =
-		flex_array_get(
-			cache->segment_header_array,
-			(segment_id - 1) % cache->nr_segments);
+		arr_at(cache->segment_header_array, (segment_id - 1) % cache->nr_segments);
 	return r;
 }
 
@@ -321,7 +367,7 @@ static void prepare_segment_header_device(
 
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = flex_array_get(cache->mb_array, src->start_idx + i);
+		struct metablock *mb = arr_at(cache->mb_array, src->start_idx + i);
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		
 		mbdev->sector = mb->sector;	
@@ -382,7 +428,7 @@ static void flush_current_segment(struct lc_cache *cache)
 static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx)
 {
 	size_t seg_idx = mb_idx / NR_CACHES_INSEG;
-	return flex_array_get(cache->segment_header_array, seg_idx);
+	return arr_at(cache->segment_header_array, seg_idx);
 }
 
 static sector_t calc_mb_start_sector(struct lc_cache *cache, cache_nr mb_idx)
@@ -495,7 +541,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
-		struct metablock *mb = flex_array_get(cache->mb_array, idx);
+		struct metablock *mb = arr_at(cache->mb_array, idx);
 		DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits);
 		migrate_mb(cache, mb); 
 		cleanup_segment_of(cache, mb);
@@ -604,7 +650,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 
 	size_t nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = flex_array_get(cache->mb_array, offset + i); 
+		struct metablock *mb = arr_at(cache->mb_array, offset + i); 
 		
 		if(! mb->dirty_bits){
 			continue;
@@ -986,7 +1032,7 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 
 	/* Update hashtable */
-	struct metablock *new_mb = flex_array_get(cache->mb_array, cache->cursor);
+	struct metablock *new_mb = arr_at(cache->mb_array, cache->cursor);
 	ht_register(cache, &key, new_mb);
 	new_mb->dirty_bits = 0;
 	mb = new_mb;
@@ -1179,6 +1225,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 * <id> <path> 
 	 */
 	if(! strcasecmp(cmd, "resume_cache")){
+		DMDEBUG("start resume cache");
 		struct lc_cache *cache = kmalloc(sizeof(*cache), GFP_KERNEL);
 		unsigned id;
 		if(sscanf(argv[1], "%u", &id) != 1){ 
@@ -1193,6 +1240,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->device = dev;
 		cache->nr_segments = calc_nr_segments(cache->device);
 		cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
+		DMDEBUG("nr_segments: %lu", cache->nr_segments);
+		DMDEBUG("nr_cache: %u", cache->nr_caches);
 		
 		sema_init(&cache->io_lock, 1);	
 		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
@@ -1207,7 +1256,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		recover_cache(cache);
 		DMDEBUG("recover cache done");
 		lc_caches[id] = cache;
-		
+
 		return 0;
 	}
 
@@ -1235,6 +1284,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 	if(! strcasecmp(cmd, "remove_device")){
 		/* TODO This version doesn't support this command. */
+		BUG();
 		bool still_remained = true;
 		if(still_remained){
 			DMERR("device can not removed. dirty cache still remained.\n");

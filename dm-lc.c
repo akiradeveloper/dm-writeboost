@@ -167,6 +167,7 @@ struct lc_cache {
 	size_t nr_segments; /* const */
 	struct flex_array *segment_header_array;
 	struct flex_array *htable;
+	size_t htsize;
 
 	cache_nr cursor; /* Index that has done write */
 	struct segment_header *current_seg;
@@ -179,22 +180,37 @@ struct lc_cache {
 	struct work_struct migrate_work; /* TODO */
 };
 
+static struct ht_head *ht_get_null_head(struct lc_cache *cache)
+{
+	return flex_array_get(cache->htable, cache->htsize);
+}
+
 static void ht_empty_init(struct lc_cache *cache)
 {
-	size_t nr_heads = cache->nr_caches;
+	cache->htsize = cache->nr_caches;
+
+	size_t nr_heads = (cache->htsize + 1);
 	struct flex_array *arr = flex_array_alloc(
 			sizeof(struct ht_head),
 			nr_heads,
 			GFP_KERNEL);
+	cache->htable = arr;
+
 	flex_array_prealloc(arr, 0, nr_heads, GFP_KERNEL);
 
 	size_t i;
-	for(i=0; i<cache->nr_caches; i++){
+	for(i=0; i<nr_heads; i++){
 		struct ht_head *hd = flex_array_get(arr, i);
 		INIT_HLIST_HEAD(&hd->ht_list);
 	}
-	
-	cache->htable = arr;
+
+	struct ht_head *null_head = ht_get_null_head(cache);
+	cache_nr idx;
+	for(idx=0; idx<cache->nr_caches; idx++){
+		struct metablock *mb =
+			flex_array_get(cache->mb_array, idx);
+		hlist_add_head(&mb->ht_list, &null_head->ht_list);
+	}
 }
 
 static void mb_array_empty_init(struct lc_cache *cache)
@@ -217,7 +233,7 @@ static void mb_array_empty_init(struct lc_cache *cache)
 
 static cache_nr ht_hash(struct lc_cache *cache, struct lookup_key *key)
 {
-	return key->sector % cache->nr_caches;
+	return key->sector % cache->htsize;
 }
 
 static bool mb_hit(struct metablock *mb, struct lookup_key *key)
@@ -227,11 +243,23 @@ static bool mb_hit(struct metablock *mb, struct lookup_key *key)
 	return (mb->sector == key->sector) && (mb->device_id == key->device_id);
 }
 
+static void ht_del(struct lc_cache *cache, struct metablock *mb)
+{
+	hlist_del(&mb->ht_list);
+
+	struct ht_head *null_head = ht_get_null_head(cache);
+	hlist_add_head(&mb->ht_list, &null_head->ht_list);
+}
+
 static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct metablock *mb)
 {
 	/* This routine doesn't care duplicated keys */
 	cache_nr k = ht_hash(cache, key);
 	struct ht_head *hd = flex_array_get(cache->htable, k);
+
+	ht_del(cache, mb);
+
+	hlist_del(&mb->ht_list);
 	hlist_add_head(&mb->ht_list, &hd->ht_list);				
 
 	mb->sector = key->sector;
@@ -245,13 +273,12 @@ static struct metablock *ht_lookup(struct lc_cache *cache, struct lookup_key *ke
 	
 	struct metablock *found = NULL;
 	struct metablock *mb;
-	struct hlist_node *pos, *tmp;
-	hlist_for_each_entry_safe(mb, pos, tmp, &hd->ht_list, ht_list){
-		if(! mb_hit(mb, key)){
-			continue;
+	struct hlist_node *pos;
+	hlist_for_each_entry(mb, pos, &hd->ht_list, ht_list){
+		if(mb_hit(mb, key)){
+			found = mb;
+			break;
 		}
-		found = mb;
-		break;
 	}
 	return found;
 }
@@ -820,6 +847,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	 */
 
 	down(&cache->io_lock);
+
 	struct metablock *mb = ht_lookup(cache, &key);
 
 	bool found = (mb != NULL);
@@ -887,7 +915,7 @@ read_on_cache:
 			}
 			
 			/* Delete the old mb from hashtable */
-			hlist_del(&mb->ht_list);
+			ht_del(cache, mb);
 			
 			/*
 			 * Fullsize dirty cache
@@ -1000,7 +1028,6 @@ write_on_buffer:
 	bio_endio(bio, 0);
 
 	up(&cache->io_lock);
-	DMDEBUG("DM_MAPIO_SUBMITTED. unlock io_lock");
 	return DM_MAPIO_SUBMITTED;
 
 remapped:
@@ -1172,11 +1199,15 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		INIT_LIST_HEAD(&cache->migrate_wait_queue);
 
 		mb_array_empty_init(cache);
+		DMDEBUG("init mb_array done");
 		ht_empty_init(cache);
+		DMDEBUG("init htable done");
 		init_segment_header_array(cache);	
-		
+		DMDEBUG("init segment_array done");
 		recover_cache(cache);
+		DMDEBUG("recover cache done");
 		lc_caches[id] = cache;
+		
 		return 0;
 	}
 

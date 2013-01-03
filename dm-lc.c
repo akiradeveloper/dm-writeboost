@@ -267,7 +267,6 @@ static void init_segment_header_array(struct lc_cache *cache)
 	for(segment_idx=0; segment_idx<nr_segments; segment_idx++){
 		struct segment_header *seg =
 			flex_array_get(cache->segment_header_array, segment_idx);
-		seg->global_id = (segment_idx + 1);
 		seg->start = NR_CACHES_INSEG * segment_idx;
 		INIT_LIST_HEAD(&seg->list);
 		
@@ -343,8 +342,10 @@ static void flush_current_segment(struct lc_cache *cache)
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start + (NR_CACHES_INSEG - 1);
 
+	size_t next_id = current_seg->global_id + 1;
 	struct segment_header *new_seg = 
-		get_segment_header_by_id(cache, current_seg->global_id + 1);
+		get_segment_header_by_id(cache, next_id);
+	new_seg->global_id = next_id;
 	cache->current_seg = new_seg;
 }
 
@@ -678,6 +679,7 @@ setup_init_segment:
 	kfree(o);
 
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
+	seg->global_id = init_segment_id;
 	cache->current_seg = seg;
 
 	/*
@@ -942,14 +944,14 @@ write_not_found:
 	/* Migrate the head of migrate list if needed */
 	bool migrate_segment = refresh_segment && flush_overwrite;
 	if(migrate_segment){
-		DMDEBUG("migrate_segment id:%lu", first_migrate->global_id);
+		DMDEBUG("migrate_segment id: %lu", first_migrate->global_id);
 		migrate_whole_segment(cache, first_migrate);
 		/* BUG(); */
 	}
 
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
-		DMDEBUG("flush_segment id:%lu", cache->current_seg->global_id);
+		DMDEBUG("flush_segment id: %lu", cache->current_seg->global_id);
 		flush_current_segment(cache);
 	}
 
@@ -964,7 +966,7 @@ write_not_found:
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
-	DMDEBUG("the cursor to buffer write. cache->cursor :%u", cache->cursor);
+	DMDEBUG("the cursor to buffer write. cache->cursor: %u", cache->cursor);
 
 	;
 	/* Update the buffer element */
@@ -990,7 +992,7 @@ write_on_buffer:
 		mb->dirty_bits |= flag;
 	}
 
-	DMDEBUG("after write on buffer. mb->dirty_bits :%u", mb->dirty_bits);
+	DMDEBUG("after write on buffer. mb->dirty_bits: %u", mb->dirty_bits);
 
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
@@ -998,6 +1000,7 @@ write_on_buffer:
 	bio_endio(bio, 0);
 
 	up(&cache->io_lock);
+	DMDEBUG("DM_MAPIO_SUBMITTED. unlock io_lock");
 	return DM_MAPIO_SUBMITTED;
 
 remapped:

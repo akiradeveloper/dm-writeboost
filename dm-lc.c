@@ -259,6 +259,11 @@ static void ht_empty_init(struct lc_cache *cache)
 		INIT_HLIST_HEAD(&hd->ht_list);
 	}
 
+	/*
+	 * Our hashtable has one special bucket called null head.
+	 * A metablock is linked to the null head
+	 * if it is not counted in hashtable search.
+	 */
 	struct ht_head *null_head = ht_get_null_head(cache);
 	cache_nr idx;
 	for(idx=0; idx<cache->nr_caches; idx++){
@@ -494,7 +499,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 		
 		kfree(buf);
 
-	}else {
+	}else{
 		
 		void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 		size_t i;
@@ -999,11 +1004,11 @@ write_not_found:
 	 *
 	 * If we had only one segment,
 	 * Following steps will lead to inconsistency.
-	 * 1. Flushing segment[0] on cache device.
-	 * 2. Select in-memory segment[0] for the next segment.
-	 * 3. Update the segment[0] along with buffer writes.
-	 * 4. Let's migrate the segment[0] on cache device.
-	 * 5. Hell, the in-memory segment[0] is not correct!!! (screaming)
+	 * 1. Flushing segments[0] on cache device.
+	 * 2. Select in-memory segments[0] for the next segment.
+	 * 3. Update the segments[0] along with buffer writes.
+	 * 4. Let's migrate the segments[0] on cache device.
+	 * 5. Hell, the in-memory segments[0] is not correct!!! (screaming)
 	 */
 	bool flush_overwrite = false;
 	struct segment_header *first_migrate = NULL;
@@ -1020,7 +1025,6 @@ write_not_found:
 	if(migrate_segment){
 		DMDEBUG("migrate_segment id: %lu", first_migrate->global_id);
 		migrate_whole_segment(cache, first_migrate);
-		/* BUG(); */
 	}
 
 	/* Flushing the current buffer if needed */
@@ -1041,6 +1045,7 @@ write_not_found:
 
 write_on_buffer:
 	DMDEBUG("The cursor to buffer write. cache->cursor: %u", cache->cursor);
+	DMDEBUG("bio_count: %u", bio_count);
 
 	;
 	/* Update the buffer element */
@@ -1055,13 +1060,16 @@ write_on_buffer:
 	}
 
 	if(likely(bio_fullsize)){
+		DMDEBUG("fullsize buffer write");
 		mb->dirty_bits = 255;
 	}else{
+		DMDEBUG("partial buffer write. current mb->dirty_bits: %u", mb->dirty_bits);
 		s += offset;
 		u8 i;
 		u8 flag = 0;
-		for(i=offset; i<bio_count; i++){
+		for(i=offset; i<(offset+bio_count); i++){
 			flag += (1 << i);	
+			DMDEBUG("flag: %u", flag);
 		}
 		mb->dirty_bits |= flag;
 	}

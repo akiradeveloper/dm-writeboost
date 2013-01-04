@@ -425,6 +425,19 @@ static void flush_current_segment(struct lc_cache *cache)
 	size_t next_id = current_seg->global_id + 1;
 	struct segment_header *new_seg = 
 		get_segment_header_by_id(cache, next_id);
+
+	BUG_ON(new_seg->nr_dirty_caches_remained);
+
+	/*
+	 * Invalidating caches on the new segment.
+	 */
+	u8 i;
+	for(i=0; i<NR_CACHES_INSEG; i++){
+		struct metablock *mb =
+			arr_at(cache->mb_array, new_seg->start_idx + i);
+		ht_del(cache, mb);
+	}
+
 	new_seg->global_id = next_id;
 	cache->current_seg = new_seg;
 }
@@ -849,6 +862,9 @@ static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 	if(mb_idx < start){
 		return false;
 	}
+	/*
+	 * FIXME right hand overflow
+	 */
 	if(mb_idx >= (start + NR_CACHES_INSEG)){
 		return false;
 	}
@@ -877,6 +893,8 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
+
+	DMDEBUG("bio->bi_sector: %lu", bio->bi_sector);
 
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
@@ -1044,8 +1062,9 @@ write_not_found:
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
 write_on_buffer:
-	DMDEBUG("The cursor to buffer write. cache->cursor: %u", cache->cursor);
-	DMDEBUG("bio_count: %u", bio_count);
+	DMDEBUG("The idx to buffer write. update_mb_idx: %u", update_mb_idx);
+	/* DMDEBUG("bio_count: %u", bio_count); */
+	BUG_ON(! bio_count);
 
 	;
 	/* Update the buffer element */
@@ -1054,8 +1073,11 @@ write_on_buffer:
 
 	sector_t offset = bio->bi_sector % (1 << 3); 
 
+	DMDEBUG("mb addr %p", mb);
 	if(! mb->dirty_bits){
 		struct segment_header *seg = segment_of(cache, mb->idx);
+		DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
+		BUG_ON(seg->nr_dirty_caches_remained == 255); /* will overflow */
 		seg->nr_dirty_caches_remained++;
 	}
 
@@ -1074,6 +1096,7 @@ write_on_buffer:
 		mb->dirty_bits |= flag;
 	}
 
+	BUG_ON(! mb->dirty_bits);
 	DMDEBUG("After write on buffer. mb->dirty_bits: %u", mb->dirty_bits);
 
 	size_t start = s << SECTOR_SHIFT;

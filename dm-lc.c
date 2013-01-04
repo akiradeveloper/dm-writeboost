@@ -481,7 +481,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 	if(mb->dirty_bits == 255){
 		/* DMDEBUG("full migrate(dirty_bits=255)"); */
 		void *buf = kmalloc(1 << 12, GFP_NOIO);
-		
+
 		struct dm_io_request io_req_r = {
 			.client = lc_io_client,
 			.bi_rw = READ,
@@ -495,7 +495,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 			.count = (1 << 3),
 		};
 		dm_safe_io(&io_req_r, &region_r, 1, &err_bits, true);
-		
+
 		struct dm_io_request io_req_w = {
 			.client = lc_io_client,
 			.bi_rw = WRITE,
@@ -518,35 +518,38 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 		size_t i;
 		for(i=0; i<8; i++){
 			/* Migrate one sector for each */
-			if(mb->dirty_bits & (1 << i)){
-				struct dm_io_request io_req_r = {
-					.client = lc_io_client,
-					.bi_rw = READ,
-					.notify.fn = NULL,
-					.mem.type = DM_IO_KMEM,
-					.mem.ptr.addr = buf,
-				};
-				struct dm_io_region region_r = {
-					.bdev = backing->device->bdev,
-					.sector = calc_mb_start_sector(cache, mb->idx) + i,
-					.count = 1,
-				};
-				dm_safe_io(&io_req_r, &region_r, 1, &err_bits, true);
-						
-				struct dm_io_request io_req_w = {
-					.client = lc_io_client,
-					.bi_rw = WRITE,
-					.notify.fn = NULL,
-					.mem.type = DM_IO_KMEM,
-					.mem.ptr.addr = buf,
-				};
-				struct dm_io_region region_w = {
-					.bdev = backing->device->bdev,
-	 				.sector = mb->sector + i,
-					.count = 1,
-				};
-				dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
+			bool bit_on = mb->dirty_bits & (1 << i);
+			if(! bit_on){
+				continue;
 			}
+			
+			struct dm_io_request io_req_r = {
+				.client = lc_io_client,
+				.bi_rw = READ,
+				.notify.fn = NULL,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = buf,
+			};
+			struct dm_io_region region_r = {
+				.bdev = backing->device->bdev,
+				.sector = calc_mb_start_sector(cache, mb->idx) + i,
+				.count = 1,
+			};
+			dm_safe_io(&io_req_r, &region_r, 1, &err_bits, true);
+						
+			struct dm_io_request io_req_w = {
+				.client = lc_io_client,
+				.bi_rw = WRITE,
+				.notify.fn = NULL,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = buf,
+			};
+			struct dm_io_region region_w = {
+				.bdev = backing->device->bdev,
+	 			.sector = mb->sector + 1 * i,
+				.count = 1,
+			};
+			dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
 		}
 		kfree(buf);
 	}
@@ -890,6 +893,42 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 	return (bio_sector / (1 << 3)) * (1 << 3);
 }
 
+static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
+{
+	sector_t offset = (mb->idx % NR_CACHES_INSEG) * (1 << 3);
+	u8 i;
+	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	for(i=0; i<8; i++){
+		bool bit_on = mb->dirty_bits & (1 << i);
+		if(! bit_on){
+			continue;
+		}
+
+		void *src = cache->writebuffer + ((offset + i) << SECTOR_SHIFT);
+		memcpy(buf, src, 1 << SECTOR_SHIFT);
+
+		struct dm_io_request io_req = {
+			.client = lc_io_client,
+			.bi_rw = WRITE,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = buf,
+		};
+
+		struct backing_device *backing = backing_tbl[mb->device_id];
+		sector_t dest = mb->sector + 1 * i;
+		struct dm_io_region region = {
+			.bdev = backing->device->bdev,
+			.sector = dest,
+			.count = 1,
+		};
+
+		unsigned long err_bits = 0;
+		dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	}
+	kfree(buf);
+}
+
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
@@ -948,10 +987,13 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		/* Read found */
 		
 		if(unlikely(on_buffer)){
-			/* FIXME Flush the buffer element */
-			goto read_on_cache;
+			migrate_buffered_mb(cache, mb);
+			cleanup_segment_of(cache, mb);
+			mb->dirty_bits = 0;
+			bio_remap(bio, orig, bio->bi_sector);
+			goto remapped;
 		}
-read_on_cache:	
+
 		/* Found not on buffer */
 		if(likely(is_fully_written(mb))){ 
 			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));

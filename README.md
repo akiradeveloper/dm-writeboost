@@ -1,14 +1,17 @@
 # DM-LC
-*L*og-structured *C*aching for Linux
+*L* og-structured *C* aching for Linux
 
 ## Overview
 This is an implementation of Disk Caching Disk(DCD).  
-DCD is a logical block layer that converts coming random writes into a sequential write
-which archives high throughput and low latency especially on HDD.
+DCD is a logical block layer that 
+converts in-coming small random writes 
+into a out-going big sequential write
+which archives high throughput and low latency.
 For more detail, please read the published papar([1]).  
 Althogh the first paper was published 15 years ago,
-researches on DCD is still going on.
-For example, Griffin applys DCD to extend the lifetime of SSD backing storage([2]).
+researches on DCD is still hot.
+For example, Griffin applys DCD to 
+extend the lifetime of SSD backing storage([2]).
 
 ## Features
 * DM-LC boosts the performance of storage systems.

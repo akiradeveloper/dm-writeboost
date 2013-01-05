@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/list.h>
+#include <linux/atomic.h>
 
 #include <device-mapper.h>
 #include <dm-io.h>
@@ -74,8 +75,6 @@ static void *arr_at(struct arr *arr, size_t i)
 	return part->memory + (arr->elemsize * k);
 }
 
-#define NR_CACHES_INSEG 255
-
 static struct dm_io_client *lc_io_client;
 
 struct safe_io {
@@ -124,8 +123,30 @@ static int dm_safe_io(
 		err = dm_io(io_req, num_regions, region, err_bits);
 	}
 
+	BUG_ON(err);
+	BUG_ON(*err_bits);
 	return err;
 }
+
+/* dump 8bit * 16 */
+static void dump_memory_16(void *p)
+{
+	u8 x[16];
+	memcpy(x, p, 16);
+	DMDEBUG("%x %x %x %x %x %x %x %x  %x %x %x %x %x %x %x %x", 
+		x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],	
+		x[8], x[9], x[10],x[11],x[12],x[13],x[14],x[15]);
+}
+
+static void dump_memory(void *p, size_t n)
+{
+	size_t i;
+	for(i=0; i<(n / 16); i++){
+		dump_memory_16(p + (i * 16));
+	}
+}
+
+#define NR_CACHES_INSEG 255
 
 typedef u8 device_id;
 typedef u8 cache_id;
@@ -237,7 +258,46 @@ struct lc_cache {
 	
 	struct workqueue_struct *migrate_wq; /* TODO */
 	struct work_struct migrate_work; /* TODO */
+
+	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
+	atomic64_t stat[2][2][2][2];
 };
+
+static void inc_stat(struct lc_cache *cache, int rw, bool found, bool on_buffer, bool fullsize)
+{
+	int i0 = rw ? 1 : 0;
+	int i1 = found ? 1 : 0;
+	int i2 = on_buffer ? 1 : 0;
+	int i3 = fullsize ? 1 : 0;
+	
+	atomic64_t *v = &cache->stat[i0][i1][i2][i3];
+	atomic64_inc(v);
+}
+
+static void show_stat(struct lc_cache *cache)
+{
+	DMINFO("write? hit? on_buffer? fullsize?");
+	int i0, i1, i2, i3;
+	for(i0=0; i0<2; i0++){
+	for(i1=0; i1<2; i1++){
+	for(i2=0; i2<2; i2++){
+	for(i3=0; i3<2; i3++){
+		atomic64_t *v = &cache->stat[i0][i1][i2][i3];
+		DMINFO("%d %d %d %d %lu", i0, i1, i2, i3, atomic64_read(v));
+	}}}}
+}
+
+static void clear_stat(struct lc_cache *cache)
+{
+	int i0, i1, i2, i3;
+	for(i0=0; i0<2; i0++){
+	for(i1=0; i1<2; i1++){
+	for(i2=0; i2<2; i2++){
+	for(i3=0; i3<2; i3++){
+		atomic64_t *v = &cache->stat[i0][i1][i2][i3];
+		atomic64_set(v, 0);
+	}}}}		
+}
 
 static struct ht_head *ht_get_null_head(struct lc_cache *cache)
 {
@@ -965,7 +1025,9 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	if(found){
 		on_buffer = is_on_buffer(cache, mb->idx);
 	}
-	/* DMDEBUG("on_buffer: %d", on_buffer); */
+	DMDEBUG("on_buffer: %d", on_buffer);
+
+	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
 
 	/* 
 	 * [Read]
@@ -1144,6 +1206,9 @@ write_on_buffer:
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
 	memcpy(cache->writebuffer + start, data, bio->bi_size);
+
+	dump_memory(cache->writebuffer + (1 << 12) /* skip 4KB */, 16); /* DEBUG */
+
 	bio_endio(bio, 0);
 
 	up(&cache->io_lock);
@@ -1277,6 +1342,28 @@ static void lc_mgr_dtr(struct dm_target *ti)
 static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	char *cmd = argv[0];
+
+	/* <id> */
+	if(! strcasecmp(cmd, "show_stat")){
+		unsigned id;
+		if(sscanf(argv[1], "%u", &id) != 1){
+			return -EINVAL;		
+		}
+		struct lc_cache *cache = lc_caches[id];
+		show_stat(cache);
+		return 0;
+	}
+	
+	/* <id> */
+	if(! strcasecmp(cmd, "clear_stat")){
+		unsigned id;
+		if(sscanf(argv[1], "%u", &id) != 1){
+			return -EINVAL;
+		}
+		struct lc_cache *cache = lc_caches[id];
+		clear_stat(cache);
+		return 0;
+	}
 
 	/*
 	 * <path>

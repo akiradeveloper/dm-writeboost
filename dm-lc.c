@@ -1532,5 +1532,5 @@ module_init(lc_module_init);
 module_exit(lc_module_exit);
 
 MODULE_AUTHOR("Akira Hayakawa <ruby.wktk@gmail.com>");
-MODULE_DESCRIPTION(DM_NAME " lc");
+MODULE_DESCRIPTION(DM_NAME " lc target");
 MODULE_LICENSE("GPL");

@@ -1,5 +1,5 @@
 # DM-LC
-*L* og-structured *C* aching for Linux
+**L** og-structured **C** aching for Linux
 
 ## Overview
 This is an implementation of Disk Caching Disk(DCD).  

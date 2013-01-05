@@ -75,6 +75,24 @@ static void *arr_at(struct arr *arr, size_t i)
 	return part->memory + (arr->elemsize * k);
 }
 
+/* dump 8bit * 16 */
+static void dump_memory_16(void *p)
+{
+	u8 x[16];
+	memcpy(x, p, 16);
+	DMINFO("%x %x %x %x %x %x %x %x  %x %x %x %x %x %x %x %x", 
+		x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],	
+		x[8], x[9], x[10],x[11],x[12],x[13],x[14],x[15]);
+}
+
+static void dump_memory(void *p, size_t n)
+{
+	size_t i;
+	for(i=0; i<(n / 16); i++){
+		dump_memory_16(p + (i * 16));
+	}
+}
+
 static struct dm_io_client *lc_io_client;
 
 struct safe_io {
@@ -105,6 +123,13 @@ static int dm_safe_io(
 		struct dm_io_region *region, unsigned num_regions,
 		unsigned long *err_bits, bool thread)
 {
+	/* DEBUG */
+	if(region->sector == 0){
+		/* DMINFO("sector=0, rw(%d)", io_req->bi_rw); */
+		void *buf = io_req->mem.ptr.addr;
+		/* dump_memory(buf, 1 << 12); */
+	}
+
 	int err;
 	if(thread){
 		struct safe_io io = {
@@ -126,24 +151,6 @@ static int dm_safe_io(
 	BUG_ON(err);
 	BUG_ON(*err_bits);
 	return err;
-}
-
-/* dump 8bit * 16 */
-static void dump_memory_16(void *p)
-{
-	u8 x[16];
-	memcpy(x, p, 16);
-	DMDEBUG("%x %x %x %x %x %x %x %x  %x %x %x %x %x %x %x %x", 
-		x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],	
-		x[8], x[9], x[10],x[11],x[12],x[13],x[14],x[15]);
-}
-
-static void dump_memory(void *p, size_t n)
-{
-	size_t i;
-	for(i=0; i<(n / 16); i++){
-		dump_memory_16(p + (i * 16));
-	}
 }
 
 #define NR_CACHES_INSEG 255
@@ -276,6 +283,8 @@ static void inc_stat(struct lc_cache *cache, int rw, bool found, bool on_buffer,
 
 static void show_stat(struct lc_cache *cache)
 {
+	DMINFO("last_migrated_segment_id: %lu", cache->last_migrated_segment_id);
+	
 	DMINFO("write? hit? on_buffer? fullsize?");
 	int i0, i1, i2, i3;
 	for(i0=0; i0<2; i0++){
@@ -409,7 +418,7 @@ static void init_segment_header_array(struct lc_cache *cache)
 	for(segment_idx=0; segment_idx<nr_segments; segment_idx++){
 		struct segment_header *seg = arr_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = NR_CACHES_INSEG * segment_idx;
-		seg->start_sector = ((segment_idx % cache->nr_segments) + 1) * (1 << 11);
+		seg->start_sector = ((segment_idx % nr_segments) + 1) * (1 << 11);
 		INIT_LIST_HEAD(&seg->list);
 		
 		seg->nr_dirty_caches_remained = 0;
@@ -568,6 +577,13 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
+
+		/* DEBUG */
+		if(region_w.sector == 0){
+			DMINFO("region_r.sector: %lu", region_r.sector);
+			dump_memory(buf, 1 << 12);
+		};
+
 		dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
 		
 		kfree(buf);
@@ -591,7 +607,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 				.mem.ptr.addr = buf,
 			};
 			struct dm_io_region region_r = {
-				.bdev = backing->device->bdev,
+				.bdev = cache->device->bdev,
 				.sector = calc_mb_start_sector(cache, mb->idx) + i,
 				.count = 1,
 			};
@@ -1000,6 +1016,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	bool bio_fullsize = (bio_count == (1 << 3));
 	int rw = bio_data_dir(bio);
 
+	/* DEBUG */
+	if(! rw){
+		/* return -EIO; */
+	}
+
 	struct lc_cache *cache = lc->cache;
 
 	struct lookup_key key = {
@@ -1207,7 +1228,7 @@ write_on_buffer:
 	void *data = bio_data(bio);
 	memcpy(cache->writebuffer + start, data, bio->bi_size);
 
-	dump_memory(cache->writebuffer + (1 << 12) /* skip 4KB */, 16); /* DEBUG */
+	/* dump_memory(cache->writebuffer + (1 << 12) #<{(| skip 4KB |)}>#, 16); #<{(| DEBUG |)}># */
 
 	bio_endio(bio, 0);
 

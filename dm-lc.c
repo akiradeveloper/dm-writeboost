@@ -126,7 +126,7 @@ static int dm_safe_io(
 	/* DEBUG */
 	if(region->sector == 0){
 		/* DMINFO("sector=0, rw(%d)", io_req->bi_rw); */
-		void *buf = io_req->mem.ptr.addr;
+		/* void *buf = io_req->mem.ptr.addr; */
 		/* dump_memory(buf, 1 << 12); */
 	}
 
@@ -459,17 +459,19 @@ static void flush_current_segment(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
 
-	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %lu",
+	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u",
 			current_seg->nr_dirty_caches_remained);
 
 	/* segment_header_device is too big to alloc in stack */
 	struct segment_header_device *mbdev = kmalloc(sizeof(*mbdev), GFP_NOIO); 
 	prepare_segment_header_device(mbdev, cache, current_seg);
+	
 	void *buf = kzalloc(1 << 12, GFP_NOIO);
 	memcpy(buf, mbdev, sizeof(*mbdev));
 	kfree(mbdev);
 
 	memcpy(cache->writebuffer + (1 << 20) - (1 << 12), buf, (1 << 12));
+	kfree(buf);	
 
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -580,8 +582,8 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 
 		/* DEBUG */
 		if(region_w.sector == 0){
-			DMINFO("region_r.sector: %lu", region_r.sector);
-			dump_memory(buf, 1 << 12);
+			/* DMINFO("region_r.sector: %lu", region_r.sector); */
+			/* dump_memory(buf, 1 << 12); */
 		};
 
 		dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
@@ -633,7 +635,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 
 static void migrate_whole_segment(struct lc_cache *cache, struct segment_header *seg)
 {
-	DMDEBUG("nr_dirty_caches_remained: %lu", seg->nr_dirty_caches_remained);
+	DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		cache_nr idx = seg->start_idx + i;
@@ -645,7 +647,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		mb->dirty_bits = 0;
 	}
 	if(seg->nr_dirty_caches_remained){
-		DMERR("nr_dirty_caches_remained is nonzero(%lu) after migrating whole segment",
+		DMERR("nr_dirty_caches_remained is nonzero(%u) after migrating whole segment",
 				seg->nr_dirty_caches_remained);
 		BUG();
 	}

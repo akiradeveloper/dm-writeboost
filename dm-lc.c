@@ -159,17 +159,17 @@ typedef u8 device_id;
 typedef u8 cache_id;
 typedef u32 cache_nr;
 
-#define LC_NR_CACHES 1
-struct lc_cache *lc_caches[LC_NR_CACHES];
+#define LC_NR_SLOTS 256
+u8 cache_id_ptr;
+struct lc_cache *lc_caches[LC_NR_SLOTS];
 
-#define LC_NR_DEVICES 1
 struct backing_device {
 	device_id id;
 	struct dm_dev *device;
 
 	size_t nr_dirty_caches; /* TODO */
 };
-struct backing_device *backing_tbl[LC_NR_DEVICES];
+struct backing_device *backing_tbl[LC_NR_SLOTS];
 
 struct lc_device {
 	bool no_more_log; /* TODO */
@@ -279,21 +279,6 @@ static void inc_stat(struct lc_cache *cache, int rw, bool found, bool on_buffer,
 	
 	atomic64_t *v = &cache->stat[i0][i1][i2][i3];
 	atomic64_inc(v);
-}
-
-static void show_stat(struct lc_cache *cache)
-{
-	DMINFO("last_migrated_segment_id: %lu", cache->last_migrated_segment_id);
-	
-	DMINFO("write? hit? on_buffer? fullsize?");
-	int i0, i1, i2, i3;
-	for(i0=0; i0<2; i0++){
-	for(i1=0; i1<2; i1++){
-	for(i2=0; i2<2; i2++){
-	for(i3=0; i3<2; i3++){
-		atomic64_t *v = &cache->stat[i0][i1][i2][i3];
-		DMINFO("%d %d %d %d %lu", i0, i1, i2, i3, atomic64_read(v));
-	}}}}
 }
 
 static void clear_stat(struct lc_cache *cache)
@@ -1323,8 +1308,9 @@ static int lc_status(
 	struct lc_device *lc = ti->private;
 	switch(type){
 	case STATUSTYPE_INFO:
-		result[0] = '\0';
+		result[0] = '\0';	
 		break;
+
 	case STATUSTYPE_TABLE:
 		DMEMIT("%d %d", lc->backing->id, lc->cache->id);
 		break;
@@ -1337,13 +1323,13 @@ static struct target_type lc_target = {
 	.version = {1, 0, 0},
 	.module = THIS_MODULE,
 	.map = lc_map,
-	.end_io = lc_end_io,
-	.message = lc_message,	
 	.ctr = lc_ctr,
 	.dtr = lc_dtr,
+	.end_io = lc_end_io,
 	.merge = lc_merge,
 	.io_hints = lc_io_hints,
 	.iterate_devices = lc_iterate_devices,
+	.message = lc_message,	
 	.status = lc_status,
 };
 
@@ -1366,60 +1352,40 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	char *cmd = argv[0];
 
-	/* <id> */
-	if(! strcasecmp(cmd, "show_stat")){
-		unsigned id;
-		if(sscanf(argv[1], "%u", &id) != 1){
-			return -EINVAL;		
-		}
-		struct lc_cache *cache = lc_caches[id];
-		show_stat(cache);
-		return 0;
-	}
-	
-	/* <id> */
-	if(! strcasecmp(cmd, "clear_stat")){
+	/*
+	 * <id>
+	 */
+	if(! strcasecmp(cmd, "switch_to")){
 		unsigned id;
 		if(sscanf(argv[1], "%u", &id) != 1){
 			return -EINVAL;
 		}
-		struct lc_cache *cache = lc_caches[id];
+		cache_id_ptr = id;
+		return 0;
+	}
+
+	if(! strcasecmp(cmd, "clear_stat")){
+		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		if(! cache){
+			return -EINVAL;
+		}
 		clear_stat(cache);
 		return 0;
 	}
 
 	/*
-	 * <path>
-	 * @path path to the cache device
-	 */
-	if(! strcasecmp(cmd, "format_cache_device")){
-		struct dm_dev *dev;
-		if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
-			return -EINVAL;
-		}
-		
-		format_cache_device(dev);
-		
-		dm_put_device(ti, dev);
-		return 0;	
-	}
-
-	/*
-	 * <id> <path> 
+	 * <path> 
 	 */
 	if(! strcasecmp(cmd, "resume_cache")){
 		DMDEBUG("start resume cache");
 		struct lc_cache *cache = kmalloc(sizeof(*cache), GFP_KERNEL);
-		unsigned id;
-		if(sscanf(argv[1], "%u", &id) != 1){ 
-			return -EINVAL; 
-		}
+		
 		struct dm_dev *dev;	
-		if(dm_get_device(ti, argv[2], dm_table_get_mode(ti->table), &dev)){
+		if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 			return -EINVAL;
 		}
 		
-		cache->id = id;
+		cache->id = cache_id_ptr;
 		cache->device = dev;
 		cache->nr_segments = calc_nr_segments(cache->device);
 		cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
@@ -1438,9 +1404,27 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("init segment_array done");
 		recover_cache(cache);
 		DMDEBUG("recover cache done");
-		lc_caches[id] = cache;
+		lc_caches[cache->id] = cache;
+		
+		clear_stat(cache);
 
 		return 0;
+	}
+
+	/*
+	 * <path>
+	 * @path path to the cache device
+	 */
+	if(! strcasecmp(cmd, "format_cache_device")){
+		struct dm_dev *dev;
+		if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
+			return -EINVAL;
+		}
+		
+		format_cache_device(dev);
+		
+		dm_put_device(ti, dev);
+		return 0;	
 	}
 
 	/*
@@ -1465,6 +1449,9 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;
 	}
 
+	/*
+	 * <id>
+	 */
 	if(! strcasecmp(cmd, "remove_device")){
 		/* TODO This version doesn't support this command. */
 		BUG();
@@ -1479,6 +1466,45 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	return -EINVAL;
 }
 
+static int lc_mgr_status(
+		struct dm_target *ti, status_type_t type, unsigned flags,
+		char *result, unsigned int maxlen)
+{
+	unsigned int sz = 0;
+
+	struct lc_cache *cache = lc_caches[cache_id_ptr];
+
+	if(! cache){
+		return -EINVAL;
+	}
+
+	switch(type){
+	case STATUSTYPE_INFO:
+		DMEMIT("\n");
+		DMEMIT("current cache_id_ptr: %u\n", cache_id_ptr); 
+		DMEMIT("last_migrated_segment_id: %lu\n", cache->last_migrated_segment_id);
+		DMEMIT("write? hit? on_buffer? fullsize?");
+		int i0, i1, i2, i3;
+		for(i0=0; i0<2; i0++){
+		for(i1=0; i1<2; i1++){
+		for(i2=0; i2<2; i2++){
+		for(i3=0; i3<2; i3++){
+			atomic64_t *v = &cache->stat[i0][i1][i2][i3];
+			DMEMIT("%d %d %d %d %lu", i0, i1, i2, i3, atomic64_read(v));
+			if(i0 * i1 * i2 * i3){
+				continue;
+			}
+			DMEMIT("\n");
+		}}}}
+		break;
+		
+	case STATUSTYPE_TABLE:
+		break;
+	}
+
+	return 0;
+}
+
 static struct target_type lc_mgr_target = {
 	.name = "lc-mgr",
 	.version = {1, 0, 0},
@@ -1487,6 +1513,7 @@ static struct target_type lc_mgr_target = {
 	.ctr = lc_mgr_ctr,
 	.dtr = lc_mgr_dtr,
 	.message = lc_mgr_message,
+	.status = lc_mgr_status,
 };
 
 int __init lc_module_init(void)
@@ -1498,21 +1525,23 @@ int __init lc_module_init(void)
 	
 	r = dm_register_target(&lc_target);
 	if(r < 0){
-		DMERR("register lc failed %d\n", r);
+		DMERR("register lc failed %d", r);
 		return r;
 	}
 
 	r = dm_register_target(&lc_mgr_target);
 	if(r < 0){
-		DMERR("register lc-mgr failed %d\n", r);
+		DMERR("register lc-mgr failed %d", r);
 		return r;
 	}
 
+	cache_id_ptr = 0;
+
 	size_t i;
-	for(i=0; i < LC_NR_DEVICES; i++){
+	for(i=0; i < LC_NR_SLOTS; i++){
 		backing_tbl[i] = NULL;
 	}
-	for(i=0; i < LC_NR_CACHES; i++){
+	for(i=0; i < LC_NR_SLOTS; i++){
 		lc_caches[i] = NULL;	
 	}
 	

@@ -230,6 +230,7 @@ struct segment_header {
 	cache_nr start_idx; /* const */
 	sector_t start_sector; /* const */
 
+	struct completion flush_done;
 	struct list_head list;
 };
 
@@ -260,11 +261,14 @@ struct lc_cache {
 	struct segment_header *current_seg;
 	void *writebuffer; /* Preallocated buffer. 1024KB */
 
+	struct workqueue_struct *flush_wq; 
+
 	size_t last_migrated_segment_id;
 	struct list_head migrate_wait_queue;
 	
 	struct workqueue_struct *migrate_wq; /* TODO */
 	struct work_struct migrate_work; /* TODO */
+	bool migrate_queued; /* TODO */
 
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
@@ -440,10 +444,42 @@ static void prepare_segment_header_device(
 	}
 }
 
-static void flush_current_segment(struct lc_cache *cache)
+struct flush_context {
+	struct work_struct work;
+	struct lc_cache *cache;
+	struct segment_header *seg; 
+	void *buf;
+};
+
+static void flush_proc(struct work_struct *work)
+{
+	struct flush_context *ctx = 
+		container_of(work, struct flush_context, work);
+
+	struct dm_io_request io_req = {
+		.client = lc_io_client,
+		.bi_rw = WRITE,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = ctx->buf,
+	};
+	struct dm_io_region region = {
+		.bdev = ctx->cache->device->bdev,	
+		.sector = ctx->seg->start_sector,
+		.count = (1 << 11),
+	};
+	unsigned long err_bits = 0;
+	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+
+	complete_all(&ctx->seg->flush_done);
+
+	kfree(ctx->buf);
+	kfree(ctx);
+}
+
+static void queue_flushing(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
-
 	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u",
 			current_seg->nr_dirty_caches_remained);
 
@@ -456,32 +492,24 @@ static void flush_current_segment(struct lc_cache *cache)
 	kfree(mbdev);
 
 	memcpy(cache->writebuffer + (1 << 20) - (1 << 12), buf, (1 << 12));
-	kfree(buf);	
+	kfree(buf);
 
-	struct dm_io_request io_req = {
-		.client = lc_io_client,
-		.bi_rw = WRITE,
-		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = cache->writebuffer,
-	};
-	struct dm_io_region region = {
-		.bdev = cache->device->bdev,	
-		.sector = current_seg->start_sector,
-		.count = (1 << 11),
-	};
-	unsigned long err_bits = 0;
-	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
+	ctx->cache = cache;
+	ctx->seg = current_seg;
+	ctx->buf = cache->writebuffer;
+	INIT_WORK(&ctx->work, flush_proc);
 
 	list_add_tail(&current_seg->list, &cache->migrate_wait_queue);
+	init_completion(&current_seg->flush_done);
+	queue_work(cache->flush_wq, &ctx->work);
 
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
-
 	size_t next_id = current_seg->global_id + 1;
+	
 	struct segment_header *new_seg = 
 		get_segment_header_by_id(cache, next_id);
-
 	BUG_ON(new_seg->nr_dirty_caches_remained);
 
 	/*
@@ -496,6 +524,7 @@ static void flush_current_segment(struct lc_cache *cache)
 
 	new_seg->global_id = next_id;
 	cache->current_seg = new_seg;
+	cache->writebuffer = kzalloc(1 << 20, GFP_NOIO);
 }
 
 /* Get the segment that the passed mb belongs to. */
@@ -1068,6 +1097,9 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		if(likely(is_fully_written(mb))){ 
 			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
 		}else{
+			struct segment_header *seg = segment_of(cache, mb->idx);
+			
+			wait_for_completion(&seg->flush_done);
 			migrate_mb(cache, mb);
 			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
@@ -1085,6 +1117,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			update_mb_idx = mb->idx;
 			goto write_on_buffer;
 		}else{
+			struct segment_header *seg = segment_of(cache, mb->idx);
 			/*
 			 * First clean up the previous cache.
 			 * Migrate the cache if needed.
@@ -1092,6 +1125,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			bool needs_cleanup_prev_cache = 
 				!bio_fullsize || !is_fully_written(mb);
 			if(unlikely(needs_cleanup_prev_cache)){
+				wait_for_completion(&seg->flush_done);
 				migrate_mb(cache, mb);
 			}
 			
@@ -1154,13 +1188,14 @@ write_not_found:
 	bool migrate_segment = refresh_segment && flush_overwrite;
 	if(migrate_segment){
 		DMDEBUG("migrate_segment id: %lu", first_migrate->global_id);
+		wait_for_completion(&first_migrate->flush_done);
 		migrate_whole_segment(cache, first_migrate);
 	}
 
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
 		DMDEBUG("flush_segment id: %lu", cache->current_seg->global_id);
-		flush_current_segment(cache);
+		queue_flushing(cache);
 	}
 
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
@@ -1407,7 +1442,9 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		lc_caches[cache->id] = cache;
 		
 		clear_stat(cache);
-
+		
+		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);	
+		
 		return 0;
 	}
 

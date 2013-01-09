@@ -1466,6 +1466,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 	/*
 	 * <id> <path>
+	 * @id backing device
 	 */
 	if(! strcasecmp(cmd, "add_device")){
 		struct backing_device *b = kmalloc(sizeof(*b), GFP_KERNEL);

@@ -153,7 +153,7 @@ static int dm_safe_io(
 	return err;
 }
 
-#define NR_CACHES_INSEG 255
+#define NR_CACHES_INSEG 254 /* 256 - 2 (header and commit block) */
 
 typedef u8 device_id;
 typedef u8 cache_id;
@@ -219,7 +219,7 @@ struct metablock_device {
 };
 
 struct segment_header {
-	u8 nr_dirty_caches_remained; /* <= 255 */
+	u8 nr_dirty_caches_remained; /* <= NR_CACHES_INSEG */
 
 	/*
 	 * id is not circulated but uniformly increases.
@@ -234,11 +234,19 @@ struct segment_header {
 	struct list_head list;
 };
 
+#define HEADER 2
+#define COMMIT 1
+
 /* At most 4KB */
 struct segment_header_device {
 	size_t global_id;	
 	u8 nr_dirty_caches_remained;
 	struct metablock_device mbarr[NR_CACHES_INSEG]; 
+};
+
+/* <= 1 sector for atomicity. */
+struct commit_block {
+	size_t global_id;
 };
 
 struct lookup_key {
@@ -422,7 +430,7 @@ static struct segment_header *get_segment_header_by_id(struct lc_cache *cache, s
 }
 
 static void prepare_segment_header_device(
-		struct segment_header_device *dest, 
+		struct segment_header_device *dest,
 		struct lc_cache *cache, struct segment_header *src)
 {
 	dest->global_id = src->global_id;
@@ -453,8 +461,9 @@ struct flush_context {
 
 static void flush_proc(struct work_struct *work)
 {
-	struct flush_context *ctx = 
-		container_of(work, struct flush_context, work);
+	unsigned long err_bits = 0;
+
+	struct flush_context *ctx = container_of(work, struct flush_context, work);
 
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -466,10 +475,23 @@ static void flush_proc(struct work_struct *work)
 	struct dm_io_region region = {
 		.bdev = ctx->cache->device->bdev,	
 		.sector = ctx->seg->start_sector,
-		.count = (1 << 11),
+		.count = (1 << 11) - (1 << 3),
 	};
-	unsigned long err_bits = 0;
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+
+	struct dm_io_request io_req_commit = {
+		.client = lc_io_client,
+		.bi_rw = WRITE,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = ctx->buf + (1 << 20) - (1 << 12),
+	};
+	struct dm_io_region region_commit = {
+		.bdev = ctx->cache->device->bdev,
+		.sector = ctx->seg->start_sector + (1 << 11) - (1 << 3),
+		.count = 1,
+	};
+	dm_safe_io(&io_req_commit, &region_commit, 1, &err_bits, true);
 
 	complete_all(&ctx->seg->flush_done);
 
@@ -484,15 +506,20 @@ static void queue_flushing(struct lc_cache *cache)
 			current_seg->nr_dirty_caches_remained);
 
 	/* segment_header_device is too big to alloc in stack */
-	struct segment_header_device *mbdev = kmalloc(sizeof(*mbdev), GFP_NOIO); 
-	prepare_segment_header_device(mbdev, cache, current_seg);
-	
+	struct segment_header_device *header = kmalloc(sizeof(*header), GFP_NOIO); 
+	prepare_segment_header_device(header, cache, current_seg);
 	void *buf = kzalloc(1 << 12, GFP_NOIO);
-	memcpy(buf, mbdev, sizeof(*mbdev));
-	kfree(mbdev);
-
-	memcpy(cache->writebuffer + (1 << 20) - (1 << 12), buf, (1 << 12));
+	memcpy(buf, header, sizeof(*header));
+	kfree(header);
+	memcpy(cache->writebuffer + (1 << 20) - HEADER * (1 << 12), buf, (1 << 12));
 	kfree(buf);
+
+	struct commit_block commit;
+	commit.global_id = current_seg->global_id;
+	void *buf_ = kzalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	memcpy(buf_, &commit, sizeof(commit));
+	memcpy(cache->writebuffer + (1 << 20) - COMMIT * (1 << 12), buf_, (1 << SECTOR_SHIFT));
+	kfree(buf_);
 
 	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
@@ -679,7 +706,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
 
-	void *buf = kzalloc(1 << 20, GFP_NOIO);
+	void *buf = kzalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
 
 	struct dm_io_request io_req = {
@@ -692,7 +719,7 @@ static void commit_super_block(struct lc_cache *cache)
 	struct dm_io_region region = {
 		.bdev = cache->device->bdev,
 		.sector = 0,
-		.count = (1 << 11),		
+		.count = 1,
 	};
 	unsigned long err_bits = 0;
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
@@ -701,7 +728,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 static void read_superblock_device(struct superblock_device *dest, struct lc_cache *cache)
 {
-	void *buf = kmalloc(1 << 20, GFP_NOIO);
+	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
 		.bi_rw = READ,
@@ -712,7 +739,7 @@ static void read_superblock_device(struct superblock_device *dest, struct lc_cac
 	struct dm_io_region region = {
 		.bdev = cache->device->bdev,
 		.sector = 0,
-		.count = (1 << 11),
+		.count = 1,
 	};
 	unsigned long err_bits = 0;
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
@@ -720,9 +747,9 @@ static void read_superblock_device(struct superblock_device *dest, struct lc_cac
 	kfree(buf);
 }
 
-static sector_t calc_segment_header_start(size_t segment_idx)
+static sector_t calc_segment_header_start(size_t segment_idx, int type)
 {
-	return (1 << 11) * (segment_idx + 2) - (1 << 3);
+	return (1 << 11) * (segment_idx + 2) - (type << 3);
 }
 
 static void read_segment_header_device(
@@ -739,12 +766,35 @@ static void read_segment_header_device(
 	};
 	struct dm_io_region region = {
 		.bdev = cache->device->bdev,
-		.sector = calc_segment_header_start(segment_idx),
+		.sector = calc_segment_header_start(segment_idx, HEADER),
 		.count = (1 << 3),
 	};
 	unsigned long err_bits = 0;
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
 	memcpy(dest, buf, sizeof(*dest));
+	kfree(buf);
+}
+
+static void read_commit_block(
+		struct commit_block *dest,
+		struct lc_cache *cache, size_t segment_idx)
+{
+	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	struct dm_io_request io_req = {
+		.client = lc_io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	struct dm_io_region region = {
+		.bdev = cache->device->bdev,
+		.sector = calc_segment_header_start(segment_idx, COMMIT),
+		.count = 1,
+	};
+	unsigned long err_bits = 0;
+	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	memcpy(dest, buf, sizeof(&dest));
 	kfree(buf);
 }
 
@@ -811,18 +861,30 @@ static void recover_cache(struct lc_cache *cache)
 	size_t oldest_idx = 0;
 	size_t max_id = SIZE_MAX; /* This global_id is forbidden. */
 
-	struct segment_header_device *o = kmalloc(sizeof(*o), GFP_KERNEL);
+	struct segment_header_device *header = kmalloc(sizeof(*header), GFP_KERNEL);
+	struct commit_block commit;
 	
 	/* Finding the oldest valid(non-zero) id and its index. */
 	size_t oldest_id = max_id;
 	for(i=0; i<nr_segments; i++){
-		read_segment_header_device(o, cache, i);
-		if(o->global_id < 1){
+		read_segment_header_device(header, cache, i);
+		read_commit_block(&commit, cache, i);
+		
+		/* 
+		 * Ignore semgents half done. 
+		 * It is OK not recover these segments
+		 * because they have been migrated.
+		 */
+		if(header->global_id != commit.global_id){
 			continue;
 		}
-		if(o->global_id < oldest_id){
+		
+		if(header->global_id < 1){
+			continue;
+		}
+		if(header->global_id < oldest_id){
 			oldest_idx = i;
-			oldest_id = o->global_id;
+			oldest_id = header->global_id;
 		}
 	}
 
@@ -841,28 +903,44 @@ static void recover_cache(struct lc_cache *cache)
 	size_t current_id = 0;
 	for(i=oldest_idx; i<(nr_segments + oldest_idx); i++){
 		j = i % nr_segments;
-		read_segment_header_device(o, cache, j);
+		read_segment_header_device(header, cache, j);
+		read_commit_block(&commit, cache, j);
+		
+		/*
+		 * Inconsistent segment is
+		 * at least the last segment for flush attempt.
+		 * Therefore,
+		 * it is OK to ignore the following segments.
+		 */
+		if(header->global_id != commit.global_id){
+			break;
+		}
+		
 		/* 
 		 * If the segments are too old. Needless to recover. 
 		 * Because the data is on the backing storage.
 		 *
 		 * But it is OK to recover though.
 		 */
-		if(o->global_id < sup.last_migrated_segment_id){
+		if(header->global_id < sup.last_migrated_segment_id){
 			continue;
 		}
-		/* global_id must uniformly increase. */
-		if(o->global_id <= current_id){
+		
+		/* 
+		 * global_id must uniformly increase.
+		 */
+		if(header->global_id <= current_id){
 			break;
 		}
-		current_id = o->global_id;
-		update_by_segment_header_device(cache, o);
+		
+		current_id = header->global_id;
+		update_by_segment_header_device(cache, header);
 		
 		init_segment_id = current_id + 1;
 	}
 
 setup_init_segment:
-	kfree(o);
+	kfree(header);
 
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
 	seg->global_id = init_segment_id;
@@ -887,17 +965,18 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 
 	/*
 	 * Disk format:
-	 * superblock(1024KB) [segment(1024KB)]+
-	 * segment = metablock*255 segment_header
+	 * superblock(512B/1024KB) [segment(1024KB)]+
+	 * segment = metablock(4KB)*NR_CACHES_INSEG segment_header(4KB) commit_block(512B)
 	 *
 	 * (Optimization)
-	 * We discard first 1024KB for superblock.
+	 * We discard first full 1024KB for superblock
+	 * but only use 512B at the head.
 	 * Maybe the cache device is effient in 1024KB aligned write
 	 * e.g. erase unit of flash device is 256K, 512K.. 
 	 *
 	 * and simplify the code :)
 	 */
-	return devsize / ( 1 << (20 - SECTOR_SHIFT) ) - 1;
+	return devsize / (1 << 11) - 1;
 }
 
 static void format_cache_device(struct dm_dev *dev)
@@ -907,8 +986,10 @@ static void format_cache_device(struct dm_dev *dev)
 	size_t nr_segments = calc_nr_segments(dev);
 	void *buf;
 
-	/* Format superblock */
-	buf = kzalloc(1 << 20, GFP_KERNEL);
+	/*
+	 * Cleanup superblock.
+	 */
+	buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	struct dm_io_request io_req_sup = {
 		.client = lc_io_client,
 		.bi_rw = WRITE,
@@ -919,15 +1000,17 @@ static void format_cache_device(struct dm_dev *dev)
 	struct dm_io_region region_sup = {
 		.bdev = dev->bdev,
 		.sector = 0,
-		.count = (1 << 11),
+		.count = 1,
 	};
 	dm_safe_io(&io_req_sup, &region_sup, 1, &err_bits, true);
 	kfree(buf);
 
-	/* Format segment headers */
+	/*
+	 * Cleanup header and commit.
+	 */
 	size_t i;
 	for(i=0; i<nr_segments; i++){
-		buf = kzalloc(1 << 12, GFP_KERNEL);
+		buf = kzalloc(2 << 12, GFP_KERNEL); /* 8KB */
 		struct dm_io_request io_req_seg = {
 			.client = lc_io_client,
 			.bi_rw = WRITE,
@@ -937,8 +1020,8 @@ static void format_cache_device(struct dm_dev *dev)
 		};
 		struct dm_io_region region_seg = {
 			.bdev = dev->bdev,
-			.sector = calc_segment_header_start(i),
-			.count = (1 << 3),
+			.sector = calc_segment_header_start(i, HEADER),
+			.count = (2 << 3),
 		};
 		dm_safe_io(&io_req_seg, &region_seg, 1, &err_bits, true);
 		kfree(buf);
@@ -1224,7 +1307,7 @@ write_on_buffer:
 	if(! mb->dirty_bits){
 		struct segment_header *seg = segment_of(cache, mb->idx);
 		DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
-		BUG_ON(seg->nr_dirty_caches_remained == 255); /* will overflow */
+		BUG_ON(seg->nr_dirty_caches_remained == NR_CACHES_INSEG); /* will overflow */
 		seg->nr_dirty_caches_remained++;
 	}
 

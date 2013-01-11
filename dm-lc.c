@@ -440,13 +440,14 @@ static void prepare_segment_header_device(
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		struct metablock *mb = arr_at(cache->mb_array, src->start_idx + i);
 		struct metablock_device *mbdev = &dest->mbarr[i];
-		
 		mbdev->sector = mb->sector;	
 		mbdev->device_id = mb->device_id;
+		DMDEBUG("prepare header. mb->idx: %u, mb->dirty_bits: %u", mb->idx, mb->dirty_bits);
 		mbdev->dirty_bits = mb->dirty_bits;
 		
 		/* For a segment that was partially flushed. */
 		if(i > (cache->cursor % NR_CACHES_INSEG)){
+			DMDEBUG("ignore mb for flushing. cursor: %u", cache->cursor);
 			mbdev->dirty_bits = 0;
 		}
 	}
@@ -475,7 +476,7 @@ static void flush_proc(struct work_struct *work)
 	struct dm_io_region region = {
 		.bdev = ctx->cache->device->bdev,	
 		.sector = ctx->seg->start_sector,
-		.count = (1 << 11) - (1 << 3),
+		.count = ((1 << 11) - (1 << 3)),
 	};
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
 
@@ -484,11 +485,11 @@ static void flush_proc(struct work_struct *work)
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = ctx->buf + (1 << 20) - (1 << 12),
+		.mem.ptr.addr = ctx->buf + ((1 << 20) - (1 << 12)),
 	};
 	struct dm_io_region region_commit = {
 		.bdev = ctx->cache->device->bdev,
-		.sector = ctx->seg->start_sector + (1 << 11) - (1 << 3),
+		.sector = ctx->seg->start_sector + ((1 << 11) - (1 << 3)),
 		.count = 1,
 	};
 	dm_safe_io(&io_req_commit, &region_commit, 1, &err_bits, true);
@@ -497,6 +498,16 @@ static void flush_proc(struct work_struct *work)
 
 	kfree(ctx->buf);
 	kfree(ctx);
+}
+
+void discard_caches_inseg(struct lc_cache *cache, struct segment_header *seg)
+{
+	u8 i;
+	for(i=0; i<NR_CACHES_INSEG; i++){
+		struct metablock *mb =
+			arr_at(cache->mb_array, seg->start_idx + i);
+		ht_del(cache, mb);
+	}
 }
 
 static void queue_flushing(struct lc_cache *cache)
@@ -511,14 +522,14 @@ static void queue_flushing(struct lc_cache *cache)
 	void *buf = kzalloc(1 << 12, GFP_NOIO);
 	memcpy(buf, header, sizeof(*header));
 	kfree(header);
-	memcpy(cache->writebuffer + (1 << 20) - HEADER * (1 << 12), buf, (1 << 12));
+	memcpy(cache->writebuffer + ((1 << 20) - HEADER * (1 << 12)), buf, (1 << 12));
 	kfree(buf);
 
 	struct commit_block commit;
 	commit.global_id = current_seg->global_id;
 	void *buf_ = kzalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf_, &commit, sizeof(commit));
-	memcpy(cache->writebuffer + (1 << 20) - COMMIT * (1 << 12), buf_, (1 << SECTOR_SHIFT));
+	memcpy(cache->writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
 	kfree(buf_);
 
 	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
@@ -539,20 +550,14 @@ static void queue_flushing(struct lc_cache *cache)
 		get_segment_header_by_id(cache, next_id);
 	BUG_ON(new_seg->nr_dirty_caches_remained);
 
-	/*
-	 * Invalidating caches on the new segment.
-	 */
-	u8 i;
-	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb =
-			arr_at(cache->mb_array, new_seg->start_idx + i);
-		ht_del(cache, mb);
-	}
+	discard_caches_inseg(cache, new_seg);	
 
 	new_seg->global_id = next_id;
 	cache->current_seg = new_seg;
 	cache->writebuffer = kzalloc(1 << 20, GFP_NOIO);
 }
+
+
 
 /* Get the segment that the passed mb belongs to. */
 static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx)
@@ -803,9 +808,11 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	struct segment_header *seg = 
 		get_segment_header_by_id(cache, src->global_id);
 	seg->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
+	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %lu, (id=%lu)",
+			src->nr_dirty_caches_remained, src->global_id);
 
 	/* Add to migrate_wait_queue */
-	list_add(&seg->list, &cache->migrate_wait_queue);
+	list_add_tail(&seg->list, &cache->migrate_wait_queue);
 
 	/* Update in-memory structures */
 	cache_nr i;
@@ -815,11 +822,12 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		struct metablock *mb = arr_at(cache->mb_array, offset + i); 
 		
-		if(! mb->dirty_bits){
+		struct metablock_device *mbdev = &src->mbarr[i];
+		if(! mbdev->dirty_bits){
+			DMDEBUG("update. ignore mb(clean), idx: %u", mb->idx);
 			continue;
 		}
 		
-		struct metablock_device *mbdev = &src->mbarr[i];
 		mb->sector = mbdev->sector;
 		mb->device_id = mbdev->device_id;
 		mb->dirty_bits = mbdev->dirty_bits;
@@ -839,7 +847,8 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	}
 
 	if(seg->nr_dirty_caches_remained != nr_dirties){
-		DMERR("nr_dirty_caches_remained inconsistent");
+		DMERR("nr_dirty_caches_remained inconsistent, nr_dirty_caches_remained: %lu, nr_dirties : %lu", 
+				seg->nr_dirty_caches_remained, nr_dirties);
 	}
 }
 
@@ -882,6 +891,7 @@ static void recover_cache(struct lc_cache *cache)
 		if(header->global_id < 1){
 			continue;
 		}
+		
 		if(header->global_id < oldest_id){
 			oldest_idx = i;
 			oldest_id = header->global_id;
@@ -943,7 +953,9 @@ setup_init_segment:
 	kfree(header);
 
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
-	seg->global_id = init_segment_id;
+	discard_caches_inseg(cache, seg);
+	seg->nr_dirty_caches_remained = 0;	
+	seg->global_id = init_segment_id; 
 	cache->current_seg = seg;
 
 	/*
@@ -952,6 +964,7 @@ setup_init_segment:
 	 * I believe this is the simplest principle to implement.
 	 */
 	cache->cursor = seg->start_idx;
+	DMDEBUG("recover. seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
 }
 
 static sector_t dm_devsize(struct dm_dev *dev)
@@ -1604,7 +1617,9 @@ static int lc_mgr_status(
 		DMEMIT("\n");
 		DMEMIT("current cache_id_ptr: %u\n", cache_id_ptr); 
 		DMEMIT("last_migrated_segment_id: %lu\n", cache->last_migrated_segment_id);
-		DMEMIT("write? hit? on_buffer? fullsize?");
+		DMEMIT("current segment id: %lu\n", cache->current_seg->global_id);
+		DMEMIT("cursor: %u\n", cache->cursor);
+		DMEMIT("write? hit? on_buffer? fullsize?\n");
 		int i0, i1, i2, i3;
 		for(i0=0; i0<2; i0++){
 		for(i1=0; i1<2; i1++){

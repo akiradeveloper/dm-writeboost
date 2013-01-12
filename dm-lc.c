@@ -11,6 +11,8 @@
 #include <linux/version.h>
 #include <linux/list.h>
 #include <linux/atomic.h>
+#include <linux/mutex.h>
+#include <linux/sched.h>
 
 #include <device-mapper.h>
 #include <dm-io.h>
@@ -232,6 +234,9 @@ struct segment_header {
 
 	struct completion flush_done;
 	struct list_head list;
+	
+	struct completion migrate_done;
+	struct mutex lock;
 };
 
 #define HEADER 2
@@ -257,7 +262,7 @@ struct lookup_key {
 struct lc_cache {
 	cache_id id;
 	struct dm_dev *device;
-	struct semaphore io_lock;
+	struct mutex io_lock;
 	cache_nr nr_caches; /* const */
 	struct arr *mb_array;
 	size_t nr_segments; /* const */
@@ -272,11 +277,12 @@ struct lc_cache {
 	struct workqueue_struct *flush_wq; 
 
 	size_t last_migrated_segment_id;
-	struct list_head migrate_wait_queue;
-	
+	size_t last_flushed_segment_id;
+	size_t reserving_segment_id;
+	bool allow_migrate;
+
 	struct workqueue_struct *migrate_wq; /* TODO */
 	struct work_struct migrate_work; /* TODO */
-	bool migrate_queued; /* TODO */
 
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
@@ -419,6 +425,8 @@ static void init_segment_header_array(struct lc_cache *cache)
 		INIT_LIST_HEAD(&seg->list);
 		
 		seg->nr_dirty_caches_remained = 0;
+		
+		mutex_init(&seg->lock);
 	}
 }
 
@@ -532,14 +540,14 @@ static void queue_flushing(struct lc_cache *cache)
 	memcpy(cache->writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
 	kfree(buf_);
 
+	init_completion(&current_seg->flush_done);
+	init_completion(&current_seg->migrate_done);
+
 	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
 	ctx->seg = current_seg;
 	ctx->buf = cache->writebuffer;
 	INIT_WORK(&ctx->work, flush_proc);
-
-	list_add_tail(&current_seg->list, &cache->migrate_wait_queue);
-	init_completion(&current_seg->flush_done);
 	queue_work(cache->flush_wq, &ctx->work);
 
 	/* Set the cursor to the last of the flushed segment. */
@@ -556,8 +564,6 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->current_seg = new_seg;
 	cache->writebuffer = kzalloc(1 << 20, GFP_NOIO);
 }
-
-
 
 /* Get the segment that the passed mb belongs to. */
 static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx)
@@ -688,17 +694,52 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = arr_at(cache->mb_array, idx);
 		DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits);
+		
+		mutex_lock(&seg->lock);
 		migrate_mb(cache, mb); 
 		cleanup_segment_of(cache, mb);
 		mb->dirty_bits = 0;
+		mutex_unlock(&seg->lock);
 	}
 	if(seg->nr_dirty_caches_remained){
 		DMERR("nr_dirty_caches_remained is nonzero(%u) after migrating whole segment",
 				seg->nr_dirty_caches_remained);
 		BUG();
 	}
-	list_del(&seg->list);
+
 	cache->last_migrated_segment_id = seg->global_id;
+
+	complete_all(&seg->migrate_done);
+}
+
+static void migrate_segment_proc(struct work_struct *work)
+{
+	struct lc_cache *cache = container_of(work, struct lc_cache, migrate_work);
+
+	while(true){
+		/*
+		 * reserving_id > 0 means 
+		 * that migration is immediate.
+		 */
+		bool allow_migrate = 
+			cache->reserving_segment_id || cache->allow_migrate;	
+		
+		if(! allow_migrate){
+			schedule();
+			continue;
+		}
+		
+		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
+		if(! need_migrate){
+			schedule();
+			continue;
+		}
+		
+		struct segment_header *seg = 
+			get_segment_header_by_id(cache, cache->last_migrated_segment_id + 1);
+		
+		migrate_whole_segment(cache, seg);	
+	}
 }
 
 struct superblock_device {
@@ -808,17 +849,14 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	struct segment_header *seg = 
 		get_segment_header_by_id(cache, src->global_id);
 	seg->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
-	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %lu, (id=%lu)",
+	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %u, (id=%lu)",
 			src->nr_dirty_caches_remained, src->global_id);
-
-	/* Add to migrate_wait_queue */
-	list_add_tail(&seg->list, &cache->migrate_wait_queue);
 
 	/* Update in-memory structures */
 	cache_nr i;
 	cache_nr offset = seg->start_idx;
 
-	size_t nr_dirties = 0;
+	u8 nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		struct metablock *mb = arr_at(cache->mb_array, offset + i); 
 		
@@ -847,7 +885,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	}
 
 	if(seg->nr_dirty_caches_remained != nr_dirties){
-		DMERR("nr_dirty_caches_remained inconsistent, nr_dirty_caches_remained: %lu, nr_dirties : %lu", 
+		DMERR("nr_dirty_caches_remained inconsistent, nr_dirty_caches_remained: %u, nr_dirties : %u", 
 				seg->nr_dirty_caches_remained, nr_dirties);
 	}
 }
@@ -963,6 +1001,7 @@ setup_init_segment:
 	 * This means that we will not use the element.
 	 * I believe this is the simplest principle to implement.
 	 */
+	cache->last_flushed_segment_id = seg->global_id - 1;
 	cache->cursor = seg->start_idx;
 	DMDEBUG("recover. seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
 }
@@ -1062,14 +1101,6 @@ static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 	return true;
 }
 
-static bool id_conflict(struct lc_cache *cache, size_t seg_id1, size_t seg_id2)
-{
-	size_t nr_segments = cache->nr_segments;
-	size_t a = seg_id1 % nr_segments;
-	size_t b = seg_id2 % nr_segments;
-	return a == b;
-}
-
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
 	bio->bi_bdev = dev->bdev;
@@ -1147,7 +1178,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	 * This version persues simplicity.
 	 */
 
-	down(&cache->io_lock);
+	mutex_lock(&cache->io_lock);
 
 	struct metablock *mb = ht_lookup(cache, &key);
 
@@ -1194,11 +1225,14 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
 		}else{
 			struct segment_header *seg = segment_of(cache, mb->idx);
-			
 			wait_for_completion(&seg->flush_done);
+			
+			mutex_lock(&seg->lock);
 			migrate_mb(cache, mb);
 			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
+			mutex_unlock(&seg->lock);
+			
 			bio_remap(bio, orig, bio->bi_sector);
 		}
 		goto remapped;
@@ -1214,6 +1248,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			goto write_on_buffer;
 		}else{
 			struct segment_header *seg = segment_of(cache, mb->idx);
+			
 			/*
 			 * First clean up the previous cache.
 			 * Migrate the cache if needed.
@@ -1222,18 +1257,23 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 				!bio_fullsize || !is_fully_written(mb);
 			if(unlikely(needs_cleanup_prev_cache)){
 				wait_for_completion(&seg->flush_done);
+				
+				mutex_lock(&seg->lock);		
 				migrate_mb(cache, mb);
+			}else{
+				mutex_lock(&seg->lock);
 			}
-			
-			/* Delete the old mb from hashtable */
-			ht_del(cache, mb);
-			
 			/*
 			 * Fullsize dirty cache
 			 * can be discarded without migration.
 			 */
 			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
+			mutex_unlock(&seg->lock);
+			
+			/* Delete the old mb from hashtable */
+			ht_del(cache, mb);
+			
 			goto write_not_found;
 		}
 	}
@@ -1270,27 +1310,20 @@ write_not_found:
 	 * 4. Let's migrate the segments[0] on cache device.
 	 * 5. Hell, the in-memory segments[0] is not correct!!! (screaming)
 	 */
-	bool flush_overwrite = false;
-	struct segment_header *first_migrate = NULL;
-	if(! list_empty(&cache->migrate_wait_queue)){
-		first_migrate = list_first_entry(&cache->migrate_wait_queue, struct segment_header, list);
-		/* FIXME Little bit harsh name */
-		flush_overwrite = id_conflict(cache, 
-				cache->current_seg->global_id + 1, /* '+1' is not abvious. see above */
-				first_migrate->global_id);
-	}
+	size_t next_id = cache->current_seg->global_id + 1; /* See above comment */
+	struct segment_header *next_seg = get_segment_header_by_id(cache, next_id);
 		
-	/* Migrate the head of migrate list if needed */
-	bool migrate_segment = refresh_segment && flush_overwrite;
-	if(migrate_segment){
-		DMDEBUG("migrate_segment id: %lu", first_migrate->global_id);
-		wait_for_completion(&first_migrate->flush_done);
-		migrate_whole_segment(cache, first_migrate);
-	}
+	DMDEBUG("wait for flushing id: %lu", next_id);
+	wait_for_completion(&next_seg->flush_done);
+	
+	DMDEBUG("wait for migration id: %lu", next_id);
+	cache->reserving_segment_id = next_id;
+	wait_for_completion(&next_seg->migrate_done);
+	cache->reserving_segment_id = 0;	
 
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
-		DMDEBUG("flush_segment id: %lu", cache->current_seg->global_id);
+		DMDEBUG("queue flushing id: %lu", cache->current_seg->global_id);
 		queue_flushing(cache);
 	}
 
@@ -1350,11 +1383,11 @@ write_on_buffer:
 
 	bio_endio(bio, 0);
 
-	up(&cache->io_lock);
+	mutex_unlock(&cache->io_lock);
 	return DM_MAPIO_SUBMITTED;
 
 remapped:
-	up(&cache->io_lock);
+	mutex_unlock(&cache->io_lock);
 	return DM_MAPIO_REMAPPED;
 }
 
@@ -1523,9 +1556,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("nr_segments: %lu", cache->nr_segments);
 		DMDEBUG("nr_cache: %u", cache->nr_caches);
 		
-		sema_init(&cache->io_lock, 1);	
+		mutex_init(&cache->io_lock);	
 		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
-		INIT_LIST_HEAD(&cache->migrate_wait_queue);
 
 		mb_array_empty_init(cache);
 		DMDEBUG("init mb_array done");
@@ -1540,6 +1572,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		clear_stat(cache);
 		
 		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);	
+		
+		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);
+		INIT_WORK(&cache->migrate_work, migrate_segment_proc);
+		
+		cache->allow_migrate = true;
+		cache->reserving_segment_id = 0;
 		
 		return 0;
 	}

@@ -739,7 +739,7 @@ static void migrate_proc(struct work_struct *work)
 		
 		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
 		if(! need_migrate){
-			schedule_timeout_interruptible(msecs_to_jiffies(100));
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 		
@@ -887,7 +887,9 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 		
 		struct metablock *found = ht_lookup(cache, &key);
 		if(found){
-			hlist_del(&mb->ht_list);
+			/* FIXME */
+			// hlist_del(&mb->ht_list);
+			ht_del(cache, found);
 		}
 		ht_register(cache, &key, mb);	
 	}
@@ -904,6 +906,7 @@ static void recover_cache(struct lc_cache *cache)
 	read_superblock_device(&sup, cache);
 
 	cache->last_migrated_segment_id = sup.last_migrated_segment_id;
+	DMDEBUG("recover. last_migrated_segment_id: %lu", cache->last_migrated_segment_id);
 
 	size_t i;
 	size_t nr_segments = cache->nr_segments;
@@ -1011,7 +1014,7 @@ setup_init_segment:
 	 */
 	cache->cursor = seg->start_idx;
 	cache->last_flushed_segment_id = seg->global_id - 1;
-	DMDEBUG("recover. seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
+	DMDEBUG("recover. current seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
 }
 
 static sector_t dm_devsize(struct dm_dev *dev)
@@ -1578,7 +1581,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("recover cache done");
 		lc_caches[cache->id] = cache;
 		
-		cache->allow_migrate = true;
+		cache->allow_migrate = false;
 		cache->reserving_segment_id = 0;
 		
 		clear_stat(cache);

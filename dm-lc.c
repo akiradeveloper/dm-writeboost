@@ -233,7 +233,6 @@ struct segment_header {
 	sector_t start_sector; /* const */
 
 	struct completion flush_done;
-	struct list_head list;
 	
 	struct completion migrate_done;
 	struct mutex lock;
@@ -422,11 +421,16 @@ static void init_segment_header_array(struct lc_cache *cache)
 		struct segment_header *seg = arr_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = NR_CACHES_INSEG * segment_idx;
 		seg->start_sector = ((segment_idx % nr_segments) + 1) * (1 << 11);
-		INIT_LIST_HEAD(&seg->list);
 		
 		seg->nr_dirty_caches_remained = 0;
 		
 		mutex_init(&seg->lock);
+		
+		init_completion(&seg->flush_done);
+		complete_all(&seg->flush_done);
+		
+		init_completion(&seg->migrate_done);
+		complete_all(&seg->migrate_done);
 	}
 }
 
@@ -473,6 +477,8 @@ static void flush_proc(struct work_struct *work)
 	unsigned long err_bits = 0;
 
 	struct flush_context *ctx = container_of(work, struct flush_context, work);
+
+	DMDEBUG("flush io id: %lu", ctx->seg->global_id);
 
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -540,8 +546,8 @@ static void queue_flushing(struct lc_cache *cache)
 	memcpy(cache->writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
 	kfree(buf_);
 
-	init_completion(&current_seg->flush_done);
-	init_completion(&current_seg->migrate_done);
+	INIT_COMPLETION(current_seg->migrate_done);
+	INIT_COMPLETION(current_seg->flush_done);
 
 	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
@@ -549,6 +555,8 @@ static void queue_flushing(struct lc_cache *cache)
 	ctx->buf = cache->writebuffer;
 	INIT_WORK(&ctx->work, flush_proc);
 	queue_work(cache->flush_wq, &ctx->work);
+
+	cache->last_flushed_segment_id = current_seg->global_id;
 
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
@@ -712,7 +720,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	complete_all(&seg->migrate_done);
 }
 
-static void migrate_segment_proc(struct work_struct *work)
+static void migrate_proc(struct work_struct *work)
 {
 	struct lc_cache *cache = container_of(work, struct lc_cache, migrate_work);
 
@@ -725,13 +733,13 @@ static void migrate_segment_proc(struct work_struct *work)
 			cache->reserving_segment_id || cache->allow_migrate;	
 		
 		if(! allow_migrate){
-			schedule();
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 		
 		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
 		if(! need_migrate){
-			schedule();
+			schedule_timeout_interruptible(msecs_to_jiffies(100));
 			continue;
 		}
 		
@@ -1001,8 +1009,8 @@ setup_init_segment:
 	 * This means that we will not use the element.
 	 * I believe this is the simplest principle to implement.
 	 */
-	cache->last_flushed_segment_id = seg->global_id - 1;
 	cache->cursor = seg->start_idx;
+	cache->last_flushed_segment_id = seg->global_id - 1;
 	DMDEBUG("recover. seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
 }
 
@@ -1310,19 +1318,20 @@ write_not_found:
 	 * 4. Let's migrate the segments[0] on cache device.
 	 * 5. Hell, the in-memory segments[0] is not correct!!! (screaming)
 	 */
-	size_t next_id = cache->current_seg->global_id + 1; /* See above comment */
-	struct segment_header *next_seg = get_segment_header_by_id(cache, next_id);
-		
-	DMDEBUG("wait for flushing id: %lu", next_id);
-	wait_for_completion(&next_seg->flush_done);
 	
-	DMDEBUG("wait for migration id: %lu", next_id);
-	cache->reserving_segment_id = next_id;
-	wait_for_completion(&next_seg->migrate_done);
-	cache->reserving_segment_id = 0;	
-
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
+		size_t next_id = cache->current_seg->global_id + 1; /* See above comment */
+		struct segment_header *next_seg = get_segment_header_by_id(cache, next_id);
+		
+		DMDEBUG("wait for flushing id: %lu", next_id);
+		wait_for_completion(&next_seg->flush_done);
+	
+		DMDEBUG("wait for migration id: %lu", next_id);
+		cache->reserving_segment_id = next_id;
+		wait_for_completion(&next_seg->migrate_done);
+		cache->reserving_segment_id = 0;	
+
 		DMDEBUG("queue flushing id: %lu", cache->current_seg->global_id);
 		queue_flushing(cache);
 	}
@@ -1569,15 +1578,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("recover cache done");
 		lc_caches[cache->id] = cache;
 		
+		cache->allow_migrate = true;
+		cache->reserving_segment_id = 0;
+		
 		clear_stat(cache);
 		
 		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);	
 		
 		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);
-		INIT_WORK(&cache->migrate_work, migrate_segment_proc);
-		
-		cache->allow_migrate = true;
-		cache->reserving_segment_id = 0;
+		INIT_WORK(&cache->migrate_work, migrate_proc);
+		queue_work(cache->migrate_wq, &cache->migrate_work);
 		
 		return 0;
 	}

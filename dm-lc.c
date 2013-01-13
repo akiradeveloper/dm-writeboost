@@ -97,6 +97,8 @@ static void dump_memory(void *p, size_t n)
 
 static struct dm_io_client *lc_io_client;
 
+static ulong io_err_count = 0;
+module_param(io_err_count, ulong, S_IRUGO);
 struct safe_io {
 	struct work_struct work;
 	int err;
@@ -133,6 +135,10 @@ static int dm_safe_io(
 			.num_regions = num_regions,
 		};
 		
+		/*
+		 * FIXME?
+		 * INIT_WORK_ONSTACK() may be better.
+		 */
 		INIT_WORK(&io.work, safe_io_fn);
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
@@ -143,9 +149,26 @@ static int dm_safe_io(
 		err = dm_io(io_req, num_regions, region, err_bits);
 	}
 
-	BUG_ON(err);
-	BUG_ON(*err_bits);
 	return err;
+}
+
+static void dm_safe_io_retry(
+		struct dm_io_request *io_req,
+		struct dm_io_region *region, unsigned num_regions, bool thread)
+{
+	int err;
+	unsigned long err_bits;
+
+retry_io:
+	err_bits = 0;
+	err = dm_safe_io(io_req, region, num_regions, &err_bits, thread);
+	
+	if(err || err_bits){
+		io_err_count++;
+		DMERR("io err occurs err(%d), err_bits(%lu)", err, err_bits);
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));	
+		goto retry_io;
+	}
 }
 
 #define NR_CACHES_INSEG 254 /* 256 - 2 (header and commit block) */
@@ -478,8 +501,6 @@ struct flush_context {
 
 static void flush_proc(struct work_struct *work)
 {
-	unsigned long err_bits = 0;
-
 	struct flush_context *ctx = container_of(work, struct flush_context, work);
 
 	DMDEBUG("flush proc id: %lu", ctx->seg->global_id);
@@ -496,12 +517,7 @@ static void flush_proc(struct work_struct *work)
 		.sector = ctx->seg->start_sector,
 		.count = ((1 << 11) - (1 << 3)),
 	};
-
-	/*
-	 * TODO
-	 * Can be false (already threaded).
-	 */
-	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req, &region, 1, false);
 
 	struct dm_io_request io_req_commit = {
 		.client = lc_io_client,
@@ -515,8 +531,7 @@ static void flush_proc(struct work_struct *work)
 		.sector = ctx->seg->start_sector + ((1 << 11) - (1 << 3)),
 		.count = 1,
 	};
-	/* TODO */
-	dm_safe_io(&io_req_commit, &region_commit, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req_commit, &region_commit, 1, false);
 
 	complete_all(&ctx->seg->flush_done);
 
@@ -599,14 +614,8 @@ static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
 	}
 }
 
-/*
- * TODO
- * add argument thread :: bool
- * ios are not nessesarily threaded.
- */
-static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
+static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread)
 {
-	unsigned long err_bits = 0;
 	struct backing_device *backing = backing_tbl[mb->device_id];
 
 	/* DMDEBUG("mb->idx: %u", mb->idx); */
@@ -633,7 +642,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 			.sector = calc_mb_start_sector(cache, mb->idx),
 			.count = (1 << 3),
 		};
-		dm_safe_io(&io_req_r, &region_r, 1, &err_bits, true);
+		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 
 		struct dm_io_request io_req_w = {
 			.client = lc_io_client,
@@ -648,13 +657,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 			.count = (1 << 3),
 		};
 
-		/* DEBUG */
-		if(region_w.sector == 0){
-			/* DMINFO("region_r.sector: %lu", region_r.sector); */
-			/* dump_memory(buf, 1 << 12); */
-		};
-
-		dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
+		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
 		
 		kfree(buf);
 
@@ -681,7 +684,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 				.sector = calc_mb_start_sector(cache, mb->idx) + i,
 				.count = 1,
 			};
-			dm_safe_io(&io_req_r, &region_r, 1, &err_bits, true);
+			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 						
 			struct dm_io_request io_req_w = {
 				.client = lc_io_client,
@@ -695,7 +698,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 	 			.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
-			dm_safe_io(&io_req_w, &region_w, 1, &err_bits, true);
+			dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
 		}
 		kfree(buf);
 	}
@@ -712,7 +715,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
 		
 		mutex_lock(&seg->lock);
-		migrate_mb(cache, mb); 
+		migrate_mb(cache, mb, false); 
 		cleanup_segment_of(cache, mb);
 		mb->dirty_bits = 0;
 		mutex_unlock(&seg->lock);
@@ -812,8 +815,7 @@ static void commit_super_block(struct lc_cache *cache)
 		.sector = 0,
 		.count = 1,
 	};
-	unsigned long err_bits = 0;
-	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	kfree(buf);
 }
 
@@ -832,8 +834,7 @@ static void read_superblock_device(struct superblock_device *dest, struct lc_cac
 		.sector = 0,
 		.count = 1,
 	};
-	unsigned long err_bits = 0;
-	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	memcpy(dest, buf, sizeof(*dest));
 	kfree(buf);
 }
@@ -860,8 +861,7 @@ static void read_segment_header_device(
 		.sector = calc_segment_header_start(segment_idx, HEADER),
 		.count = (1 << 3),
 	};
-	unsigned long err_bits = 0;
-	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	memcpy(dest, buf, sizeof(*dest));
 	kfree(buf);
 }
@@ -883,8 +883,7 @@ static void read_commit_block(
 		.sector = calc_segment_header_start(segment_idx, COMMIT),
 		.count = 1,
 	};
-	unsigned long err_bits = 0;
-	dm_safe_io(&io_req, &region, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	memcpy(dest, buf, sizeof(&dest));
 	kfree(buf);
 }
@@ -1108,7 +1107,7 @@ static void format_cache_device(struct dm_dev *dev)
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io(&io_req_sup, &region_sup, 1, &err_bits, true);
+	dm_safe_io_retry(&io_req_sup, &region_sup, 1, true);
 	kfree(buf);
 
 	/*
@@ -1129,13 +1128,17 @@ static void format_cache_device(struct dm_dev *dev)
 			.sector = calc_segment_header_start(i, HEADER),
 			.count = (2 << 3),
 		};
-		dm_safe_io(&io_req_seg, &region_seg, 1, &err_bits, true);
+		dm_safe_io_retry(&io_req_seg, &region_seg, 1, true);
 		kfree(buf);
 	}
 }
 
 static bool is_fully_written(struct metablock *mb)
 {
+	/*
+	 * FIXME?
+	 * is_fully_written() is not stable.
+	 */
 	return mb->dirty_bits == 255; /* 11111111 */
 }
 
@@ -1195,8 +1198,7 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
 			.count = 1,
 		};
 
-		unsigned long err_bits = 0;
-		dm_safe_io(&io_req, &region, 1, &err_bits, true);
+		dm_safe_io_retry(&io_req, &region, 1, true);
 	}
 	kfree(buf);
 }
@@ -1272,7 +1274,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			wait_for_completion(&seg->flush_done);
 			
 			mutex_lock(&seg->lock);
-			migrate_mb(cache, mb);
+			migrate_mb(cache, mb, true);
 			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
 			mutex_unlock(&seg->lock);
@@ -1295,6 +1297,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}else{
 			struct segment_header *seg = segment_of(cache, mb->idx);
 			
+			
 			/*
 			 * First clean up the previous cache.
 			 * Migrate the cache if needed.
@@ -1305,7 +1308,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 				wait_for_completion(&seg->flush_done);
 				
 				mutex_lock(&seg->lock);		
-				migrate_mb(cache, mb);
+				migrate_mb(cache, mb, true);
 			}else{
 				mutex_lock(&seg->lock);
 			}

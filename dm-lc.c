@@ -454,7 +454,7 @@ static void prepare_segment_header_device(
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		mbdev->sector = mb->sector;	
 		mbdev->device_id = mb->device_id;
-		DMDEBUG("prepare header. mb->idx: %u, mb->dirty_bits: %u", mb->idx, mb->dirty_bits);
+		/* DMDEBUG("prepare header. mb->idx: %u, mb->dirty_bits: %u", mb->idx, mb->dirty_bits); */
 		mbdev->dirty_bits = mb->dirty_bits;
 		
 		/* For a segment that was partially flushed. */
@@ -562,13 +562,13 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 	size_t next_id = current_seg->global_id + 1;
 	
-	struct segment_header *new_seg = 
-		get_segment_header_by_id(cache, next_id);
+	struct segment_header *new_seg = get_segment_header_by_id(cache, next_id);
+	new_seg->global_id = next_id;
+
 	BUG_ON(new_seg->nr_dirty_caches_remained);
 
 	discard_caches_inseg(cache, new_seg);	
 
-	new_seg->global_id = next_id;
 	cache->current_seg = new_seg;
 	cache->writebuffer = kzalloc(1 << 20, GFP_NOIO);
 }
@@ -701,7 +701,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = arr_at(cache->mb_array, idx);
-		DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits);
+		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
 		
 		mutex_lock(&seg->lock);
 		migrate_mb(cache, mb); 
@@ -715,9 +715,6 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		BUG();
 	}
 
-	cache->last_migrated_segment_id = seg->global_id;
-
-	complete_all(&seg->migrate_done);
 }
 
 static void migrate_proc(struct work_struct *work)
@@ -733,12 +730,16 @@ static void migrate_proc(struct work_struct *work)
 			cache->reserving_segment_id || cache->allow_migrate;	
 		
 		if(! allow_migrate){
+			DMDEBUG("migrate proc sleep branch-1");
+			DMDEBUG("allow_migrate: %u, reserving_segment_id: %u",
+					cache->allow_migrate, cache->reserving_segment_id);
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 		
 		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
 		if(! need_migrate){
+			DMDEBUG("migrate proc sleep branch-2");
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -746,8 +747,22 @@ static void migrate_proc(struct work_struct *work)
 		struct segment_header *seg = 
 			get_segment_header_by_id(cache, cache->last_migrated_segment_id + 1);
 		
+		DMDEBUG("migrate proc. migrate a segment id: %lu", 
+				cache->last_migrated_segment_id + 1);
 		migrate_whole_segment(cache, seg);	
+
+		cache->last_migrated_segment_id++;
+		complete_all(&seg->migrate_done);
 	}
+}
+
+static void wait_for_migration(struct lc_cache *cache, size_t id)
+{
+	DMDEBUG("wait for migration id: %lu", id);
+	cache->reserving_segment_id = id;
+	struct segment_header *seg = get_segment_header_by_id(cache, id);
+	wait_for_completion(&seg->migrate_done);
+	cache->reserving_segment_id = 0;
 }
 
 struct superblock_device {
@@ -854,11 +869,12 @@ static void read_commit_block(
 
 static void update_by_segment_header_device(struct lc_cache *cache, struct segment_header_device *src)
 {
-	struct segment_header *seg = 
-		get_segment_header_by_id(cache, src->global_id);
+	struct segment_header *seg = get_segment_header_by_id(cache, src->global_id);
 	seg->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
 	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %u, (id=%lu)",
 			src->nr_dirty_caches_remained, src->global_id);
+
+	INIT_COMPLETION(seg->migrate_done);
 
 	/* Update in-memory structures */
 	cache_nr i;
@@ -887,8 +903,6 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 		
 		struct metablock *found = ht_lookup(cache, &key);
 		if(found){
-			/* FIXME */
-			// hlist_del(&mb->ht_list);
 			ht_del(cache, found);
 		}
 		ht_register(cache, &key, mb);	
@@ -1001,7 +1015,18 @@ static void recover_cache(struct lc_cache *cache)
 setup_init_segment:
 	kfree(header);
 
+	DMDEBUG("recover. get new segment id: %lu", init_segment_id);
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
+	seg->global_id = init_segment_id;
+	
+	cache->last_flushed_segment_id = seg->global_id - 1;
+
+	cache->last_migrated_segment_id = 
+		cache->last_flushed_segment_id > cache->nr_caches ?
+		cache->last_flushed_segment_id - cache->nr_caches : 0;
+
+	wait_for_migration(cache, seg->global_id);
+
 	discard_caches_inseg(cache, seg);
 	seg->nr_dirty_caches_remained = 0;	
 	seg->global_id = init_segment_id; 
@@ -1013,7 +1038,6 @@ setup_init_segment:
 	 * I believe this is the simplest principle to implement.
 	 */
 	cache->cursor = seg->start_idx;
-	cache->last_flushed_segment_id = seg->global_id - 1;
 	DMDEBUG("recover. current seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
 }
 
@@ -1331,9 +1355,7 @@ write_not_found:
 		wait_for_completion(&next_seg->flush_done);
 	
 		DMDEBUG("wait for migration id: %lu", next_id);
-		cache->reserving_segment_id = next_id;
-		wait_for_completion(&next_seg->migrate_done);
-		cache->reserving_segment_id = 0;	
+		wait_for_migration(cache, next_id);
 
 		DMDEBUG("queue flushing id: %lu", cache->current_seg->global_id);
 		queue_flushing(cache);
@@ -1577,20 +1599,20 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("init htable done");
 		init_segment_header_array(cache);	
 		DMDEBUG("init segment_array done");
+		
+		cache->allow_migrate = false;
+		cache->reserving_segment_id = 0;
+		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);
+		INIT_WORK(&cache->migrate_work, migrate_proc);
+		queue_work(cache->migrate_wq, &cache->migrate_work);
+
 		recover_cache(cache);
 		DMDEBUG("recover cache done");
 		lc_caches[cache->id] = cache;
 		
-		cache->allow_migrate = false;
-		cache->reserving_segment_id = 0;
-		
-		clear_stat(cache);
-		
 		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);	
 		
-		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);
-		INIT_WORK(&cache->migrate_work, migrate_proc);
-		queue_work(cache->migrate_wq, &cache->migrate_work);
+		clear_stat(cache);
 		
 		return 0;
 	}

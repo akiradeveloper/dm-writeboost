@@ -82,7 +82,7 @@ static void dump_memory_16(void *p)
 {
 	u8 x[16];
 	memcpy(x, p, 16);
-	DMINFO("%x %x %x %x %x %x %x %x  %x %x %x %x %x %x %x %x", 
+	DMDEBUG("%x %x %x %x %x %x %x %x  %x %x %x %x %x %x %x %x", 
 		x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],	
 		x[8], x[9], x[10],x[11],x[12],x[13],x[14],x[15]);
 }
@@ -125,13 +125,6 @@ static int dm_safe_io(
 		struct dm_io_region *region, unsigned num_regions,
 		unsigned long *err_bits, bool thread)
 {
-	/* DEBUG */
-	if(region->sector == 0){
-		/* DMINFO("sector=0, rw(%d)", io_req->bi_rw); */
-		/* void *buf = io_req->mem.ptr.addr; */
-		/* dump_memory(buf, 1 << 12); */
-	}
-
 	int err;
 	if(thread){
 		struct safe_io io = {
@@ -174,7 +167,7 @@ struct backing_device {
 struct backing_device *backing_tbl[LC_NR_SLOTS];
 
 struct lc_device {
-	bool no_more_log; /* TODO */
+	bool readonly; /* TODO maybe shouldn't. */
 
 	struct lc_cache *cache;
 	struct backing_device *backing;
@@ -195,14 +188,13 @@ struct ht_head {
  * commit full 4KB page to block layer.
  */
 struct metablock {
-	cache_nr idx; /* const */
+	cache_nr idx; /* const. 4B. */
 
-	sector_t sector; 
+	sector_t sector;
 	device_id device_id;
 
 	/*
-	 * In this version,
-	 * we recover only dirty caches 
+	 * Now we recover only dirty caches 
 	 * in crash recovery.
 	 *
 	 * TODO recover clean cache.
@@ -210,7 +202,7 @@ struct metablock {
 	 */
 	u8 dirty_bits; /* eight bit flags */
 
-	struct hlist_node ht_list;
+	struct hlist_node ht_list; /* TODO 16 bytes. too heavy */
 };
 
 struct metablock_device {
@@ -241,7 +233,7 @@ struct segment_header {
 #define HEADER 2
 #define COMMIT 1
 
-/* At most 4KB */
+/* At most 4KB in total. */
 struct segment_header_device {
 	size_t global_id;	
 	u8 nr_dirty_caches_remained;
@@ -280,8 +272,10 @@ struct lc_cache {
 	size_t reserving_segment_id;
 	bool allow_migrate;
 
-	struct workqueue_struct *migrate_wq; /* TODO */
-	struct work_struct migrate_work; /* TODO */
+	struct workqueue_struct *migrate_wq;
+	struct work_struct migrate_work;
+
+	bool readonly; /* TODO */
 
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
@@ -410,6 +404,16 @@ static struct metablock *ht_lookup(struct lc_cache *cache, struct lookup_key *ke
 	return found;
 }
 
+void discard_caches_inseg(struct lc_cache *cache, struct segment_header *seg)
+{
+	u8 i;
+	for(i=0; i<NR_CACHES_INSEG; i++){
+		struct metablock *mb =
+			arr_at(cache->mb_array, seg->start_idx + i);
+		ht_del(cache, mb);
+	}
+}
+
 static void init_segment_header_array(struct lc_cache *cache)
 {
 	size_t nr_segments = cache->nr_segments;
@@ -478,7 +482,7 @@ static void flush_proc(struct work_struct *work)
 
 	struct flush_context *ctx = container_of(work, struct flush_context, work);
 
-	DMDEBUG("flush io id: %lu", ctx->seg->global_id);
+	DMDEBUG("flush proc id: %lu", ctx->seg->global_id);
 
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -492,6 +496,11 @@ static void flush_proc(struct work_struct *work)
 		.sector = ctx->seg->start_sector,
 		.count = ((1 << 11) - (1 << 3)),
 	};
+
+	/*
+	 * TODO
+	 * Can be false (already threaded).
+	 */
 	dm_safe_io(&io_req, &region, 1, &err_bits, true);
 
 	struct dm_io_request io_req_commit = {
@@ -506,6 +515,7 @@ static void flush_proc(struct work_struct *work)
 		.sector = ctx->seg->start_sector + ((1 << 11) - (1 << 3)),
 		.count = 1,
 	};
+	/* TODO */
 	dm_safe_io(&io_req_commit, &region_commit, 1, &err_bits, true);
 
 	complete_all(&ctx->seg->flush_done);
@@ -514,21 +524,10 @@ static void flush_proc(struct work_struct *work)
 	kfree(ctx);
 }
 
-void discard_caches_inseg(struct lc_cache *cache, struct segment_header *seg)
-{
-	u8 i;
-	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb =
-			arr_at(cache->mb_array, seg->start_idx + i);
-		ht_del(cache, mb);
-	}
-}
-
 static void queue_flushing(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
-	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u",
-			current_seg->nr_dirty_caches_remained);
+	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u", current_seg->nr_dirty_caches_remained);
 
 	/* segment_header_device is too big to alloc in stack */
 	struct segment_header_device *header = kmalloc(sizeof(*header), GFP_NOIO); 
@@ -596,12 +595,17 @@ static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
 	}
 }
 
+/*
+ * TODO
+ * add argument thread :: bool
+ * ios are not nessesarily threaded.
+ */
 static void migrate_mb(struct lc_cache *cache, struct metablock *mb)
 {
 	unsigned long err_bits = 0;
 	struct backing_device *backing = backing_tbl[mb->device_id];
 
-	DMDEBUG("mb->idx: %u", mb->idx);
+	/* DMDEBUG("mb->idx: %u", mb->idx); */
 	/* DMDEBUG("backing id: %u", mb->device_id); */
 
 	if(! mb->dirty_bits){
@@ -714,12 +718,13 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 				seg->nr_dirty_caches_remained);
 		BUG();
 	}
-
 }
 
 static void migrate_proc(struct work_struct *work)
 {
 	struct lc_cache *cache = container_of(work, struct lc_cache, migrate_work);
+	
+	size_t nr_consective_empty_segments = 0;
 
 	while(true){
 		/*
@@ -730,16 +735,17 @@ static void migrate_proc(struct work_struct *work)
 			cache->reserving_segment_id || cache->allow_migrate;	
 		
 		if(! allow_migrate){
-			DMDEBUG("migrate proc sleep branch-1");
-			DMDEBUG("allow_migrate: %u, reserving_segment_id: %u",
-					cache->allow_migrate, cache->reserving_segment_id);
+			/* DMDEBUG("migrate proc sleep branch-1"); */
+			/* DMDEBUG("allow_migrate: %u, reserving_segment_id: %lu", cache->allow_migrate, cache->reserving_segment_id); */
+			nr_consective_empty_segments = 0;
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 		
 		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
 		if(! need_migrate){
-			DMDEBUG("migrate proc sleep branch-2");
+			/* DMDEBUG("migrate proc sleep branch-2"); */
+			nr_consective_empty_segments = 0;
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -747,8 +753,15 @@ static void migrate_proc(struct work_struct *work)
 		struct segment_header *seg = 
 			get_segment_header_by_id(cache, cache->last_migrated_segment_id + 1);
 		
-		DMDEBUG("migrate proc. migrate a segment id: %lu", 
-				cache->last_migrated_segment_id + 1);
+		/* DEBUG */
+		if(seg->nr_dirty_caches_remained){
+			nr_consective_empty_segments = 0;
+		}else{
+			nr_consective_empty_segments++;
+			BUG_ON(nr_consective_empty_segments > cache->nr_segments);
+		}
+		
+		/* DMDEBUG("migrate proc. migrate a segment id: %lu", cache->last_migrated_segment_id + 1); */
 		migrate_whole_segment(cache, seg);	
 
 		cache->last_migrated_segment_id++;
@@ -871,8 +884,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 {
 	struct segment_header *seg = get_segment_header_by_id(cache, src->global_id);
 	seg->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
-	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %u, (id=%lu)",
-			src->nr_dirty_caches_remained, src->global_id);
+	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %u, (id=%lu)", src->nr_dirty_caches_remained, src->global_id);
 
 	INIT_COMPLETION(seg->migrate_done);
 
@@ -924,11 +936,6 @@ static void recover_cache(struct lc_cache *cache)
 
 	size_t i;
 	size_t nr_segments = cache->nr_segments;
-
-	/*
-	 * FIXME
-	 * Refactoring this chaotic code.
-	 */
 
 	size_t oldest_idx = 0;
 	size_t max_id = SIZE_MAX; /* This global_id is forbidden. */
@@ -1006,6 +1013,9 @@ static void recover_cache(struct lc_cache *cache)
 			break;
 		}
 		
+		/* Filtered out invalid segments */
+		/* Only valid segments take effects. */
+		
 		current_id = header->global_id;
 		update_by_segment_header_device(cache, header);
 		
@@ -1053,7 +1063,7 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	/*
 	 * Disk format:
 	 * superblock(512B/1024KB) [segment(1024KB)]+
-	 * segment = metablock(4KB)*NR_CACHES_INSEG segment_header(4KB) commit_block(512B)
+	 * segment = metablock(4KB)*NR_CACHES_INSEG segment_header(4KB) commit_block(512B/4KB)
 	 *
 	 * (Optimization)
 	 * We discard first full 1024KB for superblock
@@ -1127,9 +1137,8 @@ static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 	if(mb_idx < start){
 		return false;
 	}
-	/*
-	 * FIXME right hand overflow
-	 */
+
+	/* FIXME right hand overflow */
 	if(mb_idx >= (start + NR_CACHES_INSEG)){
 		return false;
 	}
@@ -1186,18 +1195,12 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
-
-	DMDEBUG("bio->bi_sector: %lu", bio->bi_sector);
+	/* DMDEBUG("bio->bi_sector: %lu", bio->bi_sector); */
 
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
 	bool bio_fullsize = (bio_count == (1 << 3));
 	int rw = bio_data_dir(bio);
-
-	/* DEBUG */
-	if(! rw){
-		/* return -EIO; */
-	}
 
 	struct lc_cache *cache = lc->cache;
 
@@ -1209,6 +1212,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	struct dm_dev *orig = lc->backing->device;
 
 	/*
+	 * TODO
 	 * Any good ideas for better locking?
 	 * This version persues simplicity.
 	 */
@@ -1235,10 +1239,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	 */
 	if(! rw){
 		DMDEBUG("read");
-		/*
-		 * TODO
-		 * current version doesn't support Read operations.
-		 */
 		if(! found){
 			/* To the backing storage */
 			bio_remap(bio, orig, bio->bi_sector);	
@@ -1272,6 +1272,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}
 		goto remapped;
 	}
+
+	/* TODO readonly */
 
 	/* [Write] */
 	/* DMDEBUG("write"); */
@@ -1321,14 +1323,14 @@ write_not_found:
 	/*
 	 * Why does the code operate '+1'?
 	 *
-	 * We must consinder overwriting
-	 * not only the segment on cache
-	 * but also the in-memory segment. 
-	 * Overwriting either will cause serious crash.
+	 * We must consider overwriting
+	 * not only the segment data on cache
+	 * but also the in-memory segment metadata. 
+	 * Overwriting either will crash the cache.
 	 *
-	 * There are several choice to solve this problem.
-	 * for brevity,
-	 * I chose design that 
+	 * There are several choices to solve this problem.
+	 * For brevity,
+	 * I have chose design that 
 	 * cleaning up the in-memory segment
 	 * before next global id touching it.
 	 *
@@ -1338,12 +1340,12 @@ write_not_found:
 	 * is 3MB in size, including superblock.
 	 *
 	 * If we had only one segment,
-	 * Following steps will lead to inconsistency.
+	 * Following steps will incur the problem.
 	 * 1. Flushing segments[0] on cache device.
 	 * 2. Select in-memory segments[0] for the next segment.
 	 * 3. Update the segments[0] along with buffer writes.
-	 * 4. Let's migrate the segments[0] on cache device.
-	 * 5. Hell, the in-memory segments[0] is not correct!!! (screaming)
+	 * 4. Let's migrate the segments[0] on cache device!
+	 * 5. The in-memory segments[0] is not correct lol
 	 */
 	
 	/* Flushing the current buffer if needed */
@@ -1506,6 +1508,7 @@ static int lc_status(
 	struct lc_device *lc = ti->private;
 	switch(type){
 	case STATUSTYPE_INFO:
+		/* TODO */
 		result[0] = '\0';	
 		break;
 
@@ -1633,6 +1636,18 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;	
 	}
 
+	if(! strcasecmp(cmd, "flush_current_buffer")){
+		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		if(! cache){
+			return -EINVAL;
+		}
+		
+		mutex_lock(&cache->io_lock);
+		/* TODO */
+		mutex_unlock(&cache->io_lock);
+		return 0;
+	}
+
 	/*
 	 * <id> <path>
 	 * @id backing device
@@ -1679,17 +1694,26 @@ static int lc_mgr_status(
 {
 	unsigned int sz = 0;
 
-	struct lc_cache *cache = lc_caches[cache_id_ptr];
-
-	if(! cache){
-		return -EINVAL;
-	}
-
 	switch(type){
 	case STATUSTYPE_INFO:
 		DMEMIT("\n");
 		DMEMIT("current cache_id_ptr: %u\n", cache_id_ptr); 
+		
+		if(cache_id_ptr == 0){
+			/* TODO */
+			break;
+		}
+		
+		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		if(! cache){
+			return -EINVAL;
+		}
+
+		/* TODO */
+		/* DMEMIT("allow migrate: %d\n", ); */
 		DMEMIT("last_migrated_segment_id: %lu\n", cache->last_migrated_segment_id);
+		/* TODO */
+		/* DMEMIT("all migrated: %d\n", ); */
 		DMEMIT("current segment id: %lu\n", cache->current_seg->global_id);
 		DMEMIT("cursor: %u\n", cache->cursor);
 		DMEMIT("write? hit? on_buffer? fullsize?\n");
@@ -1729,7 +1753,7 @@ int __init lc_module_init(void)
 {
 	int r;
 	
-	safe_io_wq = alloc_workqueue("deferiowq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+	safe_io_wq = alloc_workqueue("safeiowq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	lc_io_client = dm_io_client_create();
 	
 	r = dm_register_target(&lc_target);

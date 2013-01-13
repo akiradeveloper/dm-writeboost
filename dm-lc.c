@@ -555,6 +555,10 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_WORK(&ctx->work, flush_proc);
 	queue_work(cache->flush_wq, &ctx->work);
 
+	/*
+	 * (Locking)
+	 * Only this line alter last_flushed_segment_id in runtime.
+	 */
 	cache->last_flushed_segment_id = current_seg->global_id;
 
 	/* Set the cursor to the last of the flushed segment. */
@@ -764,7 +768,12 @@ static void migrate_proc(struct work_struct *work)
 		/* DMDEBUG("migrate proc. migrate a segment id: %lu", cache->last_migrated_segment_id + 1); */
 		migrate_whole_segment(cache, seg);	
 
+		/* 
+		 * (Locking)
+		 * Only this line alter last_migrate_segment_id in runtime.
+		 */
 		cache->last_migrated_segment_id++;
+		
 		complete_all(&seg->migrate_done);
 	}
 }
@@ -1605,7 +1614,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		
 		cache->allow_migrate = false;
 		cache->reserving_segment_id = 0;
-		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);
+		
+		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
 		INIT_WORK(&cache->migrate_work, migrate_proc);
 		queue_work(cache->migrate_wq, &cache->migrate_work);
 
@@ -1613,7 +1623,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("recover cache done");
 		lc_caches[cache->id] = cache;
 		
-		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 1);	
+		/*
+		 * (Locking)
+		 * flush_wq may not nessesarily be singlethreaded.  
+		 * But, flushing a segment is sequential of 1MB
+		 * therefore it makes full use of the disk bandwidth.
+		 * So, parallelizing flushing segment is close to useless
+		 * but only complicates locking.
+		 * My decision is to have flush_wq stay singlethreaded.
+		 */
+		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM, 1);	
 		
 		clear_stat(cache);
 		

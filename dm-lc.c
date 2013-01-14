@@ -1052,6 +1052,13 @@ setup_init_segment:
 
 	wait_for_migration(cache, seg->global_id);
 
+	/*
+	 * TODO (Code Dedupe)
+	 * This code is very similar to that
+	 * at the last of queue_flushing.
+	 * Abstraction is "change to new segment cleaned".
+	 * How can we deduplicate these codes?
+	 */
 	discard_caches_inseg(cache, seg);
 	seg->nr_dirty_caches_remained = 0;	
 	seg->global_id = init_segment_id; 
@@ -1210,6 +1217,49 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
 	kfree(buf);
 }
 
+static void flush_current_buffer(struct lc_cache *cache)
+{
+	/*
+	 * Why does the code operate '+1'?
+	 *
+	 * We must consider overwriting
+	 * not only the segment data on cache
+	 * but also the in-memory segment metadata. 
+	 * Overwriting either will crash the cache.
+	 *
+	 * There are several choices to solve this problem.
+	 * For brevity,
+	 * I have chose design that 
+	 * cleaning up the in-memory segment
+	 * before next global id touching it.
+	 *
+	 * For these reason,
+	 * a client must prepare cache device
+	 * with at least two segments that
+	 * is 3MB in size, including superblock.
+	 *
+	 * If we had only one segment,
+	 * Following steps will incur the problem.
+	 * 1. Flushing segments[0] on cache device.
+	 * 2. Select in-memory segments[0] for the next segment.
+	 * 3. Update the segments[0] along with buffer writes.
+	 * 4. Let's migrate the segments[0] on cache device!
+	 * 5. The in-memory segments[0] is not correct lol
+	 */
+
+	size_t next_id = cache->current_seg->global_id + 1; /* See above comment */
+	struct segment_header *next_seg = get_segment_header_by_id(cache, next_id);
+		
+	DMDEBUG("wait for flushing id: %lu", next_id);
+	wait_for_completion(&next_seg->flush_done);
+	
+	DMDEBUG("wait for migration id: %lu", next_id);
+	wait_for_migration(cache, next_id);
+
+	DMDEBUG("queue flushing id: %lu", cache->current_seg->global_id);
+	queue_flushing(cache);
+}
+
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
@@ -1304,7 +1354,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}else{
 			struct segment_header *seg = segment_of(cache, mb->idx);
 			
-			
 			/*
 			 * First clean up the previous cache.
 			 * Migrate the cache if needed.
@@ -1338,48 +1387,10 @@ write_not_found:
 	;
 	/* Write not found */
 	bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1)); 
-
-	/*
-	 * Why does the code operate '+1'?
-	 *
-	 * We must consider overwriting
-	 * not only the segment data on cache
-	 * but also the in-memory segment metadata. 
-	 * Overwriting either will crash the cache.
-	 *
-	 * There are several choices to solve this problem.
-	 * For brevity,
-	 * I have chose design that 
-	 * cleaning up the in-memory segment
-	 * before next global id touching it.
-	 *
-	 * For these reason,
-	 * a client must prepare cache device
-	 * with at least two segments that
-	 * is 3MB in size, including superblock.
-	 *
-	 * If we had only one segment,
-	 * Following steps will incur the problem.
-	 * 1. Flushing segments[0] on cache device.
-	 * 2. Select in-memory segments[0] for the next segment.
-	 * 3. Update the segments[0] along with buffer writes.
-	 * 4. Let's migrate the segments[0] on cache device!
-	 * 5. The in-memory segments[0] is not correct lol
-	 */
 	
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
-		size_t next_id = cache->current_seg->global_id + 1; /* See above comment */
-		struct segment_header *next_seg = get_segment_header_by_id(cache, next_id);
-		
-		DMDEBUG("wait for flushing id: %lu", next_id);
-		wait_for_completion(&next_seg->flush_done);
-	
-		DMDEBUG("wait for migration id: %lu", next_id);
-		wait_for_migration(cache, next_id);
-
-		DMDEBUG("queue flushing id: %lu", cache->current_seg->global_id);
-		queue_flushing(cache);
+		flush_current_buffer(cache);
 	}
 
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
@@ -1672,8 +1683,13 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		}
 		
 		mutex_lock(&cache->io_lock);
-		/* TODO */
+		struct segment_header *old_seg = cache->current_seg;
+		
+		flush_current_buffer(cache);
+		cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 		mutex_unlock(&cache->io_lock);
+		
+		wait_for_completion(&old_seg->flush_done);
 		return 0;
 	}
 
@@ -1754,9 +1770,8 @@ static int lc_mgr_status(
 
 		/* TODO */
 		/* DMEMIT("allow migrate: %d\n", ); */
+		DMEMIT("last_flushed_segment_id: %lu\n", cache->last_flushed_segment_id);
 		DMEMIT("last_migrated_segment_id: %lu\n", cache->last_migrated_segment_id);
-		/* TODO */
-		/* DMEMIT("all migrated: %d\n", ); */
 		DMEMIT("current segment id: %lu\n", cache->current_seg->global_id);
 		DMEMIT("cursor: %u\n", cache->cursor);
 		DMEMIT("write? hit? on_buffer? fullsize?\n");

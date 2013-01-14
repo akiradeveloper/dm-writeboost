@@ -216,10 +216,12 @@ struct ht_head {
  * commit full 4KB page to block layer.
  */
 struct metablock {
+	sector_t sector;
+
 	cache_nr idx; /* const. 4B. */
 
-	sector_t sector;
-	device_id device_id;
+	/* TODO struct cache_nr ht_list; */
+	struct hlist_node ht_list; /* TODO 16 bytes. too heavy */
 
 	/*
 	 * Now we recover only dirty caches 
@@ -230,8 +232,9 @@ struct metablock {
 	 */
 	u8 dirty_bits; /* eight bit flags */
 
-	struct hlist_node ht_list; /* TODO 16 bytes. too heavy */
-};
+	device_id device_id;
+
+} __attribute__((packed));
 
 struct metablock_device {
 	sector_t sector;
@@ -1714,6 +1717,15 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	return -EINVAL;
 }
 
+static size_t calc_static_memory_consumption(struct lc_cache *cache)
+{
+	size_t mb = sizeof(struct metablock) * cache->nr_caches;
+	size_t seg = sizeof(struct segment_header) * cache->nr_segments;
+	size_t ht = sizeof(struct ht_head) * cache->htsize;
+
+	return mb + seg + ht;
+};
+
 static int lc_mgr_status(
 		struct dm_target *ti, status_type_t type, unsigned flags,
 		char *result, unsigned int maxlen)
@@ -1726,7 +1738,10 @@ static int lc_mgr_status(
 		DMEMIT("current cache_id_ptr: %u\n", cache_id_ptr); 
 		
 		if(cache_id_ptr == 0){
-			/* TODO */
+			DMEMIT("sizeof(struct metablock): %lu\n", sizeof(struct metablock));
+			DMEMIT("sizeof(struct metablock_device): %lu\n", sizeof(struct metablock_device));
+			DMEMIT("sizeof(struct segment_header): %lu\n", sizeof(struct segment_header));
+			DMEMIT("sizeof(struct segment_header_device): %lu (<= 4096)", sizeof(struct segment_header_device));
 			break;
 		}
 		
@@ -1734,6 +1749,8 @@ static int lc_mgr_status(
 		if(! cache){
 			return -EINVAL;
 		}
+		
+		DMEMIT("static RAM(approx.): %lu (byte)\n", calc_static_memory_consumption(cache));
 
 		/* TODO */
 		/* DMEMIT("allow migrate: %d\n", ); */

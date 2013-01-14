@@ -409,6 +409,7 @@ static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct m
 	cache_nr k = ht_hash(cache, key);
 	struct ht_head *hd = arr_at(cache->htable, k);
 
+	/* FIXME? May not be nessesary */
 	ht_del(cache, mb);
 
 	hlist_del(&mb->ht_list);
@@ -738,8 +739,6 @@ static void migrate_proc(struct work_struct *work)
 {
 	struct lc_cache *cache = container_of(work, struct lc_cache, migrate_work);
 	
-	size_t nr_consective_empty_segments = 0;
-
 	while(true){
 		/*
 		 * reserving_id > 0 means 
@@ -751,7 +750,6 @@ static void migrate_proc(struct work_struct *work)
 		if(! allow_migrate){
 			/* DMDEBUG("migrate proc sleep branch-1"); */
 			/* DMDEBUG("allow_migrate: %u, reserving_segment_id: %lu", cache->allow_migrate, cache->reserving_segment_id); */
-			nr_consective_empty_segments = 0;
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -759,21 +757,12 @@ static void migrate_proc(struct work_struct *work)
 		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
 		if(! need_migrate){
 			/* DMDEBUG("migrate proc sleep branch-2"); */
-			nr_consective_empty_segments = 0;
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 		
 		struct segment_header *seg = 
 			get_segment_header_by_id(cache, cache->last_migrated_segment_id + 1);
-		
-		/* DEBUG */
-		if(seg->nr_dirty_caches_remained){
-			nr_consective_empty_segments = 0;
-		}else{
-			nr_consective_empty_segments++;
-			BUG_ON(nr_consective_empty_segments > cache->nr_segments);
-		}
 		
 		/* DMDEBUG("migrate proc. migrate a segment id: %lu", cache->last_migrated_segment_id + 1); */
 		migrate_whole_segment(cache, seg);	
@@ -1046,9 +1035,10 @@ setup_init_segment:
 	
 	cache->last_flushed_segment_id = seg->global_id - 1;
 
+	/* FIXME Bug !!! nr->caches -> nr_segments */
 	cache->last_migrated_segment_id = 
-		cache->last_flushed_segment_id > cache->nr_caches ?
-		cache->last_flushed_segment_id - cache->nr_caches : 0;
+		cache->last_flushed_segment_id > cache->nr_segments ?
+		cache->last_flushed_segment_id - cache->nr_segments : 0;
 
 	wait_for_migration(cache, seg->global_id);
 
@@ -1768,10 +1758,10 @@ static int lc_mgr_status(
 		
 		DMEMIT("static RAM(approx.): %lu (byte)\n", calc_static_memory_consumption(cache));
 
-		/* TODO */
-		/* DMEMIT("allow migrate: %d\n", ); */
-		DMEMIT("last_flushed_segment_id: %lu\n", cache->last_flushed_segment_id);
+		DMEMIT("allow_migrate: %d\n", cache->allow_migrate);
+		DMEMIT("nr_segments: %lu\n", cache->nr_segments);
 		DMEMIT("last_migrated_segment_id: %lu\n", cache->last_migrated_segment_id);
+		DMEMIT("last_flushed_segment_id: %lu\n", cache->last_flushed_segment_id);
 		DMEMIT("current segment id: %lu\n", cache->current_seg->global_id);
 		DMEMIT("cursor: %u\n", cache->cursor);
 		DMEMIT("write? hit? on_buffer? fullsize?\n");

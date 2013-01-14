@@ -135,11 +135,7 @@ static int dm_safe_io(
 			.num_regions = num_regions,
 		};
 		
-		/*
-		 * FIXME?
-		 * INIT_WORK_ONSTACK() may be better.
-		 */
-		INIT_WORK(&io.work, safe_io_fn);
+		INIT_WORK_ONSTACK(&io.work, safe_io_fn);
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 		
@@ -665,7 +661,6 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
-
 		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
 		
 		kfree(buf);

@@ -156,6 +156,7 @@ static void dm_safe_io_retry(
 		struct dm_io_request *io_req,
 		struct dm_io_region *region, unsigned num_regions, bool thread)
 {
+	bool failed = false;
 	int err;
 	unsigned long err_bits;
 
@@ -163,11 +164,19 @@ retry_io:
 	err_bits = 0;
 	err = dm_safe_io(io_req, region, num_regions, &err_bits, thread);
 	
+	dev_t dev = region->bdev->bd_dev;
 	if(err || err_bits){
 		io_err_count++;
+		failed = true;
 		DMERR("io err occurs err(%d), err_bits(%lu)", err, err_bits);
+		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));	
 		goto retry_io;
+	}
+
+	if(failed){
+		DMINFO("io has just turned fail to OK.");
+		DMINFO("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
 }
 

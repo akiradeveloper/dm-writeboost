@@ -13,9 +13,8 @@
 #include <linux/atomic.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
-
-#include <device-mapper.h>
-#include <dm-io.h>
+#include <linux/device-mapper.h>
+#include <linux/dm-io.h>
 
 /*
  * Reinventing the wheel.
@@ -1090,8 +1089,6 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 
 static void format_cache_device(struct dm_dev *dev)
 {
-	unsigned long err_bits = 0;
-
 	size_t nr_segments = calc_nr_segments(dev);
 	void *buf;
 
@@ -1797,7 +1794,7 @@ static struct target_type lc_mgr_target = {
 	.status = lc_mgr_status,
 };
 
-int __init lc_module_init(void)
+static int __init lc_module_init(void)
 {
 	int r;
 	
@@ -1829,7 +1826,7 @@ int __init lc_module_init(void)
 	return 0;
 }
 
-void lc_module_exit(void)
+static void __exit lc_module_exit(void)
 {
 	destroy_workqueue(safe_io_wq);
 	dm_io_client_destroy(lc_io_client);

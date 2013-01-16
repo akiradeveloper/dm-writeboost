@@ -15,6 +15,7 @@
 #include <linux/sched.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
+#include <linux/rwsem.h>
 
 /*
  * Reinventing the wheel.
@@ -1247,6 +1248,22 @@ static void flush_current_buffer(struct lc_cache *cache)
 	queue_flushing(cache);
 }
 
+static struct metablock *ht_lookup_oneshot(struct lc_cache *cache, struct lookup_key *key, bool *found, bool *on_buffer)
+{
+	struct metablock *mb = ht_lookup(cache, &key);
+
+	*found = (mb != NULL);
+	DMDEBUG("found: %d", found);
+
+	*on_buffer = false;
+	if(*found){
+		*on_buffer = is_on_buffer(cache, mb->idx);
+	}
+	DMDEBUG("on_buffer: %d", on_buffer);
+
+	return mb;
+}
+
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
@@ -1266,26 +1283,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	
 	struct dm_dev *orig = lc->backing->device;
 
-	/*
-	 * TODO
-	 * Any good ideas for better locking?
-	 * This version persues simplicity.
-	 */
-
-	mutex_lock(&cache->io_lock);
-
-	struct metablock *mb = ht_lookup(cache, &key);
-
-	bool found = (mb != NULL);
-	DMDEBUG("found: %d", found);
-
-	bool on_buffer = false;
-	if(found){
-		on_buffer = is_on_buffer(cache, mb->idx);
-	}
-	DMDEBUG("on_buffer: %d", on_buffer);
-
-	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
+	struct metablock *mb;
+	bool found, on_buffer;
 
 	/* 
 	 * [Read]
@@ -1294,10 +1293,17 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	 */
 	if(! rw){
 		DMDEBUG("read");
+		
+		down_read(&cache->io_lock);
+		mb = ht_lookup_oneshot(cache, &key, &found, &on_buffer);
+		inc_stat(cache, rw, found, on_buffer, bio_fullsize);
+		
 		if(! found){
+			up_read(&cache->io_lock);
+			
 			/* To the backing storage */
 			bio_remap(bio, orig, bio->bi_sector);	
-			goto remapped;
+			return DM_MAPIO_REMAPPED;
 		}
 		
 		/* Read found */
@@ -1306,12 +1312,15 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			migrate_buffered_mb(cache, mb);
 			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
+			
+			up_read(&cache->io_lock);
 			bio_remap(bio, orig, bio->bi_sector);
-			goto remapped;
+			return DM_MAPIO_REMAPPED;
 		}
 
 		/* Found not on buffer */
-		if(likely(is_fully_written(mb))){ 
+		if(likely(is_fully_written(mb))){ /* FIXME? no atomic? */
+			up_read(&cache->io_lock);	
 			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
 		}else{
 			struct segment_header *seg = segment_of(cache, mb->idx);
@@ -1323,15 +1332,21 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			mb->dirty_bits = 0;
 			mutex_unlock(&seg->lock);
 			
+			up_read(&cache->io_lock);
 			bio_remap(bio, orig, bio->bi_sector);
 		}
-		goto remapped;
+		return DM_MAPIO_REMAPPED;
 	}
 
 	/* TODO readonly */
 
 	/* [Write] */
-	/* DMDEBUG("write"); */
+
+	DMDEBUG("write");
+
+	down_write(&cache->io_lock);
+	mb = ht_lookup_oneshot(cache, &key, &found, &on_buffer);
+	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
 
 	cache_nr update_mb_idx;
 	if(found){
@@ -1361,15 +1376,13 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			 */
 			cleanup_segment_of(cache, mb);
 			mb->dirty_bits = 0;
-			mutex_unlock(&seg->lock);
-			
-			/* Delete the old mb from hashtable */
-			ht_del(cache, mb);
-			
+			mutex_unlock(&seg->lock);	
+
+	 		ht_del(cache, mb); /* Delete the old mb from hashtable */
 			goto write_not_found;
 		}
 	}
-		
+
 write_not_found:
 	;
 	/* Write not found */
@@ -1430,18 +1443,15 @@ write_on_buffer:
 
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
+
 	memcpy(cache->writebuffer + start, data, bio->bi_size);
+
+	up_write(&cache->io_lock);
 
 	/* dump_memory(cache->writebuffer + (1 << 12) #<{(| skip 4KB |)}>#, 16); #<{(| DEBUG |)}># */
 
 	bio_endio(bio, 0);
-
-	mutex_unlock(&cache->io_lock);
 	return DM_MAPIO_SUBMITTED;
-
-remapped:
-	mutex_unlock(&cache->io_lock);
-	return DM_MAPIO_REMAPPED;
 }
 
 static int lc_end_io(struct dm_target *ti, struct bio *bio, int error, union map_info *map_context)
@@ -1610,7 +1620,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("nr_segments: %lu", cache->nr_segments);
 		DMDEBUG("nr_cache: %u", cache->nr_caches);
 		
-		mutex_init(&cache->io_lock);	
+		init_rwsem(&cache->io_lock);	
 		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
 
 		mb_array_empty_init(cache);
@@ -1669,12 +1679,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			return -EINVAL;
 		}
 		
-		mutex_lock(&cache->io_lock);
+		down_write(&cache->io_lock);
 		struct segment_header *old_seg = cache->current_seg;
 		
 		flush_current_buffer(cache);
 		cache->cursor = (cache->cursor + 1) % cache->nr_caches;
-		mutex_unlock(&cache->io_lock);
+		up_write(&cache->io_lock);
 		
 		wait_for_completion(&old_seg->flush_done);
 		return 0;

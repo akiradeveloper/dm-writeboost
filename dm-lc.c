@@ -259,6 +259,8 @@ struct segment_header {
 	
 	struct completion migrate_done;
 	struct mutex lock;
+
+	atomic_t nr_inflight_writes;
 };
 
 #define HEADER 2
@@ -284,7 +286,7 @@ struct lookup_key {
 struct lc_cache {
 	cache_id id;
 	struct dm_dev *device;
-	struct mutex io_lock;
+	struct rw_semaphore io_lock;
 	cache_nr nr_caches; /* const */
 	struct arr *mb_array;
 	size_t nr_segments; /* const */
@@ -514,6 +516,7 @@ static void flush_proc(struct work_struct *work)
 
 	DMDEBUG("flush proc id: %lu", ctx->seg->global_id);
 
+
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
 		.bi_rw = WRITE,
@@ -572,6 +575,11 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
 
+	/* Close to never happens. */
+	while(atomic_read(&current_seg->nr_inflight_writes)){
+		schedule_timeout_interruptible(msecs_to_jiffies(1));	
+	}
+
 	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
 	ctx->seg = current_seg;
@@ -591,6 +599,7 @@ static void queue_flushing(struct lc_cache *cache)
 	
 	struct segment_header *new_seg = get_segment_header_by_id(cache, next_id);
 	new_seg->global_id = next_id;
+	atomic_set(&new_seg->nr_inflight_writes, 0);
 
 	BUG_ON(new_seg->nr_dirty_caches_remained);
 
@@ -1032,6 +1041,7 @@ setup_init_segment:
 	DMDEBUG("recover. get new segment id: %lu", init_segment_id);
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
 	seg->global_id = init_segment_id;
+	atomic_set(&seg->nr_inflight_writes, 0);
 	
 	cache->last_flushed_segment_id = seg->global_id - 1;
 
@@ -1250,7 +1260,7 @@ static void flush_current_buffer(struct lc_cache *cache)
 
 static struct metablock *ht_lookup_oneshot(struct lc_cache *cache, struct lookup_key *key, bool *found, bool *on_buffer)
 {
-	struct metablock *mb = ht_lookup(cache, &key);
+	struct metablock *mb = ht_lookup(cache, key);
 
 	*found = (mb != NULL);
 	DMDEBUG("found: %d", found);
@@ -1441,12 +1451,22 @@ write_on_buffer:
 	BUG_ON(! mb->dirty_bits);
 	DMDEBUG("After write on buffer. mb->dirty_bits: %u", mb->dirty_bits);
 
+	atomic_inc(&cache->current_seg->nr_inflight_writes);
+	up_write(&cache->io_lock);
+
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
 
+	/*
+	 * (Optimization)
+	 * To achieve 1GB/s (250K 4KB) random write,
+	 * 1/250K = 4us to run through the write path is permitted.
+	 * Writing 4KB is not acceptable latency.
+	 * We will get this operation out of write lock
+	 * by inc/dec-ing write count.
+	 */
 	memcpy(cache->writebuffer + start, data, bio->bi_size);
-
-	up_write(&cache->io_lock);
+	atomic_dec(&cache->current_seg->nr_inflight_writes);
 
 	/* dump_memory(cache->writebuffer + (1 << 12) #<{(| skip 4KB |)}>#, 16); #<{(| DEBUG |)}># */
 

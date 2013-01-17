@@ -1,0 +1,17 @@
+#!/bin/sh
+. ./config
+
+modprobe dm-mod
+insmod ${LC_ROOT}/dm-lc.ko
+
+dmsetup create lc-mgr --table "0 1 lc-mgr"
+
+size=`blockdev --getsize ${BACKING}`
+dmsetup message lc-mgr 0 switch_to 0
+dmsetup message lc-mgr 0 add_device 1 ${BACKING}
+dmsetup message lc-mgr 0 format_cache_device ${CACHE}
+
+dmsetup message lc-mgr 0 switch_to 1
+dmsetup message lc-mgr 0 resume_cache ${CACHE}
+
+dmsetup create perflv --table "0 ${size} lc 1 1"

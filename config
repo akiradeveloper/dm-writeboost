@@ -1,0 +1,9 @@
+#! /bin/sh
+
+export LC_ROOT=`pwd`
+
+BACKING=/dev/vg2/backing
+export BACKING
+
+CACHE=/dev/vg2/cache3m
+export CACHE

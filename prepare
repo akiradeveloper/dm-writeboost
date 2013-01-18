@@ -1,4 +1,5 @@
 #!/bin/sh
+
 . ./config
 
 modprobe dm-mod

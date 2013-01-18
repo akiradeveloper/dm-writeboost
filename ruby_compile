@@ -1,0 +1,17 @@
+#!/bin/sh
+
+mkfs.xfs -f /dev/mapper/perflv 
+mount /dev/mapper/perflv /mnt/perflv
+rm -rf /mnt/perflv/*
+cd /mnt/perflv
+RUBY=ruby-1.9.3-p362
+cp ${LC_ROOT}/${RUBY}.tar.gz /mnt/perflv
+tar xvfz ${RUBY}.tar.gz
+cd ${RUBY}
+
+dmsetup message lc-mgr 0 switch_to 1
+dmsetup message lc-mgr 0 clear_stat
+./configure
+
+make
+make test

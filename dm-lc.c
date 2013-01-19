@@ -12,10 +12,10 @@
 #include <linux/list.h>
 #include <linux/atomic.h>
 #include <linux/mutex.h>
+#include <linux/rwsem.h>
 #include <linux/sched.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
-#include <linux/rwsem.h>
 
 void *kmalloc_retry(size_t size, gfp_t flags)
 {
@@ -279,7 +279,8 @@ struct segment_header {
 	struct completion migrate_done;
 	struct mutex lock;
 
-	atomic_t nr_inflight_writes;
+	atomic_t nr_inflight_writes; /* TODO purge */
+	atomic_t nr_inflight_ios;
 };
 
 #define HEADER 2
@@ -635,35 +636,33 @@ static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx
 	return arr_at(cache->segment_header_array, seg_idx);
 }
 
-static sector_t calc_mb_start_sector(struct lc_cache *cache, cache_nr mb_idx)
+static sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx)
 {
-	struct segment_header *seg = segment_of(cache, mb_idx);
 	return seg->start_sector + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
 }
 
-static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
+static void cleanup_segment(struct segment_header *seg)
 {
-	if(mb->dirty_bits){
-		struct segment_header *seg = segment_of(cache, mb->idx);
-		/* DMDEBUG("cleanup segment id: %lu", seg->global_id); */
-		DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
-		seg->nr_dirty_caches_remained--;
-	}
+	/* DMDEBUG("cleanup segment id: %lu", seg->global_id); */
+	DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
+	seg->nr_dirty_caches_remained--;
 }
 
-static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread)
+static void migrate_mb(
+		struct lc_cache *cache, struct segment_header *seg, 
+		struct metablock *mb, u8 dirty_bits, bool thread)
 {
 	struct backing_device *backing = backing_tbl[mb->device_id];
 
 	/* DMDEBUG("mb->idx: %u", mb->idx); */
 	/* DMDEBUG("backing id: %u", mb->device_id); */
 
-	if(! mb->dirty_bits){
+	if(! dirty_bits){
 		/* DMDEBUG("not migrate mb(dirty_bits=0)"); */
 		return;
 	}
 
-	if(mb->dirty_bits == 255){
+	if(dirty_bits == 255){
 		/* DMDEBUG("full migrate(dirty_bits=255)"); */
 		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
 
@@ -676,7 +675,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 		};
 		struct dm_io_region region_r = {
 			.bdev = cache->device->bdev,
-			.sector = calc_mb_start_sector(cache, mb->idx),
+			.sector = calc_mb_start_sector(seg, mb->idx),
 			.count = (1 << 3),
 		};
 		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
@@ -703,7 +702,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 		size_t i;
 		for(i=0; i<8; i++){
 			/* Migrate one sector for each */
-			bool bit_on = mb->dirty_bits & (1 << i);
+			bool bit_on = dirty_bits & (1 << i);
 			if(! bit_on){
 				continue;
 			}
@@ -717,7 +716,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 			};
 			struct dm_io_region region_r = {
 				.bdev = cache->device->bdev,
-				.sector = calc_mb_start_sector(cache, mb->idx) + i,
+				.sector = calc_mb_start_sector(seg, mb->idx) + i,
 				.count = 1,
 			};
 			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
@@ -748,12 +747,15 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = arr_at(cache->mb_array, idx);
+		u8 dirty_bits = mb->dirty_bits;
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
 		
 		mutex_lock(&seg->lock);
-		migrate_mb(cache, mb, false); 
-		cleanup_segment_of(cache, mb);
-		mb->dirty_bits = 0;
+		migrate_mb(cache, seg, mb, dirty_bits, false); 
+		if(dirty_bits){
+			cleanup_segment(seg);
+			mb->dirty_bits = 0;
+		}
 		mutex_unlock(&seg->lock);
 	}
 	if(seg->nr_dirty_caches_remained){
@@ -1167,15 +1169,6 @@ static void format_cache_device(struct dm_dev *dev)
 	}
 }
 
-static bool is_fully_written(struct metablock *mb)
-{
-	/*
-	 * FIXME?
-	 * is_fully_written() is not stable.
-	 */
-	return mb->dirty_bits == 255; /* 11111111 */
-}
-
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 {
 	size_t nr_segments = cache->nr_segments;
@@ -1202,13 +1195,13 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 	return (bio_sector / (1 << 3)) * (1 << 3);
 }
 
-static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
+static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8 dirty_bits)
 {
 	sector_t offset = (mb->idx % NR_CACHES_INSEG) * (1 << 3);
 	u8 i;
 	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	for(i=0; i<8; i++){
-		bool bit_on = mb->dirty_bits & (1 << i);
+		bool bit_on = dirty_bits & (1 << i);
 		if(! bit_on){
 			continue;
 		}
@@ -1316,6 +1309,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	struct dm_dev *orig = lc->backing->device;
 
 	struct metablock *mb;
+	u8 dirty_bits;
+	struct segment_header *seg;
 	bool found, on_buffer;
 
 	/* 
@@ -1338,12 +1333,17 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			return DM_MAPIO_REMAPPED;
 		}
 		
+		seg = segment_of(cache, mb->idx);
+		dirty_bits = mb->dirty_bits;
+		
 		/* Read found */
 		
 		if(unlikely(on_buffer)){
-			migrate_buffered_mb(cache, mb);
-			cleanup_segment_of(cache, mb);
-			mb->dirty_bits = 0;
+			if(dirty_bits){
+				migrate_buffered_mb(cache, mb, dirty_bits);
+				cleanup_segment(seg);
+				mb->dirty_bits = 0;
+			}
 			
 			up_read(&cache->io_lock);
 			bio_remap(bio, orig, bio->bi_sector);
@@ -1351,17 +1351,18 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}
 
 		/* Found not on buffer */
-		if(likely(is_fully_written(mb))){ /* FIXME? no atomic? */
+		if(likely(dirty_bits == 255)){ /* FIXME? no atomic? */
 			up_read(&cache->io_lock);	
-			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
+			bio_remap(bio, cache->device, calc_mb_start_sector(seg, mb->idx));
 		}else{
-			struct segment_header *seg = segment_of(cache, mb->idx);
 			wait_for_completion(&seg->flush_done);
 			
 			mutex_lock(&seg->lock);
-			migrate_mb(cache, mb, true);
-			cleanup_segment_of(cache, mb);
-			mb->dirty_bits = 0;
+			migrate_mb(cache, seg, mb, dirty_bits, true);
+			if(dirty_bits){
+				cleanup_segment(seg);
+				mb->dirty_bits = 0;
+			}
 			mutex_unlock(&seg->lock);
 			
 			up_read(&cache->io_lock);
@@ -1381,24 +1382,28 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
 
 	cache_nr update_mb_idx;
+
 	if(found){
+		
+		seg = segment_of(cache, mb->idx);
+		dirty_bits = mb->dirty_bits;
+		
 		if(unlikely(on_buffer)){
 			update_mb_idx = mb->idx;
 			goto write_on_buffer;
 		}else{
-			struct segment_header *seg = segment_of(cache, mb->idx);
 			
 			/*
 			 * First clean up the previous cache.
 			 * Migrate the cache if needed.
 			 */
 			bool needs_cleanup_prev_cache = 
-				!bio_fullsize || !is_fully_written(mb);
+				!bio_fullsize || !(dirty_bits == 255);
 			if(unlikely(needs_cleanup_prev_cache)){
 				wait_for_completion(&seg->flush_done);
 				
 				mutex_lock(&seg->lock);		
-				migrate_mb(cache, mb, true);
+				migrate_mb(cache, seg, mb, dirty_bits, true);
 			}else{
 				mutex_lock(&seg->lock);
 			}
@@ -1406,8 +1411,10 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			 * Fullsize dirty cache
 			 * can be discarded without migration.
 			 */
-			cleanup_segment_of(cache, mb);
-			mb->dirty_bits = 0;
+			if(dirty_bits){
+				cleanup_segment(seg);
+				mb->dirty_bits = 0;
+			}
 			mutex_unlock(&seg->lock);	
 
 	 		ht_del(cache, mb); /* Delete the old mb from hashtable */
@@ -1431,7 +1438,10 @@ write_not_found:
 	struct metablock *new_mb = arr_at(cache->mb_array, cache->cursor);
 	ht_register(cache, &key, new_mb);
 	new_mb->dirty_bits = 0;
+
 	mb = new_mb;
+	dirty_bits = mb->dirty_bits;
+	seg = segment_of(cache, mb->idx);
 
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
@@ -1448,8 +1458,7 @@ write_on_buffer:
 	sector_t offset = bio->bi_sector % (1 << 3); 
 
 	DMDEBUG("mb addr %p", mb);
-	if(! mb->dirty_bits){
-		struct segment_header *seg = segment_of(cache, mb->idx);
+	if(! dirty_bits){
 		DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
 		BUG_ON(seg->nr_dirty_caches_remained == NR_CACHES_INSEG); /* will overflow */
 		seg->nr_dirty_caches_remained++;
@@ -1459,7 +1468,7 @@ write_on_buffer:
 		DMDEBUG("fullsize buffer write");
 		mb->dirty_bits = 255;
 	}else{
-		DMDEBUG("partial buffer write. current mb->dirty_bits: %u", mb->dirty_bits);
+		DMDEBUG("partial buffer write. current mb->dirty_bits: %u", dirty_bits);
 		s += offset;
 		u8 i;
 		u8 flag = 0;
@@ -1467,7 +1476,9 @@ write_on_buffer:
 			flag += (1 << i);	
 			DMDEBUG("flag: %u", flag);
 		}
-		mb->dirty_bits |= flag;
+		
+		dirty_bits |= flag;
+		mb->dirty_bits = dirty_bits;
 	}
 
 	BUG_ON(! mb->dirty_bits);

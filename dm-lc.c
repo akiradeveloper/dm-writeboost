@@ -17,11 +17,29 @@
 #include <linux/dm-io.h>
 #include <linux/rwsem.h>
 
-/*
- * Reinventing the wheel.
- * flex_array is too complicated and
- * was beyond my expectation.
- */
+void *kmalloc_retry(size_t size, gfp_t flags)
+{
+	int count = 0;
+	void *p;
+	
+retry_alloc:
+	p = kmalloc(size, flags);
+	if(! p){
+		count++;
+		if(count >= 5){
+			DMWARN("fail allocation(count:%d)", count);
+		}
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		goto retry_alloc;	
+	}
+	return p;
+}
+
+void *kzalloc_retry(size_t size, gfp_t flags)
+{
+	return kmalloc(size, __GFP_ZERO | flags);
+}
+
 struct part {
 	void *memory;
 };
@@ -32,9 +50,10 @@ struct arr {
 	size_t elemsize;
 };
 
+#define ALLOC_SIZE (1 << 16)
 static size_t nr_elems_in_part(struct arr *arr)
 {
-	return PAGE_SIZE / arr->elemsize;
+	return ALLOC_SIZE / arr->elemsize;
 };
 
 static size_t nr_parts(struct arr *arr)
@@ -52,7 +71,7 @@ static struct arr *make_arr(size_t elemsize, size_t nr_elems)
 	size_t i;
 	for(i=0; i<nr_parts(arr); i++){
 		struct part *part = arr->parts + i;
-		part->memory = kmalloc(PAGE_SIZE, GFP_KERNEL);
+		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
 	}
 	return arr;
 }
@@ -557,9 +576,9 @@ static void queue_flushing(struct lc_cache *cache)
 	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u", current_seg->nr_dirty_caches_remained);
 
 	/* segment_header_device is too big to alloc in stack */
-	struct segment_header_device *header = kmalloc(sizeof(*header), GFP_NOIO); 
+	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO); 
 	prepare_segment_header_device(header, cache, current_seg);
-	void *buf = kzalloc(1 << 12, GFP_NOIO);
+	void *buf = kzalloc_retry(1 << 12, GFP_NOIO);
 	memcpy(buf, header, sizeof(*header));
 	kfree(header);
 	memcpy(cache->writebuffer + ((1 << 20) - HEADER * (1 << 12)), buf, (1 << 12));
@@ -567,7 +586,7 @@ static void queue_flushing(struct lc_cache *cache)
 
 	struct commit_block commit;
 	commit.global_id = current_seg->global_id;
-	void *buf_ = kzalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf_ = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf_, &commit, sizeof(commit));
 	memcpy(cache->writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
 	kfree(buf_);
@@ -580,7 +599,7 @@ static void queue_flushing(struct lc_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));	
 	}
 
-	struct flush_context *ctx = kmalloc(sizeof(*ctx), GFP_NOIO);
+	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
 	ctx->seg = current_seg;
 	ctx->buf = cache->writebuffer;
@@ -606,7 +625,7 @@ static void queue_flushing(struct lc_cache *cache)
 	discard_caches_inseg(cache, new_seg);	
 
 	cache->current_seg = new_seg;
-	cache->writebuffer = kzalloc(1 << 20, GFP_NOIO);
+	cache->writebuffer = kzalloc_retry(1 << 20, GFP_NOIO);
 }
 
 /* Get the segment that the passed mb belongs to. */
@@ -646,7 +665,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 
 	if(mb->dirty_bits == 255){
 		/* DMDEBUG("full migrate(dirty_bits=255)"); */
-		void *buf = kmalloc(1 << 12, GFP_NOIO);
+		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
 
 		struct dm_io_request io_req_r = {
 			.client = lc_io_client,
@@ -680,7 +699,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 
 	}else{
 		
-		void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+		void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 		size_t i;
 		for(i=0; i<8; i++){
 			/* Migrate one sector for each */
@@ -805,7 +824,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
 
-	void *buf = kzalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
 
 	struct dm_io_request io_req = {
@@ -826,6 +845,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 static void read_superblock_device(struct superblock_device *dest, struct lc_cache *cache)
 {
+	/* FIXME? GFP_KERNEL */
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -853,6 +873,7 @@ static void read_segment_header_device(
 		struct segment_header_device *dest, 
 		struct lc_cache *cache, size_t segment_idx)
 {
+	/* FIXME? GFP_KERNEL */
 	void *buf = kmalloc(1 << 12, GFP_NOIO);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -875,6 +896,7 @@ static void read_commit_block(
 		struct commit_block *dest,
 		struct lc_cache *cache, size_t segment_idx)
 {
+	/* FIXME? GFP_KERNEL */
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -1184,7 +1206,7 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
 {
 	sector_t offset = (mb->idx % NR_CACHES_INSEG) * (1 << 3);
 	u8 i;
-	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	for(i=0; i<8; i++){
 		bool bit_on = mb->dirty_bits & (1 << i);
 		if(! bit_on){

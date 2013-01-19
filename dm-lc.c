@@ -174,6 +174,7 @@ static void dm_safe_io_retry(
 	bool failed = false;
 	int err;
 	unsigned long err_bits;
+	int count = 0;
 
 retry_io:
 	err_bits = 0;
@@ -185,6 +186,11 @@ retry_io:
 		failed = true;
 		DMERR("io err occurs err(%d), err_bits(%lu)", err, err_bits);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+		
+		count++;
+		if(count >= 5){
+			DMERR("failed io count(%d)", count);
+		}
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));	
 		goto retry_io;
 	}
@@ -1631,6 +1637,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			return -EINVAL;
 		}
 		cache_id_ptr = id;
+		return 0;
+	}
+
+	if(! strcasecmp(cmd, "allow_migrate")){
+		int flag;
+		if(sscanf(argv[1], "%d", &flag) != 1){
+			return -EINVAL;
+		}
+		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		cache->allow_migrate = flag;
 		return 0;
 	}
 

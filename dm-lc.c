@@ -15,7 +15,6 @@
 #include <linux/sched.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
-#include <linux/rwsem.h>
 
 void *kmalloc_retry(size_t size, gfp_t flags)
 {
@@ -37,7 +36,7 @@ retry_alloc:
 
 void *kzalloc_retry(size_t size, gfp_t flags)
 {
-	return kmalloc(size, __GFP_ZERO | flags);
+	return kmalloc_retry(size, __GFP_ZERO | flags);
 }
 
 struct part {
@@ -245,8 +244,7 @@ struct metablock {
 
 	cache_nr idx; /* const. 4B. */
 
-	/* TODO struct cache_nr ht_list; */
-	struct hlist_node ht_list; /* TODO 16 bytes. too heavy */
+	struct hlist_node ht_list; 
 
 	/*
 	 * Now we recover only dirty caches 
@@ -258,8 +256,7 @@ struct metablock {
 	u8 dirty_bits; /* eight bit flags */
 
 	device_id device_id;
-
-} __attribute__((packed));
+};
 
 struct metablock_device {
 	sector_t sector;
@@ -283,10 +280,14 @@ struct segment_header {
 	struct completion flush_done;
 	
 	struct completion migrate_done;
-	struct mutex lock;
+	
+	spinlock_t lock;
 
-	atomic_t nr_inflight_writes;
+	atomic_t nr_inflight_ios;
 };
+
+#define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
+#define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
 
 #define HEADER 2
 #define COMMIT 1
@@ -311,13 +312,15 @@ struct lookup_key {
 struct lc_cache {
 	cache_id id;
 	struct dm_dev *device;
-	struct rw_semaphore io_lock;
+	struct mutex io_lock;
 	cache_nr nr_caches; /* const */
 	struct arr *mb_array;
 	size_t nr_segments; /* const */
 	struct arr *segment_header_array;
 	struct arr *htable;
 	size_t htsize;
+	
+	struct ht_head *null_head; /* TODO cached for performance */
 
 	cache_nr cursor; /* Index that has done write */
 	struct segment_header *current_seg;
@@ -362,11 +365,6 @@ static void clear_stat(struct lc_cache *cache)
 	}}}}		
 }
 
-static struct ht_head *ht_get_null_head(struct lc_cache *cache)
-{
-	return arr_at(cache->htable, cache->htsize);
-}
-
 static void ht_empty_init(struct lc_cache *cache)
 {
 	cache->htsize = cache->nr_caches;
@@ -387,12 +385,13 @@ static void ht_empty_init(struct lc_cache *cache)
 	 * A metablock is linked to the null head
 	 * if it is not counted in hashtable search.
 	 */
-	struct ht_head *null_head = ht_get_null_head(cache);
+	cache->null_head = arr_at(cache->htable, cache->htsize);
+
 	cache_nr idx;
 	for(idx=0; idx<cache->nr_caches; idx++){
 		struct metablock *mb =
 			arr_at(cache->mb_array, idx);
-		hlist_add_head(&mb->ht_list, &null_head->ht_list);
+		hlist_add_head(&mb->ht_list, &cache->null_head->ht_list);
 	}
 }
 
@@ -426,35 +425,28 @@ static void ht_del(struct lc_cache *cache, struct metablock *mb)
 {
 	hlist_del(&mb->ht_list);
 
-	struct ht_head *null_head = ht_get_null_head(cache);
+	struct ht_head *null_head = cache->null_head;
 	hlist_add_head(&mb->ht_list, &null_head->ht_list);
 }
 
-static void ht_register(struct lc_cache *cache, struct lookup_key *key, struct metablock *mb)
+static void ht_register(struct lc_cache *cache, struct ht_head *head, struct lookup_key *key, struct metablock *mb)
 {
-	/* This routine doesn't care duplicated keys */
-	cache_nr k = ht_hash(cache, key);
-	struct ht_head *hd = arr_at(cache->htable, k);
-
 	/* FIXME? May not be nessesary */
-	ht_del(cache, mb);
+	/* ht_del(cache, mb); */
 
 	hlist_del(&mb->ht_list);
-	hlist_add_head(&mb->ht_list, &hd->ht_list);				
+	hlist_add_head(&mb->ht_list, &head->ht_list);				
 
 	mb->sector = key->sector;
 	mb->device_id = key->device_id;
 };
 
-static struct metablock *ht_lookup(struct lc_cache *cache, struct lookup_key *key)
+static struct metablock *ht_lookup(struct lc_cache *cache, struct ht_head *head, struct lookup_key *key)
 {
-	cache_nr k = ht_hash(cache, key);
-	struct ht_head *hd = arr_at(cache->htable, k);
-	
 	struct metablock *found = NULL;
 	struct metablock *mb;
 	struct hlist_node *pos;
-	hlist_for_each_entry(mb, pos, &hd->ht_list, ht_list){
+	hlist_for_each_entry(mb, pos, &head->ht_list, ht_list){
 		if(mb_hit(mb, key)){
 			found = mb;
 			break;
@@ -487,7 +479,9 @@ static void init_segment_header_array(struct lc_cache *cache)
 		
 		seg->nr_dirty_caches_remained = 0;
 		
-		mutex_init(&seg->lock);
+		atomic_set(&seg->nr_inflight_ios, 0);
+		
+		spin_lock_init(&seg->lock);
 		
 		init_completion(&seg->flush_done);
 		complete_all(&seg->flush_done);
@@ -541,7 +535,6 @@ static void flush_proc(struct work_struct *work)
 
 	DMDEBUG("flush proc id: %lu", ctx->seg->global_id);
 
-
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
 		.bi_rw = WRITE,
@@ -579,7 +572,18 @@ static void flush_proc(struct work_struct *work)
 static void queue_flushing(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
+
 	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u", current_seg->nr_dirty_caches_remained);
+
+	size_t n1 = 0;
+	while(atomic_read(&current_seg->nr_inflight_ios)){
+		DMDEBUG("aaa");
+		n1++;
+		if(n1 == 100){
+			DMWARN("Too long to wait for current_seg ios to finish.");
+		}
+		schedule_timeout_interruptible(msecs_to_jiffies(1));	
+	}
 
 	/* segment_header_device is too big to alloc in stack */
 	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO); 
@@ -600,11 +604,6 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
 
-	/* Close to never happens. */
-	while(atomic_read(&current_seg->nr_inflight_writes)){
-		schedule_timeout_interruptible(msecs_to_jiffies(1));	
-	}
-
 	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
 	ctx->seg = current_seg;
@@ -612,26 +611,32 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_WORK(&ctx->work, flush_proc);
 	queue_work(cache->flush_wq, &ctx->work);
 
-	/*
-	 * (Locking)
-	 * Only this line alter last_flushed_segment_id in runtime.
-	 */
-	cache->last_flushed_segment_id = current_seg->global_id;
-
-	/* Set the cursor to the last of the flushed segment. */
-	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 	size_t next_id = current_seg->global_id + 1;
-	
 	struct segment_header *new_seg = get_segment_header_by_id(cache, next_id);
 	new_seg->global_id = next_id;
-	atomic_set(&new_seg->nr_inflight_writes, 0);
+	
+	size_t n2 = 0;
+	while(atomic_read(&new_seg->nr_inflight_ios)){
+		DMDEBUG("bbb");
+		n2++;
+		if(n2 == 100){
+			DMWARN("Too long to wait for new_seg ios to finish.");
+		}
+		schedule_timeout_interruptible(msecs_to_jiffies(1));
+	}
 
-	BUG_ON(new_seg->nr_dirty_caches_remained);
+	if(new_seg->nr_dirty_caches_remained){
+		DMDEBUG("new_seg->nr_dirty_caches_remained: %u", new_seg->nr_dirty_caches_remained);
+		BUG();
+	}
+	discard_caches_inseg(cache, new_seg);
 
-	discard_caches_inseg(cache, new_seg);	
+	cache->last_flushed_segment_id = current_seg->global_id;
+	/* Set the cursor to the last of the flushed segment. */
+	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
+	cache->writebuffer = kzalloc_retry(1 << 20, GFP_NOIO);
 
 	cache->current_seg = new_seg;
-	cache->writebuffer = kzalloc_retry(1 << 20, GFP_NOIO);
 }
 
 /* Get the segment that the passed mb belongs to. */
@@ -641,35 +646,40 @@ static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx
 	return arr_at(cache->segment_header_array, seg_idx);
 }
 
-static sector_t calc_mb_start_sector(struct lc_cache *cache, cache_nr mb_idx)
+static sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx)
 {
-	struct segment_header *seg = segment_of(cache, mb_idx);
 	return seg->start_sector + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
 }
 
-static void cleanup_segment_of(struct lc_cache *cache, struct metablock *mb)
+static void taint_segment(struct segment_header *seg)
 {
-	if(mb->dirty_bits){
-		struct segment_header *seg = segment_of(cache, mb->idx);
-		/* DMDEBUG("cleanup segment id: %lu", seg->global_id); */
-		DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
-		seg->nr_dirty_caches_remained--;
-	}
+	DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
+	BUG_ON(seg->nr_dirty_caches_remained == NR_CACHES_INSEG); /* will overflow */
+	seg->nr_dirty_caches_remained++;
 }
 
-static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread)
+static void cleanup_segment(struct segment_header *seg)
+{
+	/* DMDEBUG("cleanup segment id: %lu", seg->global_id); */
+	DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
+	seg->nr_dirty_caches_remained--;
+}
+
+static void migrate_mb(
+		struct lc_cache *cache, struct segment_header *seg, 
+		struct metablock *mb, u8 dirty_bits, bool thread)
 {
 	struct backing_device *backing = backing_tbl[mb->device_id];
 
 	/* DMDEBUG("mb->idx: %u", mb->idx); */
 	/* DMDEBUG("backing id: %u", mb->device_id); */
 
-	if(! mb->dirty_bits){
+	if(! dirty_bits){
 		/* DMDEBUG("not migrate mb(dirty_bits=0)"); */
 		return;
 	}
 
-	if(mb->dirty_bits == 255){
+	if(dirty_bits == 255){
 		/* DMDEBUG("full migrate(dirty_bits=255)"); */
 		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
 
@@ -682,7 +692,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 		};
 		struct dm_io_region region_r = {
 			.bdev = cache->device->bdev,
-			.sector = calc_mb_start_sector(cache, mb->idx),
+			.sector = calc_mb_start_sector(seg, mb->idx),
 			.count = (1 << 3),
 		};
 		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
@@ -709,7 +719,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 		size_t i;
 		for(i=0; i<8; i++){
 			/* Migrate one sector for each */
-			bool bit_on = mb->dirty_bits & (1 << i);
+			bool bit_on = dirty_bits & (1 << i);
 			if(! bit_on){
 				continue;
 			}
@@ -723,7 +733,7 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 			};
 			struct dm_io_region region_r = {
 				.bdev = cache->device->bdev,
-				.sector = calc_mb_start_sector(cache, mb->idx) + i,
+				.sector = calc_mb_start_sector(seg, mb->idx) + i,
 				.count = 1,
 			};
 			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
@@ -748,19 +758,29 @@ static void migrate_mb(struct lc_cache *cache, struct metablock *mb, bool thread
 
 static void migrate_whole_segment(struct lc_cache *cache, struct segment_header *seg)
 {
+	unsigned long flags;
+
 	DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = arr_at(cache->mb_array, idx);
+		
+		lockseg(seg, flags);
+		u8 dirty_bits = mb->dirty_bits;
+		unlockseg(seg, flags);
+		
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
 		
-		mutex_lock(&seg->lock);
-		migrate_mb(cache, mb, false); 
-		cleanup_segment_of(cache, mb);
-		mb->dirty_bits = 0;
-		mutex_unlock(&seg->lock);
+		migrate_mb(cache, seg, mb, dirty_bits, false); 
+		
+		lockseg(seg, flags);
+		if(mb->dirty_bits){
+			cleanup_segment(seg);
+			mb->dirty_bits = 0;
+		}
+		unlockseg(seg, flags);
 	}
 	if(seg->nr_dirty_caches_remained){
 		DMERR("nr_dirty_caches_remained is nonzero(%u) after migrating whole segment",
@@ -851,8 +871,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 static void read_superblock_device(struct superblock_device *dest, struct lc_cache *cache)
 {
-	/* FIXME? GFP_KERNEL */
-	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
 		.bi_rw = READ,
@@ -879,8 +898,7 @@ static void read_segment_header_device(
 		struct segment_header_device *dest, 
 		struct lc_cache *cache, size_t segment_idx)
 {
-	/* FIXME? GFP_KERNEL */
-	void *buf = kmalloc(1 << 12, GFP_NOIO);
+	void *buf = kmalloc(1 << 12, GFP_KERNEL);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
 		.bi_rw = READ,	
@@ -902,8 +920,7 @@ static void read_commit_block(
 		struct commit_block *dest,
 		struct lc_cache *cache, size_t segment_idx)
 {
-	/* FIXME? GFP_KERNEL */
-	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
 		.bi_rw = READ,
@@ -954,11 +971,14 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 			.sector = mb->sector,
 		};
 		
-		struct metablock *found = ht_lookup(cache, &key);
+		cache_nr k = ht_hash(cache, &key);
+		struct ht_head *head = arr_at(cache->htable, k);
+		
+		struct metablock *found = ht_lookup(cache, head, &key);
 		if(found){
 			ht_del(cache, found);
 		}
-		ht_register(cache, &key, mb);	
+		ht_register(cache, head, &key, mb);	
 	}
 
 	if(seg->nr_dirty_caches_remained != nr_dirties){
@@ -1069,7 +1089,7 @@ setup_init_segment:
 	DMDEBUG("recover. get new segment id: %lu", init_segment_id);
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
 	seg->global_id = init_segment_id;
-	atomic_set(&seg->nr_inflight_writes, 0);
+	atomic_set(&seg->nr_inflight_ios, 0);
 	
 	cache->last_flushed_segment_id = seg->global_id - 1;
 
@@ -1173,15 +1193,6 @@ static void format_cache_device(struct dm_dev *dev)
 	}
 }
 
-static bool is_fully_written(struct metablock *mb)
-{
-	/*
-	 * FIXME?
-	 * is_fully_written() is not stable.
-	 */
-	return mb->dirty_bits == 255; /* 11111111 */
-}
-
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 {
 	size_t nr_segments = cache->nr_segments;
@@ -1208,13 +1219,13 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 	return (bio_sector / (1 << 3)) * (1 << 3);
 }
 
-static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb)
+static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8 dirty_bits)
 {
 	sector_t offset = (mb->idx % NR_CACHES_INSEG) * (1 << 3);
 	u8 i;
 	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	for(i=0; i<8; i++){
-		bool bit_on = mb->dirty_bits & (1 << i);
+		bool bit_on = dirty_bits & (1 << i);
 		if(! bit_on){
 			continue;
 		}
@@ -1286,30 +1297,20 @@ static void flush_current_buffer(struct lc_cache *cache)
 	queue_flushing(cache);
 }
 
-static struct metablock *ht_lookup_oneshot(struct lc_cache *cache, struct lookup_key *key, bool *found, bool *on_buffer)
-{
-	struct metablock *mb = ht_lookup(cache, key);
-
-	*found = (mb != NULL);
-	DMDEBUG("found: %d", found);
-
-	*on_buffer = false;
-	if(*found){
-		*on_buffer = is_on_buffer(cache, mb->idx);
-	}
-	DMDEBUG("on_buffer: %d", on_buffer);
-
-	return mb;
-}
-
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
 	/* DMDEBUG("bio->bi_sector: %lu", bio->bi_sector); */
 
+	unsigned long flags;
+
+	map_context->ptr = NULL;
+
 	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
 	bool bio_fullsize = (bio_count == (1 << 3));
+	sector_t bio_offset = bio->bi_sector % (1 << 3); 
+
 	int rw = bio_data_dir(bio);
 
 	struct lc_cache *cache = lc->cache;
@@ -1318,112 +1319,140 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		.sector = calc_cache_alignment(cache, bio->bi_sector),
 		.device_id = lc->backing->id,
 	};
+
+	cache_nr k = ht_hash(cache, &key);
+	struct ht_head *head = arr_at(cache->htable, k);
 	
 	struct dm_dev *orig = lc->backing->device;
 
+	struct segment_header *seg;
 	struct metablock *mb;
-	bool found, on_buffer;
 
+	mutex_lock(&cache->io_lock);
+	mb = ht_lookup(cache, head, &key);
+	if(mb){
+		seg = segment_of(cache, mb->idx);
+		atomic_inc(&seg->nr_inflight_ios);
+	}
+
+	bool found = (mb != NULL);
+	DMDEBUG("found: %d", found);
+	bool on_buffer = false;
+	if(found){
+		on_buffer = is_on_buffer(cache, mb->idx);
+	}
+	DMDEBUG("on_buffer: %d", on_buffer);
+	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
+		
 	/* 
 	 * [Read]
 	 * Read io doesn't have any side-effects
 	 * which should be processed before write.
 	 */
 	if(! rw){
+		mutex_unlock(&cache->io_lock);
+		
 		DMDEBUG("read");
-		
-		down_read(&cache->io_lock);
-		mb = ht_lookup_oneshot(cache, &key, &found, &on_buffer);
-		inc_stat(cache, rw, found, on_buffer, bio_fullsize);
-		
+				
 		if(! found){
-			up_read(&cache->io_lock);
-			
 			/* To the backing storage */
 			bio_remap(bio, orig, bio->bi_sector);	
 			return DM_MAPIO_REMAPPED;
 		}
 		
 		/* Read found */
+		lockseg(seg, flags);
+		u8 dirty_bits = mb->dirty_bits;
+		unlockseg(seg, flags);
 		
 		if(unlikely(on_buffer)){
-			migrate_buffered_mb(cache, mb);
-			cleanup_segment_of(cache, mb);
-			mb->dirty_bits = 0;
+			if(dirty_bits){
+				migrate_buffered_mb(cache, mb, dirty_bits);
+			}			
 			
-			up_read(&cache->io_lock);
+			/*
+			 * TODO(Comment)
+			 * Why shouldn't we cleanup segment and metablock here.
+			 */
+						
+			atomic_dec(&seg->nr_inflight_ios);
 			bio_remap(bio, orig, bio->bi_sector);
 			return DM_MAPIO_REMAPPED;
 		}
-
+		
 		/* Found not on buffer */
-		if(likely(is_fully_written(mb))){ /* FIXME? no atomic? */
-			up_read(&cache->io_lock);	
-			bio_remap(bio, cache->device, calc_mb_start_sector(cache, mb->idx));
+		if(likely(dirty_bits == 255)){
+			bio_remap(bio, cache->device, 
+				calc_mb_start_sector(seg, mb->idx) + bio_offset);
+			map_context->ptr = seg;
 		}else{
-			struct segment_header *seg = segment_of(cache, mb->idx);
 			wait_for_completion(&seg->flush_done);
+			migrate_mb(cache, seg, mb, dirty_bits, true);
 			
-			mutex_lock(&seg->lock);
-			migrate_mb(cache, mb, true);
-			cleanup_segment_of(cache, mb);
-			mb->dirty_bits = 0;
-			mutex_unlock(&seg->lock);
+			lockseg(seg, flags);
+			if(mb->dirty_bits){
+				cleanup_segment(seg);
+				mb->dirty_bits = 0;
+			}
+			unlockseg(seg, flags);
 			
-			up_read(&cache->io_lock);
+			atomic_dec(&seg->nr_inflight_ios);	
 			bio_remap(bio, orig, bio->bi_sector);
 		}
 		return DM_MAPIO_REMAPPED;
 	}
 
-	/* TODO readonly */
-
-	/* [Write] */
+	/* TODO readonly(cache) */
+	/* TODO readonly(LV) */
 
 	DMDEBUG("write");
 
-	down_write(&cache->io_lock);
-	mb = ht_lookup_oneshot(cache, &key, &found, &on_buffer);
-	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
-
 	cache_nr update_mb_idx;
 	if(found){
+		
 		if(unlikely(on_buffer)){
+			mutex_unlock(&cache->io_lock);
+			
 			update_mb_idx = mb->idx;
 			goto write_on_buffer;
 		}else{
-			struct segment_header *seg = segment_of(cache, mb->idx);
+			
+			lockseg(seg, flags);
+			u8 dirty_bits = mb->dirty_bits;
+			unlockseg(seg, flags);
 			
 			/*
 			 * First clean up the previous cache.
 			 * Migrate the cache if needed.
 			 */
 			bool needs_cleanup_prev_cache = 
-				!bio_fullsize || !is_fully_written(mb);
+				!bio_fullsize || !(dirty_bits == 255);
+			
 			if(unlikely(needs_cleanup_prev_cache)){
 				wait_for_completion(&seg->flush_done);
-				
-				mutex_lock(&seg->lock);		
-				migrate_mb(cache, mb, true);
-			}else{
-				mutex_lock(&seg->lock);
+				migrate_mb(cache, seg, mb, dirty_bits, true);
 			}
+			
 			/*
 			 * Fullsize dirty cache
 			 * can be discarded without migration.
 			 */
-			cleanup_segment_of(cache, mb);
-			mb->dirty_bits = 0;
-			mutex_unlock(&seg->lock);	
+			lockseg(seg, flags);
+			if(mb->dirty_bits){
+				cleanup_segment(seg);
+				mb->dirty_bits = 0;
+			}
+			unlockseg(seg, flags);
 
 	 		ht_del(cache, mb); /* Delete the old mb from hashtable */
+			
+			atomic_dec(&seg->nr_inflight_ios);	
 			goto write_not_found;
 		}
 	}
 
 write_not_found:
 	;
-	/* Write not found */
 	bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1)); 
 	
 	/* Flushing the current buffer if needed */
@@ -1432,33 +1461,32 @@ write_not_found:
 	}
 
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
-
-	/* Update hashtable */
-	struct metablock *new_mb = arr_at(cache->mb_array, cache->cursor);
-	ht_register(cache, &key, new_mb);
-	new_mb->dirty_bits = 0;
-	mb = new_mb;
-
 	update_mb_idx = cache->cursor; /* Update the new metablock */
+
+	struct metablock *new_mb = arr_at(cache->mb_array, update_mb_idx);
+	new_mb->dirty_bits = 0;
+	ht_register(cache, head, &key, new_mb);
+
+	seg = segment_of(cache, update_mb_idx);
+	atomic_inc(&seg->nr_inflight_ios);
+	mutex_unlock(&cache->io_lock);
+
+	mb = new_mb;
 
 write_on_buffer:
 	DMDEBUG("The idx to buffer write. update_mb_idx: %u", update_mb_idx);
 	/* DMDEBUG("bio_count: %u", bio_count); */
 	BUG_ON(! bio_count);
 
-	;
 	/* Update the buffer element */
 	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;
 	sector_t s = (1 << 3) * idx_inseg; 
 
-	sector_t offset = bio->bi_sector % (1 << 3); 
-
 	DMDEBUG("mb addr %p", mb);
+
+	lockseg(seg, flags);
 	if(! mb->dirty_bits){
-		struct segment_header *seg = segment_of(cache, mb->idx);
-		DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
-		BUG_ON(seg->nr_dirty_caches_remained == NR_CACHES_INSEG); /* will overflow */
-		seg->nr_dirty_caches_remained++;
+		taint_segment(seg);
 	}
 
 	if(likely(bio_fullsize)){
@@ -1466,35 +1494,26 @@ write_on_buffer:
 		mb->dirty_bits = 255;
 	}else{
 		DMDEBUG("partial buffer write. current mb->dirty_bits: %u", mb->dirty_bits);
-		s += offset;
+		s += bio_offset;
 		u8 i;
-		u8 flag = 0;
-		for(i=offset; i<(offset+bio_count); i++){
-			flag += (1 << i);	
-			DMDEBUG("flag: %u", flag);
+		u8 acc_bits = 0;
+		for(i=bio_offset; i<(bio_offset+bio_count); i++){
+			acc_bits += (1 << i);	
+			DMDEBUG("acc_bits: %u", acc_bits);
 		}
-		mb->dirty_bits |= flag;
+		mb->dirty_bits |= acc_bits;
 	}
 
-	BUG_ON(! mb->dirty_bits);
 	DMDEBUG("After write on buffer. mb->dirty_bits: %u", mb->dirty_bits);
+	BUG_ON(! mb->dirty_bits);
 
-	atomic_inc(&cache->current_seg->nr_inflight_writes);
-	up_write(&cache->io_lock);
+	unlockseg(seg, flags);
 
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
 
-	/*
-	 * (Optimization)
-	 * To achieve 1GB/s (250K 4KB) random write,
-	 * 1/250K = 4us to run through the write path is permitted.
-	 * Writing 4KB is not acceptable latency.
-	 * We will get this operation out of write lock
-	 * by inc/dec-ing write count.
-	 */
 	memcpy(cache->writebuffer + start, data, bio->bi_size);
-	atomic_dec(&cache->current_seg->nr_inflight_writes);
+	atomic_dec(&cache->current_seg->nr_inflight_ios);
 
 	/* dump_memory(cache->writebuffer + (1 << 12) #<{(| skip 4KB |)}>#, 16); #<{(| DEBUG |)}># */
 
@@ -1504,6 +1523,13 @@ write_on_buffer:
 
 static int lc_end_io(struct dm_target *ti, struct bio *bio, int error, union map_info *map_context)
 {
+	if(! map_context->ptr){
+		return 0;
+	}
+
+	struct segment_header *seg = map_context->ptr;
+	atomic_dec(&seg->nr_inflight_ios);
+
 	return 0;
 }
 
@@ -1678,7 +1704,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("nr_segments: %lu", cache->nr_segments);
 		DMDEBUG("nr_cache: %u", cache->nr_caches);
 		
-		init_rwsem(&cache->io_lock);	
+		mutex_init(&cache->io_lock);	
 		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
 
 		mb_array_empty_init(cache);
@@ -1730,6 +1756,19 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		dm_put_device(ti, dev);
 		return 0;	
 	}
+	
+	if(! strcasecmp(cmd, "commit_super_block")){
+		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		if(! cache){
+			return -EINVAL;
+		}
+		
+		mutex_lock(&cache->io_lock);
+		commit_super_block(cache);
+		mutex_unlock(&cache->io_lock);
+		
+		return 0;
+	}
 
 	if(! strcasecmp(cmd, "flush_current_buffer")){
 		struct lc_cache *cache = lc_caches[cache_id_ptr];
@@ -1737,12 +1776,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			return -EINVAL;
 		}
 		
-		down_write(&cache->io_lock);
+		mutex_lock(&cache->io_lock);
 		struct segment_header *old_seg = cache->current_seg;
 		
 		flush_current_buffer(cache);
 		cache->cursor = (cache->cursor + 1) % cache->nr_caches;
-		up_write(&cache->io_lock);
+		mutex_unlock(&cache->io_lock);
 		
 		wait_for_completion(&old_seg->flush_done);
 		return 0;

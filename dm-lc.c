@@ -547,23 +547,9 @@ static void flush_proc(struct work_struct *work)
 	struct dm_io_region region = {
 		.bdev = ctx->cache->device->bdev,	
 		.sector = ctx->seg->start_sector,
-		.count = ((1 << 11) - (1 << 3)),
+		.count = (1 << 11),
 	};
 	dm_safe_io_retry(&io_req, &region, 1, false);
-
-	struct dm_io_request io_req_commit = {
-		.client = lc_io_client,
-		.bi_rw = WRITE,
-		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = ctx->buf + ((1 << 20) - (1 << 12)),
-	};
-	struct dm_io_region region_commit = {
-		.bdev = ctx->cache->device->bdev,
-		.sector = ctx->seg->start_sector + ((1 << 11) - (1 << 3)),
-		.count = 1,
-	};
-	dm_safe_io_retry(&io_req_commit, &region_commit, 1, false);
 
 	complete_all(&ctx->seg->flush_done);
 
@@ -597,7 +583,7 @@ static void queue_flushing(struct lc_cache *cache)
 	kfree(buf);
 
 	struct commit_block commit;
-	commit.global_id = current_seg->global_id;
+	commit.global_id = current_seg->global_id - 1;
 	void *buf_ = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf_, &commit, sizeof(commit));
 	memcpy(cache->writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
@@ -1001,7 +987,7 @@ static void recover_cache(struct lc_cache *cache)
 	size_t oldest_id = max_id;
 	for(i=0; i<nr_segments; i++){
 		read_segment_header_device(header, cache, i);
-		read_commit_block(&commit, cache, i);
+		read_commit_block(&commit, cache, (i + 1) % nr_segments);
 		
 		/* 
 		 * Ignore semgents half done. 
@@ -1038,7 +1024,7 @@ static void recover_cache(struct lc_cache *cache)
 	for(i=oldest_idx; i<(nr_segments + oldest_idx); i++){
 		j = i % nr_segments;
 		read_segment_header_device(header, cache, j);
-		read_commit_block(&commit, cache, j);
+		read_commit_block(&commit, cache, (j + 1) % nr_segments);
 		
 		/*
 		 * Inconsistent segment is
@@ -1086,7 +1072,6 @@ setup_init_segment:
 	
 	cache->last_flushed_segment_id = seg->global_id - 1;
 
-	/* FIXME Bug !!! nr->caches -> nr_segments */
 	cache->last_migrated_segment_id = 
 		cache->last_flushed_segment_id > cache->nr_segments ?
 		cache->last_flushed_segment_id - cache->nr_segments : 0;
@@ -1644,6 +1629,31 @@ static void lc_mgr_dtr(struct dm_target *ti)
 {
 }
 
+static void commit_seg(struct lc_cache *cache, struct segment_header *seg)
+{
+	struct commit_block commit;
+	commit.global_id = seg->global_id;
+	void *buf = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	memcpy(buf, &commit, sizeof(commit));
+
+	struct dm_io_request io_req = {
+		.client = lc_io_client,
+		.bi_rw = WRITE,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+
+	size_t seg_idx = seg->global_id % cache->nr_segments;
+	struct dm_io_region region = {
+		.bdev = cache->device->bdev,
+		.sector = calc_segment_header_start(seg_idx, COMMIT),
+		.count = 1,
+	};
+	dm_safe_io_retry(&io_req, &region, 1, true);
+	kfree(buf);
+}
+
 static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	char *cmd = argv[0];
@@ -1769,15 +1779,17 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		if(! cache){
 			return -EINVAL;
 		}
-		
+
 		mutex_lock(&cache->io_lock);
 		struct segment_header *old_seg = cache->current_seg;
-		
+
 		flush_current_buffer(cache);
 		cache->cursor = (cache->cursor + 1) % cache->nr_caches;
-		mutex_unlock(&cache->io_lock);
-		
+
 		wait_for_completion(&old_seg->flush_done);
+		commit_seg(cache, old_seg);
+		mutex_unlock(&cache->io_lock);
+
 		return 0;
 	}
 

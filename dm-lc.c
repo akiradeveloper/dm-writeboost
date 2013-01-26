@@ -127,7 +127,7 @@ struct safe_io {
 };
 static struct workqueue_struct *safe_io_wq;
 
-static void safe_io_fn(struct work_struct *work)
+static void safe_io_proc(struct work_struct *work)
 {
 	struct safe_io *io = container_of(work, struct safe_io, work);
 	io->err_bits = 0;
@@ -153,7 +153,7 @@ static int dm_safe_io(
 			.num_regions = num_regions,
 		};
 		
-		INIT_WORK_ONSTACK(&io.work, safe_io_fn);
+		INIT_WORK_ONSTACK(&io.work, safe_io_proc);
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 		
@@ -200,7 +200,7 @@ retry_io:
 	}
 }
 
-#define NR_CACHES_INSEG 254 /* 256 - 2 (header and commit block) */
+#define NR_CACHES_INSEG 254 /* 256(1MB) - 2 (header and commit block) */
 
 typedef u8 device_id;
 typedef u8 cache_id;
@@ -365,6 +365,11 @@ static void clear_stat(struct lc_cache *cache)
 	}}}}		
 }
 
+static struct metablock *mb_at(struct lc_cache *cache, cache_nr idx)
+{
+	return arr_at(cache->mb_array, idx);
+}
+
 static void ht_empty_init(struct lc_cache *cache)
 {
 	cache->htsize = cache->nr_caches;
@@ -389,8 +394,7 @@ static void ht_empty_init(struct lc_cache *cache)
 
 	cache_nr idx;
 	for(idx=0; idx<cache->nr_caches; idx++){
-		struct metablock *mb =
-			arr_at(cache->mb_array, idx);
+		struct metablock *mb = mb_at(cache, idx);
 		hlist_add_head(&mb->ht_list, &cache->null_head->ht_list);
 	}
 }
@@ -401,7 +405,7 @@ static void mb_array_empty_init(struct lc_cache *cache)
 			
 	size_t i;
 	for(i=0; i<cache->nr_caches; i++){
-		struct metablock *mb = arr_at(cache->mb_array, i);
+		struct metablock *mb = mb_at(cache, i);
 		mb->idx = i;
 		INIT_HLIST_NODE(&mb->ht_list);
 		
@@ -459,8 +463,7 @@ void discard_caches_inseg(struct lc_cache *cache, struct segment_header *seg)
 {
 	u8 i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb =
-			arr_at(cache->mb_array, seg->start_idx + i);
+		struct metablock *mb = mb_at(cache, seg->start_idx + i);
 		ht_del(cache, mb);
 	}
 }
@@ -507,7 +510,7 @@ static void prepare_segment_header_device(
 
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = arr_at(cache->mb_array, src->start_idx + i);
+		struct metablock *mb = mb_at(cache, src->start_idx + i);
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		mbdev->sector = mb->sector;	
 		mbdev->device_id = mb->device_id;
@@ -765,7 +768,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
-		struct metablock *mb = arr_at(cache->mb_array, idx);
+		struct metablock *mb = mb_at(cache, idx);
 		
 		lockseg(seg, flags);
 		u8 dirty_bits = mb->dirty_bits;
@@ -952,7 +955,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 
 	u8 nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = arr_at(cache->mb_array, offset + i); 
+		struct metablock *mb = mb_at(cache, offset + i); 
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
 		if(! mbdev->dirty_bits){
@@ -1463,7 +1466,7 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
-	struct metablock *new_mb = arr_at(cache->mb_array, update_mb_idx);
+	struct metablock *new_mb = mb_at(cache, update_mb_idx);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
 
@@ -1707,12 +1710,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		mutex_init(&cache->io_lock);	
 		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
 
+		init_segment_header_array(cache);	
+		DMDEBUG("init segment_array done");
 		mb_array_empty_init(cache);
 		DMDEBUG("init mb_array done");
 		ht_empty_init(cache);
 		DMDEBUG("init htable done");
-		init_segment_header_array(cache);	
-		DMDEBUG("init segment_array done");
 		
 		cache->allow_migrate = false;
 		cache->reserving_segment_id = 0;

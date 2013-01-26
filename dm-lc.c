@@ -266,6 +266,8 @@ struct metablock_device {
 };
 
 struct segment_header {
+	struct metablock mb_array[NR_CACHES_INSEG];
+
 	u8 nr_dirty_caches_remained; /* <= NR_CACHES_INSEG */
 
 	/*
@@ -314,7 +316,6 @@ struct lc_cache {
 	struct dm_dev *device;
 	struct mutex io_lock;
 	cache_nr nr_caches; /* const */
-	struct arr *mb_array;
 	size_t nr_segments; /* const */
 	struct arr *segment_header_array;
 	struct arr *htable;
@@ -367,7 +368,22 @@ static void clear_stat(struct lc_cache *cache)
 
 static struct metablock *mb_at(struct lc_cache *cache, cache_nr idx)
 {
-	return arr_at(cache->mb_array, idx);
+	size_t seg_idx = idx / NR_CACHES_INSEG;
+	struct segment_header *seg = arr_at(cache->segment_header_array, seg_idx);
+	cache_nr idx_inseg = idx % NR_CACHES_INSEG;
+	return seg->mb_array + idx_inseg;
+}
+
+static void mb_array_empty_init(struct lc_cache *cache)
+{
+	size_t i;
+	for(i=0; i<cache->nr_caches; i++){
+		struct metablock *mb = mb_at(cache, i);
+		mb->idx = i;
+		INIT_HLIST_NODE(&mb->ht_list);
+		
+		mb->dirty_bits = 0;
+	}
 }
 
 static void ht_empty_init(struct lc_cache *cache)
@@ -396,20 +412,6 @@ static void ht_empty_init(struct lc_cache *cache)
 	for(idx=0; idx<cache->nr_caches; idx++){
 		struct metablock *mb = mb_at(cache, idx);
 		hlist_add_head(&mb->ht_list, &cache->null_head->ht_list);
-	}
-}
-
-static void mb_array_empty_init(struct lc_cache *cache)
-{
-	cache->mb_array = make_arr(sizeof(struct metablock), cache->nr_caches);
-			
-	size_t i;
-	for(i=0; i<cache->nr_caches; i++){
-		struct metablock *mb = mb_at(cache, i);
-		mb->idx = i;
-		INIT_HLIST_NODE(&mb->ht_list);
-		
-		mb->dirty_bits = 0;
 	}
 }
 
@@ -1832,11 +1834,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 static size_t calc_static_memory_consumption(struct lc_cache *cache)
 {
-	size_t mb = sizeof(struct metablock) * cache->nr_caches;
 	size_t seg = sizeof(struct segment_header) * cache->nr_segments;
 	size_t ht = sizeof(struct ht_head) * cache->htsize;
 
-	return mb + seg + ht;
+	return seg + ht;
 };
 
 static int lc_mgr_status(

@@ -1449,7 +1449,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 
 write_not_found:
 	;
-	bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1)); 
+	/* bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1));  */
+	bool refresh_segment = !( (cache->cursor + 1) % NR_CACHES_INSEG );
 	
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){

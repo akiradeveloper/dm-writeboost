@@ -465,7 +465,7 @@ void discard_caches_inseg(struct lc_cache *cache, struct segment_header *seg)
 {
 	u8 i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = mb_at(cache, seg->start_idx + i);
+		struct metablock *mb = seg->mb_array + i;
 		ht_del(cache, mb);
 	}
 }
@@ -512,7 +512,7 @@ static void prepare_segment_header_device(
 
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = mb_at(cache, src->start_idx + i);
+		struct metablock *mb = src->mb_array + i;
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		mbdev->sector = mb->sector;	
 		mbdev->device_id = mb->device_id;
@@ -768,9 +768,8 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
-		struct metablock *mb = mb_at(cache, idx);
+		struct metablock *mb = seg->mb_array + i;
 		
 		lockseg(seg, flags);
 		u8 dirty_bits = mb->dirty_bits;
@@ -953,11 +952,10 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 
 	/* Update in-memory structures */
 	cache_nr i;
-	cache_nr offset = seg->start_idx;
 
 	u8 nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = mb_at(cache, offset + i); 
+		struct metablock *mb = seg->mb_array + i;
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
 		if(! mbdev->dirty_bits){
@@ -1468,12 +1466,12 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
+	seg = segment_of(cache, update_mb_idx);
+	atomic_inc(&seg->nr_inflight_ios);
+	
 	struct metablock *new_mb = mb_at(cache, update_mb_idx);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
-
-	seg = segment_of(cache, update_mb_idx);
-	atomic_inc(&seg->nr_inflight_ios);
 	mutex_unlock(&cache->io_lock);
 
 	mb = new_mb;

@@ -127,7 +127,7 @@ struct safe_io {
 };
 static struct workqueue_struct *safe_io_wq;
 
-static void safe_io_fn(struct work_struct *work)
+static void safe_io_proc(struct work_struct *work)
 {
 	struct safe_io *io = container_of(work, struct safe_io, work);
 	io->err_bits = 0;
@@ -153,7 +153,7 @@ static int dm_safe_io(
 			.num_regions = num_regions,
 		};
 		
-		INIT_WORK_ONSTACK(&io.work, safe_io_fn);
+		INIT_WORK_ONSTACK(&io.work, safe_io_proc);
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 		
@@ -200,7 +200,7 @@ retry_io:
 	}
 }
 
-#define NR_CACHES_INSEG 254 /* 256 - 2 (header and commit block) */
+#define NR_CACHES_INSEG 254 /* 256(1MB) - 2 (header and commit block) */
 
 typedef u8 device_id;
 typedef u8 cache_id;
@@ -266,6 +266,8 @@ struct metablock_device {
 };
 
 struct segment_header {
+	struct metablock mb_array[NR_CACHES_INSEG];
+
 	u8 nr_dirty_caches_remained; /* <= NR_CACHES_INSEG */
 
 	/*
@@ -314,7 +316,6 @@ struct lc_cache {
 	struct dm_dev *device;
 	struct mutex io_lock;
 	cache_nr nr_caches; /* const */
-	struct arr *mb_array;
 	size_t nr_segments; /* const */
 	struct arr *segment_header_array;
 	struct arr *htable;
@@ -365,6 +366,26 @@ static void clear_stat(struct lc_cache *cache)
 	}}}}		
 }
 
+static struct metablock *mb_at(struct lc_cache *cache, cache_nr idx)
+{
+	size_t seg_idx = idx / NR_CACHES_INSEG;
+	struct segment_header *seg = arr_at(cache->segment_header_array, seg_idx);
+	cache_nr idx_inseg = idx % NR_CACHES_INSEG;
+	return seg->mb_array + idx_inseg;
+}
+
+static void mb_array_empty_init(struct lc_cache *cache)
+{
+	size_t i;
+	for(i=0; i<cache->nr_caches; i++){
+		struct metablock *mb = mb_at(cache, i);
+		mb->idx = i;
+		INIT_HLIST_NODE(&mb->ht_list);
+		
+		mb->dirty_bits = 0;
+	}
+}
+
 static void ht_empty_init(struct lc_cache *cache)
 {
 	cache->htsize = cache->nr_caches;
@@ -389,23 +410,8 @@ static void ht_empty_init(struct lc_cache *cache)
 
 	cache_nr idx;
 	for(idx=0; idx<cache->nr_caches; idx++){
-		struct metablock *mb =
-			arr_at(cache->mb_array, idx);
+		struct metablock *mb = mb_at(cache, idx);
 		hlist_add_head(&mb->ht_list, &cache->null_head->ht_list);
-	}
-}
-
-static void mb_array_empty_init(struct lc_cache *cache)
-{
-	cache->mb_array = make_arr(sizeof(struct metablock), cache->nr_caches);
-			
-	size_t i;
-	for(i=0; i<cache->nr_caches; i++){
-		struct metablock *mb = arr_at(cache->mb_array, i);
-		mb->idx = i;
-		INIT_HLIST_NODE(&mb->ht_list);
-		
-		mb->dirty_bits = 0;
 	}
 }
 
@@ -459,8 +465,7 @@ void discard_caches_inseg(struct lc_cache *cache, struct segment_header *seg)
 {
 	u8 i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb =
-			arr_at(cache->mb_array, seg->start_idx + i);
+		struct metablock *mb = seg->mb_array + i;
 		ht_del(cache, mb);
 	}
 }
@@ -507,7 +512,7 @@ static void prepare_segment_header_device(
 
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = arr_at(cache->mb_array, src->start_idx + i);
+		struct metablock *mb = src->mb_array + i;
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		mbdev->sector = mb->sector;	
 		mbdev->device_id = mb->device_id;
@@ -639,13 +644,6 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->current_seg = new_seg;
 }
 
-/* Get the segment that the passed mb belongs to. */
-static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx)
-{
-	size_t seg_idx = mb_idx / NR_CACHES_INSEG;
-	return arr_at(cache->segment_header_array, seg_idx);
-}
-
 static sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx)
 {
 	return seg->start_sector + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
@@ -763,9 +761,8 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
 	cache_nr i;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		cache_nr idx = seg->start_idx + i;
 		/* DMDEBUG("idx: %u", idx); */
-		struct metablock *mb = arr_at(cache->mb_array, idx);
+		struct metablock *mb = seg->mb_array + i;
 		
 		lockseg(seg, flags);
 		u8 dirty_bits = mb->dirty_bits;
@@ -948,11 +945,10 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 
 	/* Update in-memory structures */
 	cache_nr i;
-	cache_nr offset = seg->start_idx;
 
 	u8 nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
-		struct metablock *mb = arr_at(cache->mb_array, offset + i); 
+		struct metablock *mb = seg->mb_array + i;
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
 		if(! mbdev->dirty_bits){
@@ -1331,7 +1327,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if(mb){
-		seg = segment_of(cache, mb->idx);
+		seg = ((void *) mb) - ((mb->idx % NR_CACHES_INSEG) * sizeof(struct metablock));
 		atomic_inc(&seg->nr_inflight_ios);
 	}
 
@@ -1463,12 +1459,12 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
-	struct metablock *new_mb = arr_at(cache->mb_array, update_mb_idx);
+	seg = arr_at(cache->segment_header_array, (update_mb_idx / NR_CACHES_INSEG));
+	atomic_inc(&seg->nr_inflight_ios);
+	
+	struct metablock *new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
-
-	seg = segment_of(cache, update_mb_idx);
-	atomic_inc(&seg->nr_inflight_ios);
 	mutex_unlock(&cache->io_lock);
 
 	mb = new_mb;
@@ -1707,12 +1703,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		mutex_init(&cache->io_lock);	
 		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
 
+		init_segment_header_array(cache);	
+		DMDEBUG("init segment_array done");
 		mb_array_empty_init(cache);
 		DMDEBUG("init mb_array done");
 		ht_empty_init(cache);
 		DMDEBUG("init htable done");
-		init_segment_header_array(cache);	
-		DMDEBUG("init segment_array done");
 		
 		cache->allow_migrate = false;
 		cache->reserving_segment_id = 0;
@@ -1829,11 +1825,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 static size_t calc_static_memory_consumption(struct lc_cache *cache)
 {
-	size_t mb = sizeof(struct metablock) * cache->nr_caches;
 	size_t seg = sizeof(struct segment_header) * cache->nr_segments;
 	size_t ht = sizeof(struct ht_head) * cache->htsize;
 
-	return mb + seg + ht;
+	return seg + ht;
 };
 
 static int lc_mgr_status(

@@ -644,13 +644,6 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->current_seg = new_seg;
 }
 
-/* Get the segment that the passed mb belongs to. */
-static struct segment_header *segment_of(struct lc_cache *cache, cache_nr mb_idx)
-{
-	size_t seg_idx = mb_idx / NR_CACHES_INSEG;
-	return arr_at(cache->segment_header_array, seg_idx);
-}
-
 static sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx)
 {
 	return seg->start_sector + (1 << 3) * (mb_idx % NR_CACHES_INSEG);
@@ -1334,7 +1327,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if(mb){
-		seg = segment_of(cache, mb->idx);
+		seg = ((void *) mb) - ((mb->idx % NR_CACHES_INSEG) * sizeof(struct metablock));
 		atomic_inc(&seg->nr_inflight_ios);
 	}
 
@@ -1466,10 +1459,10 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
-	seg = segment_of(cache, update_mb_idx);
+	seg = arr_at(cache->segment_header_array, (update_mb_idx / NR_CACHES_INSEG));
 	atomic_inc(&seg->nr_inflight_ios);
 	
-	struct metablock *new_mb = mb_at(cache, update_mb_idx);
+	struct metablock *new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
 	mutex_unlock(&cache->io_lock);

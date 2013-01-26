@@ -1499,6 +1499,12 @@ write_on_buffer:
 	memcpy(cache->writebuffer + start, data, bio->bi_size);
 	atomic_dec(&cache->current_seg->nr_inflight_ios);
 
+	bool sync = (bio->bi_rw & REQ_SYNC);
+	if(sync){
+		bio_remap(bio, orig, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
+
 	/* dump_memory(cache->writebuffer + (1 << 12) #<{(| skip 4KB |)}>#, 16); #<{(| DEBUG |)}># */
 
 	bio_endio(bio, 0);

@@ -437,9 +437,6 @@ static void ht_del(struct lc_cache *cache, struct metablock *mb)
 
 static void ht_register(struct lc_cache *cache, struct ht_head *head, struct lookup_key *key, struct metablock *mb)
 {
-	/* FIXME? May not be nessesary */
-	/* ht_del(cache, mb); */
-
 	hlist_del(&mb->ht_list);
 	hlist_add_head(&mb->ht_list, &head->ht_list);				
 

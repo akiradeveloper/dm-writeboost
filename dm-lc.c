@@ -557,6 +557,25 @@ static void flush_proc(struct work_struct *work)
 	kfree(ctx);
 }
 
+static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, struct segment_header *seg)
+{
+	/* segment_header_device is too big to alloc in stack */
+	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO); 
+	prepare_segment_header_device(header, cache, seg);
+	void *buf = kzalloc_retry(1 << 12, GFP_NOIO);
+	memcpy(buf, header, sizeof(*header));
+	kfree(header);
+	memcpy(writebuffer + ((1 << 20) - HEADER * (1 << 12)), buf, (1 << 12));
+	kfree(buf);
+
+	struct commit_block commit;
+	commit.global_id = seg->global_id - 1;
+	void *buf_ = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	memcpy(buf_, &commit, sizeof(commit));
+	memcpy(writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
+	kfree(buf_);
+}
+
 static void queue_flushing(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
@@ -573,21 +592,7 @@ static void queue_flushing(struct lc_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));	
 	}
 
-	/* segment_header_device is too big to alloc in stack */
-	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO); 
-	prepare_segment_header_device(header, cache, current_seg);
-	void *buf = kzalloc_retry(1 << 12, GFP_NOIO);
-	memcpy(buf, header, sizeof(*header));
-	kfree(header);
-	memcpy(cache->writebuffer + ((1 << 20) - HEADER * (1 << 12)), buf, (1 << 12));
-	kfree(buf);
-
-	struct commit_block commit;
-	commit.global_id = current_seg->global_id - 1;
-	void *buf_ = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
-	memcpy(buf_, &commit, sizeof(commit));
-	memcpy(cache->writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
-	kfree(buf_);
+	prepare_meta_writebuffer(cache->writebuffer, cache, cache->current_seg);
 
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);

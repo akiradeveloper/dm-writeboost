@@ -622,11 +622,25 @@ static void queue_flushing(struct lc_cache *cache)
 		DMDEBUG("new_seg->nr_dirty_caches_remained: %u", new_seg->nr_dirty_caches_remained);
 		BUG();
 	}
+
+	/*
+	 * FIXME? Is this truely needed?
+	 * I don't think so.
+	 * This code is too be on the safe side.
+	 */
 	discard_caches_inseg(cache, new_seg);
 
 	cache->last_flushed_segment_id = current_seg->global_id;
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
+
+	/*
+	 * (Optimization?)
+	 * Allocating contiguous 1MB space may be heavy.
+	 * It may be the order of ms that is too heavy for this module.
+	 * Pooling some numbers of 1MB buffers would do.
+	 * Or let this allocation background.
+	 */
 	cache->writebuffer = kzalloc_retry(1 << 20, GFP_NOIO);
 
 	cache->current_seg = new_seg;
@@ -1179,7 +1193,7 @@ static void format_cache_device(struct dm_dev *dev)
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 {
 	size_t nr_segments = cache->nr_segments;
-	cache_nr start = ((cache->current_seg->global_id - 1) % nr_segments) * NR_CACHES_INSEG;
+	cache_nr start = cache->current_seg->start_idx;
 	if(mb_idx < start){
 		return false;
 	}
@@ -1436,7 +1450,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 
 write_not_found:
 	;
-	/* bool refresh_segment = ((cache->cursor % NR_CACHES_INSEG) == (NR_CACHES_INSEG - 1));  */
 	bool refresh_segment = !( (cache->cursor + 1) % NR_CACHES_INSEG );
 	
 	/* Flushing the current buffer if needed */

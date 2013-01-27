@@ -1187,7 +1187,6 @@ static void format_cache_device(struct dm_dev *dev)
 
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
 {
-	size_t nr_segments = cache->nr_segments;
 	cache_nr start = cache->current_seg->start_idx;
 	if(mb_idx < start){
 		return false;
@@ -1749,7 +1748,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->allow_migrate = false;
 		cache->reserving_segment_id = 0;
 		
-		cache->migrate_wq = alloc_workqueue("migratewq", WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
+		cache->migrate_wq = create_singlethread_workqueue("migratewq");
+
 		INIT_WORK(&cache->migrate_work, migrate_proc);
 		queue_work(cache->migrate_wq, &cache->migrate_work);
 
@@ -1766,8 +1766,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		 * but only complicates locking.
 		 * My decision is to have flush_wq stay singlethreaded.
 		 */
-		cache->flush_wq = alloc_workqueue("flushwq", WQ_NON_REENTRANT | WQ_UNBOUND | WQ_MEM_RECLAIM, 1);	
-		
+		cache->flush_wq = create_singlethread_workqueue("flushwq");
+
 		clear_stat(cache);
 		
 		return 0;

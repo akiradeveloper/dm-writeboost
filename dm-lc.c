@@ -34,11 +34,6 @@ retry_alloc:
 	return p;
 }
 
-void *kzalloc_retry(size_t size, gfp_t flags)
-{
-	return kmalloc_retry(size, __GFP_ZERO | flags);
-}
-
 struct part {
 	void *memory;
 };
@@ -562,7 +557,7 @@ static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, 
 	/* segment_header_device is too big to alloc in stack */
 	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO); 
 	prepare_segment_header_device(header, cache, seg);
-	void *buf = kzalloc_retry(1 << 12, GFP_NOIO);
+	void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
 	memcpy(buf, header, sizeof(*header));
 	kfree(header);
 	memcpy(writebuffer + ((1 << 20) - HEADER * (1 << 12)), buf, (1 << 12));
@@ -570,7 +565,7 @@ static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, 
 
 	struct commit_block commit;
 	commit.global_id = seg->global_id - 1;
-	void *buf_ = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf_ = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf_, &commit, sizeof(commit));
 	memcpy(writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
 	kfree(buf_);
@@ -641,7 +636,7 @@ static void queue_flushing(struct lc_cache *cache)
 	 * Pooling some numbers of 1MB buffers would do.
 	 * Or let this allocation background.
 	 */
-	cache->writebuffer = kzalloc_retry(1 << 20, GFP_NOIO);
+	cache->writebuffer = kmalloc_retry(1 << 20, GFP_NOIO);
 
 	cache->current_seg = new_seg;
 }
@@ -849,7 +844,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
 
-	void *buf = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
 
 	struct dm_io_request io_req = {
@@ -1666,7 +1661,7 @@ static void commit_seg(struct lc_cache *cache, struct segment_header *seg)
 {
 	struct commit_block commit;
 	commit.global_id = seg->global_id;
-	void *buf = kzalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &commit, sizeof(commit));
 
 	struct dm_io_request io_req = {

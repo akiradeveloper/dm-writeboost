@@ -316,7 +316,7 @@ struct lc_cache {
 	struct arr *htable;
 	size_t htsize;
 	
-	struct ht_head *null_head; /* TODO cached for performance */
+	struct ht_head *null_head;
 
 	cache_nr cursor; /* Index that has done write */
 	struct segment_header *current_seg;

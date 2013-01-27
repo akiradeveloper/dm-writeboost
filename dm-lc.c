@@ -1447,7 +1447,16 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
-	seg = arr_at(cache->segment_header_array, (update_mb_idx / NR_CACHES_INSEG));
+	/*
+	 * (Optimization)
+	 * We don't have to always compute the segment.
+	 */
+	if(refresh_segment){
+		seg = arr_at(cache->segment_header_array, (update_mb_idx / NR_CACHES_INSEG));
+	}else{
+		seg = cache->current_seg;
+	}
+
 	atomic_inc(&seg->nr_inflight_ios);
 	
 	struct metablock *new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);

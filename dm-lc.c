@@ -16,6 +16,9 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+static ulong alloc_err_count = 0;
+module_param(alloc_err_count, ulong, S_IRUGO);
+
 void *kmalloc_retry(size_t size, gfp_t flags)
 {
 	int count = 0;
@@ -24,12 +27,28 @@ void *kmalloc_retry(size_t size, gfp_t flags)
 retry_alloc:
 	p = kmalloc(size, flags);
 	if(! p){
+		alloc_err_count++;
 		count++;
-		if(count >= 5){
-			DMWARN("fail allocation(count:%d)", count);
-		}
-		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		DMERR("fail allocation(count:%d)", count);
+		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;	
+	}
+	return p;
+}
+
+void *mempool_alloc_retry(mempool_t *pool, gfp_t flags)
+{
+	int count = 0;
+	void *p;
+
+retry_alloc:
+	p = mempool_alloc(pool, flags);
+	if(! p){
+		alloc_err_count++;
+		count++;
+		DMERR("fail allocation(count:%d)", count);
+		schedule_timeout_interruptible(msecs_to_jiffies(1));
+		goto retry_alloc;
 	}
 	return p;
 }
@@ -112,6 +131,7 @@ static struct dm_io_client *lc_io_client;
 
 static ulong io_err_count = 0;
 module_param(io_err_count, ulong, S_IRUGO);
+
 struct safe_io {
 	struct work_struct work;
 	int err;
@@ -177,14 +197,13 @@ retry_io:
 	dev_t dev = region->bdev->bd_dev;
 	if(err || err_bits){
 		io_err_count++;
+
 		failed = true;
 		DMERR("io err occurs err(%d), err_bits(%lu)", err, err_bits);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
-		
+
 		count++;
-		if(count >= 5){
-			DMERR("failed io count(%d)", count);
-		}
+		DMERR("failed io count(%d)", count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));	
 		goto retry_io;
 	}
@@ -195,6 +214,8 @@ retry_io:
 	}
 }
 
+#define HEADER 2
+#define COMMIT 1
 #define NR_CACHES_INSEG 254 /* 256(1MB) - 2 (header and commit block) */
 
 typedef u8 device_id;
@@ -286,9 +307,6 @@ struct segment_header {
 #define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
 #define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
 
-#define HEADER 2
-#define COMMIT 1
-
 /* At most 4KB in total. */
 struct segment_header_device {
 	size_t global_id;	
@@ -321,6 +339,7 @@ struct lc_cache {
 	cache_nr cursor; /* Index that has done write */
 	struct segment_header *current_seg;
 	void *writebuffer; /* Preallocated buffer. 1024KB */
+	mempool_t *writebuffer_pool;
 
 	struct workqueue_struct *flush_wq; 
 
@@ -548,7 +567,7 @@ static void flush_proc(struct work_struct *work)
 
 	complete_all(&ctx->seg->flush_done);
 
-	kfree(ctx->buf);
+	mempool_free(ctx->buf, ctx->cache->writebuffer_pool);
 	kfree(ctx);
 }
 
@@ -636,7 +655,7 @@ static void queue_flushing(struct lc_cache *cache)
 	 * Pooling some numbers of 1MB buffers would do.
 	 * Or let this allocation background.
 	 */
-	cache->writebuffer = kmalloc_retry(1 << 20, GFP_NOIO);
+	cache->writebuffer = mempool_alloc_retry(cache->writebuffer_pool, GFP_NOIO);
 
 	cache->current_seg = new_seg;
 }
@@ -1735,8 +1754,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("nr_segments: %lu", cache->nr_segments);
 		DMDEBUG("nr_cache: %u", cache->nr_caches);
 		
-		mutex_init(&cache->io_lock);	
-		cache->writebuffer = kmalloc(1 << 20, GFP_KERNEL);
+		mutex_init(&cache->io_lock);
+
+		cache->writebuffer_pool = mempool_create_kmalloc_pool(16, 1 << 20);
+		cache->writebuffer = mempool_alloc(cache->writebuffer_pool, GFP_KERNEL);
 
 		init_segment_header_array(cache);	
 		DMDEBUG("init segment_array done");

@@ -36,23 +36,6 @@ retry_alloc:
 	return p;
 }
 
-void *mempool_alloc_retry(mempool_t *pool, gfp_t flags)
-{
-	int count = 0;
-	void *p;
-
-retry_alloc:
-	p = mempool_alloc(pool, flags);
-	if(! p){
-		alloc_err_count++;
-		count++;
-		DMERR("fail allocation(count:%d)", count);
-		schedule_timeout_interruptible(msecs_to_jiffies(1));
-		goto retry_alloc;
-	}
-	return p;
-}
-
 struct part {
 	void *memory;
 };
@@ -281,6 +264,12 @@ struct metablock_device {
 	u8 dirty_bits;
 };
 
+#define NR_WB_POOL 64
+struct writebuffer {
+	void *data;
+	struct completion done;
+};
+
 struct segment_header {
 	struct metablock mb_array[NR_CACHES_INSEG];
 
@@ -338,8 +327,8 @@ struct lc_cache {
 
 	cache_nr cursor; /* Index that has done write */
 	struct segment_header *current_seg;
-	void *writebuffer; /* Preallocated buffer. 1024KB */
-	mempool_t *writebuffer_pool;
+	struct writebuffer *current_wb; /* Preallocated buffer. 1024KB */
+	struct writebuffer *wb_pool;
 
 	struct workqueue_struct *flush_wq; 
 
@@ -542,7 +531,7 @@ struct flush_context {
 	struct work_struct work;
 	struct lc_cache *cache;
 	struct segment_header *seg; 
-	void *buf;
+	struct writebuffer *wb;
 };
 
 static void flush_proc(struct work_struct *work)
@@ -556,7 +545,7 @@ static void flush_proc(struct work_struct *work)
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = ctx->buf,
+		.mem.ptr.addr = ctx->wb->data,
 	};
 	struct dm_io_region region = {
 		.bdev = ctx->cache->device->bdev,	
@@ -567,7 +556,7 @@ static void flush_proc(struct work_struct *work)
 
 	complete_all(&ctx->seg->flush_done);
 
-	mempool_free(ctx->buf, ctx->cache->writebuffer_pool);
+	complete_all(&ctx->wb->done);
 	kfree(ctx);
 }
 
@@ -606,7 +595,7 @@ static void queue_flushing(struct lc_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));	
 	}
 
-	prepare_meta_writebuffer(cache->writebuffer, cache, cache->current_seg);
+	prepare_meta_writebuffer(cache->current_wb->data, cache, cache->current_seg);
 
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
@@ -614,7 +603,7 @@ static void queue_flushing(struct lc_cache *cache)
 	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
 	ctx->seg = current_seg;
-	ctx->buf = cache->writebuffer;
+	ctx->wb = cache->current_wb;
 	INIT_WORK(&ctx->work, flush_proc);
 	queue_work(cache->flush_wq, &ctx->work);
 
@@ -648,14 +637,11 @@ static void queue_flushing(struct lc_cache *cache)
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 
-	/*
-	 * (Optimization?)
-	 * Allocating contiguous 1MB space may be heavy.
-	 * It may be the order of ms that is too heavy for this module.
-	 * Pooling some numbers of 1MB buffers would do.
-	 * Or let this allocation background.
-	 */
-	cache->writebuffer = mempool_alloc_retry(cache->writebuffer_pool, GFP_NOIO);
+	struct writebuffer *next_wb = cache->wb_pool + (next_id % NR_WB_POOL);
+	wait_for_completion(&next_wb->done);
+	INIT_COMPLETION(next_wb->done);
+
+	cache->current_wb = next_wb;
 
 	cache->current_seg = new_seg;
 }
@@ -1240,7 +1226,7 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8
 			continue;
 		}
 
-		void *src = cache->writebuffer + ((offset + i) << SECTOR_SHIFT);
+		void *src = cache->current_wb->data + ((offset + i) << SECTOR_SHIFT);
 		memcpy(buf, src, 1 << SECTOR_SHIFT);
 
 		struct dm_io_request io_req = {
@@ -1531,7 +1517,7 @@ write_on_buffer:
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
 
-	memcpy(cache->writebuffer + start, data, bio->bi_size);
+	memcpy(cache->current_wb->data + start, data, bio->bi_size);
 	atomic_dec(&cache->current_seg->nr_inflight_ios);
 
 	bool sync = (bio->bi_rw & REQ_SYNC);
@@ -1756,8 +1742,18 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		
 		mutex_init(&cache->io_lock);
 
-		cache->writebuffer_pool = mempool_create_kmalloc_pool(16, 1 << 20);
-		cache->writebuffer = mempool_alloc(cache->writebuffer_pool, GFP_KERNEL);
+		cache->wb_pool = kmalloc(sizeof(struct writebuffer) * NR_WB_POOL, GFP_KERNEL);
+		struct writebuffer *wb;
+		int i;
+		for(i=0; i<NR_WB_POOL; i++){
+			wb = cache->wb_pool + i;
+			init_completion(&wb->done);
+			complete_all(&wb->done);
+
+			wb->data = kmalloc(1 << 20, GFP_KERNEL);
+		}
+		/* Select arbitrary one */
+		cache->current_wb = cache->wb_pool + 0;
 
 		init_segment_header_array(cache);	
 		DMDEBUG("init segment_array done");

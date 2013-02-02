@@ -1560,6 +1560,9 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 
 	char *cmd = argv[0];
 
+	/*
+	 * <cache-id>
+	 */
 	if(! strcasecmp(cmd, "bind_cache")){
 		unsigned cache_id;
 		if(sscanf(argv[1], "%u", &cache_id) != 1){
@@ -1573,7 +1576,7 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 }
 
 /*
- * <device-id> <cache-id>
+ * <device-id> <path>
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
@@ -1591,6 +1594,14 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	lc->id = device_id;
 
+	/*
+	 * To make this module portable across kernel versions,
+	 * we should acquire backing storage here
+	 * because version 2.6.30.1 doesn't have iterate_devices
+	 * to setup device limits later on
+	 * but setup device limits of the context when a device is got
+	 * and nothing will be done later on.
+	 */
 	struct dm_dev *dev;
 	if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 		return -EINVAL;

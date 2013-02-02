@@ -208,21 +208,17 @@ typedef u32 cache_nr;
 #define LC_NR_SLOTS 256
 u8 cache_id_ptr;
 struct lc_cache *lc_caches[LC_NR_SLOTS];
+struct lc_device {
+	bool readonly; /* TODO maybe shouldn't. */
 
-struct backing_device {
+	struct lc_cache *cache;
+
 	device_id id;
 	struct dm_dev *device;
 
 	size_t nr_dirty_caches; /* TODO */
 };
-struct backing_device *backing_tbl[LC_NR_SLOTS];
-
-struct lc_device {
-	bool readonly; /* TODO maybe shouldn't. */
-
-	struct lc_cache *cache;
-	struct backing_device *backing;
-};
+struct lc_device *lc_devices[LC_NR_SLOTS];
 
 struct ht_head {
 	struct hlist_head ht_list;
@@ -678,7 +674,7 @@ static void migrate_mb(
 		struct lc_cache *cache, struct segment_header *seg, 
 		struct metablock *mb, u8 dirty_bits, bool thread)
 {
-	struct backing_device *backing = backing_tbl[mb->device_id];
+	struct lc_device *lc = lc_devices[mb->device_id];
 
 	/* DMDEBUG("mb->idx: %u", mb->idx); */
 	/* DMDEBUG("backing id: %u", mb->device_id); */
@@ -714,7 +710,7 @@ static void migrate_mb(
 			.mem.ptr.addr = buf,
 		};
 		struct dm_io_region region_w = {
-			.bdev = backing->device->bdev,
+			.bdev = lc->device->bdev,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
@@ -755,7 +751,7 @@ static void migrate_mb(
 				.mem.ptr.addr = buf,
 			};
 			struct dm_io_region region_w = {
-				.bdev = backing->device->bdev,
+				.bdev = lc->device->bdev,
 	 			.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
@@ -1246,10 +1242,10 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8
 			.mem.ptr.addr = buf,
 		};
 
-		struct backing_device *backing = backing_tbl[mb->device_id];
+		struct lc_device *lc = lc_devices[mb->device_id];
 		sector_t dest = mb->sector + 1 * i;
 		struct dm_io_region region = {
-			.bdev = backing->device->bdev,
+			.bdev = lc->device->bdev,
 			.sector = dest,
 			.count = 1,
 		};
@@ -1307,11 +1303,18 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
 	/* DMDEBUG("bio->bi_sector: %lu", bio->bi_sector); */
 
+	struct lc_device *lc = ti->private;
+	struct dm_dev *orig = lc->device;
+
+	if(! lc->cache){
+		bio_remap(bio, orig, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
+
 	unsigned long flags;
 
 	map_context->ptr = NULL;
 
-	struct lc_device *lc = ti->private;
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
 	bool bio_fullsize = (bio_count == (1 << 3));
 	sector_t bio_offset = bio->bi_sector % (1 << 3); 
@@ -1322,13 +1325,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 
 	struct lookup_key key = {
 		.sector = calc_cache_alignment(cache, bio->bi_sector),
-		.device_id = lc->backing->id,
+		.device_id = lc->id,
 	};
 
 	cache_nr k = ht_hash(cache, &key);
 	struct ht_head *head = arr_at(cache->htable, k);
-	
-	struct dm_dev *orig = lc->backing->device;
 
 	struct segment_header *seg;
 	struct metablock *mb;
@@ -1555,6 +1556,19 @@ static int lc_end_io(struct dm_target *ti, struct bio *bio, int error, union map
 
 static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 {
+	struct lc_device *lc = ti->private;
+
+	char *cmd = argv[0];
+
+	if(! strcasecmp(cmd, "bind_cache")){
+		unsigned cache_id;
+		if(sscanf(argv[1], "%u", &cache_id) != 1){
+			return -EINVAL;
+		}
+		lc->cache = lc_caches[cache_id];
+		return 0;
+	}
+
 	return -EINVAL;
 }
 
@@ -1569,19 +1583,24 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	struct lc_device *lc = kmalloc(sizeof(*lc), GFP_KERNEL);
 
+	lc->cache = NULL;
+
 	unsigned device_id;
 	if(sscanf(argv[0], "%u", &device_id) != 1){
 		return -EINVAL;
 	}
-	lc->backing = backing_tbl[device_id];
+	lc->id = device_id;
 
-	unsigned cache_id;
-	if(sscanf(argv[1], "%u", &cache_id) != 1){
+	struct dm_dev *dev;
+	if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 		return -EINVAL;
 	}
-	lc->cache = lc_caches[cache_id];
+	lc->device = dev;
+
+	lc_devices[lc->id] = lc;
 
 	ti->private = lc;
+
 	return 0;
 }
 
@@ -1594,7 +1613,7 @@ static void lc_dtr(struct dm_target *ti)
 static int lc_merge(struct dm_target *ti, struct bvec_merge_data *bvm, struct bio_vec *biovec, int max_size)
 {
 	struct lc_device *lc = ti->private;
-	struct dm_dev *device = lc->backing->device;
+	struct dm_dev *device = lc->device;
 	struct request_queue *q = bdev_get_queue(device->bdev);
 
 	if(! q->merge_bvec_fn){
@@ -1608,7 +1627,7 @@ static int lc_merge(struct dm_target *ti, struct bvec_merge_data *bvm, struct bi
 static int lc_iterate_devices(struct dm_target *ti, iterate_devices_callout_fn fn, void *data)
 {
 	struct lc_device *lc = ti->private;
-	struct dm_dev *orig = lc->backing->device;
+	struct dm_dev *orig = lc->device;
 	sector_t start = 0;
 	sector_t len = dm_devsize(orig);
 	return fn(ti, orig, start, len, data);
@@ -1634,7 +1653,7 @@ static int lc_status(
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("%d %d", lc->backing->id, lc->cache->id);
+		DMEMIT("%d %s", lc->id, lc->device->name);
 		break;
 	}
 	return 0;
@@ -1847,43 +1866,6 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;
 	}
 
-	/*
-	 * <id> <path>
-	 * @id backing device
-	 */
-	if(! strcasecmp(cmd, "add_device")){
-		struct backing_device *b = kmalloc(sizeof(*b), GFP_KERNEL);
-		
-		unsigned id;
-		if(sscanf(argv[1], "%u", &id) != 1){
-			return -EINVAL;
-		}
-		
-		struct dm_dev *dev;
-		if(dm_get_device(ti, argv[2], dm_table_get_mode(ti->table), &dev)){
-			return -EINVAL;
-		}
-		
-		b->id = id;
-		b->device = dev;
-		backing_tbl[id] = b;
-		return 0;
-	}
-
-	/*
-	 * <id>
-	 */
-	if(! strcasecmp(cmd, "remove_device")){
-		/* TODO This version doesn't support this command. */
-		BUG();
-		bool still_remained = true;
-		if(still_remained){
-			DMERR("device can not removed. dirty cache still remained.\n");
-			return -EINVAL;
-		}
-		return 0;
-	}
-
 	return -EINVAL;
 }
 
@@ -1983,7 +1965,7 @@ static int __init lc_module_init(void)
 
 	size_t i;
 	for(i=0; i < LC_NR_SLOTS; i++){
-		backing_tbl[i] = NULL;
+		lc_devices[i] = NULL;
 	}
 	for(i=0; i < LC_NR_SLOTS; i++){
 		lc_caches[i] = NULL;	

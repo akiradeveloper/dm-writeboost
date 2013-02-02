@@ -264,6 +264,15 @@ struct metablock_device {
 	u8 dirty_bits;
 };
 
+/*
+ * We preallocate 64 * 1MB writebuffers and use them cyclically.
+ * Dynamic allocation using kmalloc results in get_free_page path
+ * that may incur page reclaim which slowdown the system.
+ * This is why we statically preallocate these buffers.
+ *
+ * The number 64, though hueristically determined, is usually enough for any workload
+ * if having cache device with sufficient sequential write throughput, say 100MB/s.
+ */
 #define NR_WB_POOL 64
 struct writebuffer {
 	void *data;

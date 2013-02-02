@@ -10,7 +10,7 @@
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/list.h>
-#include <linux/atomic.h>
+#include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include <linux/device-mapper.h>

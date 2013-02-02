@@ -275,6 +275,7 @@ struct writebuffer {
 	struct completion done;
 };
 
+#define SZ_MAX (~(size_t)0) /* renamed backport */
 struct segment_header {
 	struct metablock mb_array[NR_CACHES_INSEG];
 
@@ -1002,7 +1003,7 @@ static void recover_cache(struct lc_cache *cache)
 	size_t nr_segments = cache->nr_segments;
 
 	size_t oldest_idx = 0;
-	size_t max_id = SIZE_MAX; /* This global_id is forbidden. */
+	size_t max_id = SZ_MAX; /* This global_id is forbidden. */
 
 	struct segment_header_device *header = kmalloc(sizeof(*header), GFP_KERNEL);
 	struct commit_block commit;

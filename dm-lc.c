@@ -19,7 +19,7 @@
 static ulong alloc_err_count = 0;
 module_param(alloc_err_count, ulong, S_IRUGO);
 
-void *kmalloc_retry(size_t size, gfp_t flags, char *name)
+static void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno)
 {
 	int count = 0;
 	void *p;
@@ -29,12 +29,13 @@ retry_alloc:
 	if(! p){
 		alloc_err_count++;
 		count++;
-		DMERR("%s: fail allocation(count:%d)", name, count);
+		DMERR("L.%d: fail allocation(count:%d)", lineno, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;	
 	}
 	return p;
 }
+#define kmalloc_retry(size, flags) do_kmalloc_retry((size), (flags), __LINE__)
 
 struct part {
 	void *memory;
@@ -168,9 +169,9 @@ static int dm_safe_io(
 	return err;
 }
 
-static void dm_safe_io_retry(
+static void do_dm_safe_io_retry(
 		struct dm_io_request *io_req,
-		struct dm_io_region *region, unsigned num_regions, bool thread, char *name)
+		struct dm_io_region *region, unsigned num_regions, bool thread, int lineno)
 {
 	bool failed = false;
 	int err;
@@ -186,7 +187,7 @@ retry_io:
 		io_err_count++;
 
 		failed = true;
-		DMERR("%s: io err occurs err(%d), err_bits(%lu)", name, err, err_bits);
+		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)", lineno, err, err_bits);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 
 		count++;
@@ -196,10 +197,12 @@ retry_io:
 	}
 
 	if(failed){
-		DMINFO("%s: io has just turned fail to OK.", name);
+		DMINFO("L.%d: io has just turned fail to OK.", lineno);
 		DMINFO("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
 }
+#define dm_safe_io_retry(io_req, region, num_regions, thread) \
+	do_dm_safe_io_retry((io_req), (region), (num_regions), (thread), __LINE__)
 
 #define HEADER 2
 #define COMMIT 1
@@ -562,7 +565,7 @@ static void flush_proc(struct work_struct *work)
 		.sector = ctx->seg->start_sector,
 		.count = (1 << 11),
 	};
-	dm_safe_io_retry(&io_req, &region, 1, false, "flush_proc");
+	dm_safe_io_retry(&io_req, &region, 1, false);
 
 	complete_all(&ctx->seg->flush_done);
 
@@ -573,9 +576,9 @@ static void flush_proc(struct work_struct *work)
 static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, struct segment_header *seg)
 {
 	/* segment_header_device is too big to alloc in stack */
-	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO, "prepare_meta_writebuffer header"); 
+	struct segment_header_device *header = kmalloc_retry(sizeof(*header), GFP_NOIO);
 	prepare_segment_header_device(header, cache, seg);
-	void *buf = kmalloc_retry(1 << 12, GFP_NOIO, "prepare_meta_writebuffer header buffer");
+	void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
 	memcpy(buf, header, sizeof(*header));
 	kfree(header);
 	memcpy(writebuffer + ((1 << 20) - HEADER * (1 << 12)), buf, (1 << 12));
@@ -583,7 +586,7 @@ static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, 
 
 	struct commit_block commit;
 	commit.global_id = seg->global_id - 1;
-	void *buf_ = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO, "prepare_meta_writebuffer commit block");
+	void *buf_ = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf_, &commit, sizeof(commit));
 	memcpy(writebuffer + ((1 << 20) - COMMIT * (1 << 12)), buf_, (1 << SECTOR_SHIFT));
 	kfree(buf_);
@@ -610,7 +613,7 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
 
-	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO, "alloc flush_context");
+	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
 	ctx->cache = cache;
 	ctx->seg = current_seg;
 	ctx->wb = cache->current_wb;
@@ -691,7 +694,7 @@ static void migrate_mb(
 
 	if(dirty_bits == 255){
 		/* DMDEBUG("full migrate(dirty_bits=255)"); */
-		void *buf = kmalloc_retry(1 << 12, GFP_NOIO, "migrate_mb(full)");
+		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
 
 		struct dm_io_request io_req_r = {
 			.client = lc_io_client,
@@ -705,7 +708,7 @@ static void migrate_mb(
 			.sector = calc_mb_start_sector(seg, mb->idx),
 			.count = (1 << 3),
 		};
-		dm_safe_io_retry(&io_req_r, &region_r, 1, thread, "migrate_mb(full) read");
+		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 
 		struct dm_io_request io_req_w = {
 			.client = lc_io_client,
@@ -719,13 +722,13 @@ static void migrate_mb(
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
-		dm_safe_io_retry(&io_req_w, &region_w, 1, thread, "migrate_mb(full) write");
+		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
 		
 		kfree(buf);
 
 	}else{
 		
-		void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO, "migrate_mb(partial)");
+		void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 		size_t i;
 		for(i=0; i<8; i++){
 			/* Migrate one sector for each */
@@ -746,7 +749,7 @@ static void migrate_mb(
 				.sector = calc_mb_start_sector(seg, mb->idx) + i,
 				.count = 1,
 			};
-			dm_safe_io_retry(&io_req_r, &region_r, 1, thread, "migrate_mb(partial) read");
+			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 						
 			struct dm_io_request io_req_w = {
 				.client = lc_io_client,
@@ -760,7 +763,7 @@ static void migrate_mb(
 	 			.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
-			dm_safe_io_retry(&io_req_w, &region_w, 1, thread, "migrate_mb(partial) write");
+			dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
 		}
 		kfree(buf);
 	}
@@ -859,7 +862,7 @@ static void commit_super_block(struct lc_cache *cache)
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
 
-	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO, "commit_super_block");
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
 
 	struct dm_io_request io_req = {
@@ -874,7 +877,7 @@ static void commit_super_block(struct lc_cache *cache)
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true, "commit_super_block");
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	kfree(buf);
 }
 
@@ -893,7 +896,7 @@ static void read_superblock_device(struct superblock_device *dest, struct lc_cac
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true, "read_superblock_device");
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	memcpy(dest, buf, sizeof(*dest));
 	kfree(buf);
 }
@@ -920,7 +923,7 @@ static void read_segment_header_device(
 		.sector = calc_segment_header_start(segment_idx, HEADER),
 		.count = (1 << 3),
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true, "read_segment_header_device");
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	memcpy(dest, buf, sizeof(*dest));
 	kfree(buf);
 }
@@ -942,7 +945,7 @@ static void read_commit_block(
 		.sector = calc_segment_header_start(segment_idx, COMMIT),
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true, "read_commit_block");
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	memcpy(dest, buf, sizeof(&dest));
 	kfree(buf);
 }
@@ -1174,7 +1177,7 @@ static void format_cache_device(struct dm_dev *dev)
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req_sup, &region_sup, 1, true, "format_cache_device super");
+	dm_safe_io_retry(&io_req_sup, &region_sup, 1, true);
 	kfree(buf);
 
 	/*
@@ -1195,7 +1198,7 @@ static void format_cache_device(struct dm_dev *dev)
 			.sector = calc_segment_header_start(i, HEADER),
 			.count = (2 << 3),
 		};
-		dm_safe_io_retry(&io_req_seg, &region_seg, 1, true, "format_cache_device meta");
+		dm_safe_io_retry(&io_req_seg, &region_seg, 1, true);
 		kfree(buf);
 	}
 }
@@ -1229,7 +1232,7 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8
 {
 	sector_t offset = (mb->idx % NR_CACHES_INSEG) * (1 << 3);
 	u8 i;
-	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO, "migrate_buffered_mb");
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	for(i=0; i<8; i++){
 		bool bit_on = dirty_bits & (1 << i);
 		if(! bit_on){
@@ -1255,7 +1258,7 @@ static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8
 			.count = 1,
 		};
 
-		dm_safe_io_retry(&io_req, &region, 1, true, "migrate_buffered_mb");
+		dm_safe_io_retry(&io_req, &region, 1, true);
 	}
 	kfree(buf);
 }
@@ -1745,7 +1748,7 @@ static void commit_seg(struct lc_cache *cache, struct segment_header *seg)
 {
 	struct commit_block commit;
 	commit.global_id = seg->global_id;
-	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO, "commit_seg");
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &commit, sizeof(commit));
 
 	struct dm_io_request io_req = {
@@ -1762,7 +1765,7 @@ static void commit_seg(struct lc_cache *cache, struct segment_header *seg)
 		.sector = calc_segment_header_start(seg_idx, COMMIT),
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true, "commit_seg");
+	dm_safe_io_retry(&io_req, &region, 1, true);
 	kfree(buf);
 }
 

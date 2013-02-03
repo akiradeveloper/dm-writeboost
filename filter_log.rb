@@ -1,5 +1,3 @@
-FILE="compile.log"
-WARN="warning.log"
 OK_WORDS = [
   "warning: ISO C90 forbids mixed declarations and code",
 ]
@@ -12,12 +10,14 @@ def match(line)
 end
 
 if __FILE__ == $0
-  `echo > #{WARN}`
+  input = ARGV[0]
 
-  `cat #{FILE} | grep warning`.split("\n").each do |line|
+  arr = []
+  `cat #{input} | grep warning`.split("\n").each do |line|
     if match(line)
       next
     end
-    `echo #{line} >> #{WARN}`
+    arr << line
   end
+  $stdout << arr.join("\n")
 end

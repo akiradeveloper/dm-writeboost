@@ -151,7 +151,11 @@ static int dm_safe_io(
 			.num_regions = num_regions,
 		};
 		
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
 		INIT_WORK_ONSTACK(&io.work, safe_io_proc);
+#else
+		INIT_WORK(&io.work, safe_io_proc);
+#endif
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 		
@@ -1531,7 +1535,13 @@ write_on_buffer:
 	memcpy(cache->current_wb->data + start, data, bio->bi_size);
 	atomic_dec(&cache->current_seg->nr_inflight_ios);
 
-	bool sync = (bio->bi_rw & REQ_SYNC);
+	bool sync;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
+	sync = (bio->bi_rw & REQ_SYNC);
+#else
+	sync = bio_rw_flagged(bio, BIO_RW_SYNCIO);
+#endif
+
 	if(sync){
 		bio_remap(bio, orig, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
@@ -1576,14 +1586,36 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 	return -EINVAL;
 }
 
+static int dm_get_device_portable(struct dm_target *ti, const char *path, fmode_t mode, struct dm_dev **result)
+{
+	int r;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
+	r = dm_get_device(ti, path, mode, result);
+#else
+	/*
+	 * Only 2.6.30 uses start and len
+	 * in check_device_area
+	 * but all in all, the check is actually meaningless.
+	 */
+	r = dm_get_device(ti, path, 0, 1, mode, result);
+#endif
+	return r;
+}
+
 /*
  * <device-id> <path>
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
-	int r; 
 		
-	r = dm_set_target_max_io_len(ti, (1 << 3));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+	int r = dm_set_target_max_io_len(ti, (1 << 3));
+	if(r){
+		return r;
+	}
+#else
+	ti->split_io = (1 << 3);
+#endif
 
 	struct lc_device *lc = kmalloc(sizeof(*lc), GFP_KERNEL);
 
@@ -1604,7 +1636,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 * and nothing will be done later on.
 	 */
 	struct dm_dev *dev;
-	if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
+	if(dm_get_device_portable(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 		return -EINVAL;
 	}
 	lc->device = dev;
@@ -1636,6 +1668,7 @@ static int lc_merge(struct dm_target *ti, struct bvec_merge_data *bvm, struct bi
 	return min(max_size, q->merge_bvec_fn(q, bvm, biovec));
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
 static int lc_iterate_devices(struct dm_target *ti, iterate_devices_callout_fn fn, void *data)
 {
 	struct lc_device *lc = ti->private;
@@ -1650,10 +1683,15 @@ static void lc_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	blk_limits_io_min(limits, 512);
 	blk_limits_io_opt(limits, 4096);
 }
+#endif
 
 static int lc_status(
-		struct dm_target *ti, status_type_t type, unsigned flags,
-		char *result, unsigned int maxlen)
+		struct dm_target *ti, status_type_t type,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+		unsigned flags,
+#endif
+		char *result,
+		unsigned int maxlen)
 {
 	unsigned int sz = 0;
 
@@ -1680,10 +1718,12 @@ static struct target_type lc_target = {
 	.dtr = lc_dtr,
 	.end_io = lc_end_io,
 	.merge = lc_merge,
-	.io_hints = lc_io_hints,
-	.iterate_devices = lc_iterate_devices,
 	.message = lc_message,	
 	.status = lc_status,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,32)
+	.io_hints = lc_io_hints,
+	.iterate_devices = lc_iterate_devices,
+#endif
 };
 
 static int lc_mgr_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
@@ -1769,7 +1809,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		struct lc_cache *cache = kmalloc(sizeof(*cache), GFP_KERNEL);
 		
 		struct dm_dev *dev;	
-		if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
+		if(dm_get_device_portable(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 			return -EINVAL;
 		}
 		
@@ -1836,7 +1876,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	if(! strcasecmp(cmd, "format_cache_device")){
 		struct dm_dev *dev;
-		if(dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
+		if(dm_get_device_portable(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
 			return -EINVAL;
 		}
 		
@@ -1890,7 +1930,10 @@ static size_t calc_static_memory_consumption(struct lc_cache *cache)
 };
 
 static int lc_mgr_status(
-		struct dm_target *ti, status_type_t type, unsigned flags,
+		struct dm_target *ti, status_type_t type,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+		unsigned flags,
+#endif
 		char *result, unsigned int maxlen)
 {
 	unsigned int sz = 0;
@@ -1958,9 +2001,23 @@ static int __init lc_module_init(void)
 {
 	int r;
 	
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
+	/* cmwq. new concept. */
 	safe_io_wq = alloc_workqueue("safeiowq", WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+#else
+	/*
+	 * If the kernel doesn't support cmwq.
+	 * We get on the safe side my making workqueue single-threaded.
+	 */
+	safe_io_wq = create_singlethread_workqueue("safeiowq");
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
 	lc_io_client = dm_io_client_create();
-	
+#else
+	lc_io_client = dm_io_client_create(16 /* MIN_IOS */);
+#endif
+
 	r = dm_register_target(&lc_target);
 	if(r < 0){
 		DMERR("register lc failed %d", r);

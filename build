@@ -2,6 +2,9 @@
 
 make clean
 make 2> compile.log
-ruby filter_log.rb
+echo "" > error.log
+grep error compile.log >> error.log
+ruby filter_log.rb compile.log >> error.log
+echo "" >> error.log
 
 su

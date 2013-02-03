@@ -1607,10 +1607,12 @@ static int dm_get_device_portable(struct dm_target *ti, const char *path, fmode_
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
-	int r; 
 		
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
-	r = dm_set_target_max_io_len(ti, (1 << 3));
+	int r = dm_set_target_max_io_len(ti, (1 << 3));
+	if(r){
+		return r;
+	}
 #else
 	ti->split_io = (1 << 3);
 #endif

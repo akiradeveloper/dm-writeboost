@@ -4,7 +4,7 @@ make clean
 make 2> compile.log
 echo -n > error.log
 grep error compile.log >> error.log
-ruby filter_log.rb compile.log >> error.log
+python filter_log.py compile.log >> error.log
 echo "" >> error.log
 
 su

@@ -19,4 +19,4 @@ if __name__ == '__main__':
 	filename = sys.argv[1]
 	lines = open(filename, 'r').read().split("\n")
 	s = '\n'.join(do_filter(lines)).strip()
-	print s
+	print(s)

@@ -7,17 +7,17 @@ DCD is a logical block layer that
 converts in-coming small random writes 
 into an out-going big sequential write
 which archives high throughput and low latency.
-For more detail, please read the published papar([1]).  
+For more detail, please read the published papar [1].  
 Although the first paper was published almost 20 years ago,
 researches on DCD is still hot among researchers.
 For example, Griffin applys DCD to 
-extend the lifetime of SSD backing storage([2]).
+extend the lifetime of SSD backing storage [2].
 
 ## Features
 * DM-LC boosts the performance of storage systems. 
 * DM-LC performs 250 kiops randon write with a PCI-e SSD card. 
 * DM-LC logs write ios and is capable of crash recovery. 
-* DM-LC supports SMP that is not discussed in the original paper([1]).
+* DM-LC supports SMP that is not discussed in the original paper [1].
 
 ## Papers
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
@@ -30,4 +30,4 @@ extend the lifetime of SSD backing storage([2]).
 Akira Hayakawa(@akiradeveloper)  
 e-mail: ruby.wktk@gmail.com
 
-I love Linux kernel.
+I love linux kernel.

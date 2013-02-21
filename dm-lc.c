@@ -16,6 +16,7 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+
 static ulong alloc_err_count = 0;
 module_param(alloc_err_count, ulong, S_IRUGO);
 
@@ -212,10 +213,17 @@ typedef u8 device_id;
 typedef u8 cache_id;
 typedef u32 cache_nr;
 
+struct kobject *get_dev_kobject(struct dm_dev *device)
+{
+	return &disk_to_dev(device->bdev->bd_disk)->kobj;
+}
+
 #define LC_NR_SLOTS 256
 u8 cache_id_ptr;
 struct lc_cache *lc_caches[LC_NR_SLOTS];
 struct lc_device {
+	struct kobject kobj;
+
 	bool readonly; /* TODO maybe shouldn't. */
 
 	struct lc_cache *cache;
@@ -327,6 +335,8 @@ struct lookup_key {
 };
 
 struct lc_cache {
+	struct kobject kobj;
+
 	cache_id id;
 	struct dm_dev *device;
 	struct mutex io_lock;
@@ -357,6 +367,8 @@ struct lc_cache {
 
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
+
+	unsigned long commit_super_block_interval;
 };
 
 static void inc_stat(struct lc_cache *cache, int rw, bool found, bool on_buffer, bool fullsize)
@@ -1620,7 +1632,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->split_io = (1 << 3);
 #endif
 
-	struct lc_device *lc = kmalloc(sizeof(*lc), GFP_KERNEL);
+	struct lc_device *lc = kzalloc(sizeof(*lc), GFP_KERNEL);
 
 	lc->cache = NULL;
 
@@ -1769,9 +1781,111 @@ static void commit_seg(struct lc_cache *cache, struct segment_header *seg)
 	kfree(buf);
 }
 
+static ssize_t var_show(unsigned long var, char *page)
+{
+	return sprintf(page, "%lu\n", var);
+}
+
+static ssize_t var_store(unsigned long *var, const char *page, size_t len)
+{
+	char *p = (char *) page;
+	*var = simple_strtoul(p, &p, 10);
+	return len;
+}
+
+static struct kobject *devices_kobj;
+static struct kobject *caches_kobj;
+
+struct cache_sysfs_entry {
+	struct attribute attr;
+	ssize_t (*show)(struct lc_cache *, char *);
+	ssize_t (*store)(struct lc_cache *, const char *, size_t);
+};
+
+#define to_cache(attr) container_of((attr), struct cache_sysfs_entry, attr)
+
+static ssize_t cache_attr_show(struct kobject *kobj, struct attribute *attr, char *page)
+{
+	struct cache_sysfs_entry *entry = to_cache(attr);
+	struct lc_cache *cache =
+		container_of(kobj, struct lc_cache, kobj);
+
+	return entry->show(cache, page);
+}
+
+static ssize_t cache_attr_store(struct kobject *kobj, struct attribute *attr,
+		const char *page, size_t len)
+{
+	struct cache_sysfs_entry *entry = to_cache(attr);	
+	if(! entry->store){
+		return -EIO;
+	}
+
+	struct lc_cache *cache = container_of(kobj, struct lc_cache, kobj);
+	return entry->store(cache, page, len);	
+}
+
+static ssize_t commit_super_block_interval_show(struct lc_cache *cache, char *page)
+{
+	return var_show(cache->commit_super_block_interval, (page));
+}
+
+static ssize_t commit_super_block_interval_store(
+		struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	cache->commit_super_block_interval = x;
+	return r;
+}
+
+static struct cache_sysfs_entry commit_super_block_interval_entry = {
+	.attr = { .name = "commit_super_block_interval", .mode = S_IRUGO | S_IWUSR },
+	.show = commit_super_block_interval_show,
+	.store = commit_super_block_interval_store,
+};
+
+static struct attribute *cache_default_attrs[] = {
+	&commit_super_block_interval_entry.attr,
+	NULL,
+};
+
+static struct sysfs_ops cache_sysfs_ops = {
+	.show = cache_attr_show,
+	.store = cache_attr_store,
+};
+
+static void cache_release(struct kobject *kobj)
+{
+	DMDEBUG("cache_release");
+	return;
+}
+
+static struct kobj_type cache_ktype = {
+	.sysfs_ops = &cache_sysfs_ops,
+	.default_attrs = cache_default_attrs,
+	.release = cache_release,
+};
+
 static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	char *cmd = argv[0];
+
+	/*
+	 * <path>
+	 * @path path to the cache device
+	 */
+	if(! strcasecmp(cmd, "format_cache_device")){
+		struct dm_dev *dev;
+		if(dm_get_device_portable(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
+			return -EINVAL;
+		}
+
+		format_cache_device(dev);
+
+		dm_put_device(ti, dev);
+		return 0;
+	}
 
 	/*
 	 * <id>
@@ -1782,16 +1896,6 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			return -EINVAL;
 		}
 		cache_id_ptr = id;
-		return 0;
-	}
-
-	if(! strcasecmp(cmd, "allow_migrate")){
-		int flag;
-		if(sscanf(argv[1], "%d", &flag) != 1){
-			return -EINVAL;
-		}
-		struct lc_cache *cache = lc_caches[cache_id_ptr];
-		cache->allow_migrate = flag;
 		return 0;
 	}
 
@@ -1809,7 +1913,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	if(! strcasecmp(cmd, "resume_cache")){
 		DMDEBUG("start resume cache");
-		struct lc_cache *cache = kmalloc(sizeof(*cache), GFP_KERNEL);
+		struct lc_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 		
 		struct dm_dev *dev;	
 		if(dm_get_device_portable(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
@@ -1870,40 +1974,62 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		clear_stat(cache);
 		
+		/*
+		 * /sys/module/dm_lc/caches/$cache_id/$attribute
+		 *                                   /device -> /sys/block/$name
+		 */
+		
+		int r;
+		
+		cache->commit_super_block_interval = 0;
+		r = kobject_init_and_add(&cache->kobj, &cache_ktype, caches_kobj, "%u", cache->id);
+		
+		struct kobject *dev_kobj = get_dev_kobject(cache->device);
+		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
+		
 		return 0;
 	}
 
-	/*
-	 * <path>
-	 * @path path to the cache device
-	 */
-	if(! strcasecmp(cmd, "format_cache_device")){
-		struct dm_dev *dev;
-		if(dm_get_device_portable(ti, argv[1], dm_table_get_mode(ti->table), &dev)){
+	if(! strcasecmp(cmd, "allow_migrate")){
+		unsigned id;
+		if(sscanf(argv[1], "%u", &id) != 1){
 			return -EINVAL;
 		}
-		
-		format_cache_device(dev);
-		
-		dm_put_device(ti, dev);
-		return 0;	
+		struct lc_cache *cache = lc_caches[id];
+
+		int flag;
+		if(sscanf(argv[2], "%d", &flag) != 1){
+			return -EINVAL;
+		}
+		cache->allow_migrate = flag;
+
+		return 0;
 	}
-	
+
 	if(! strcasecmp(cmd, "commit_super_block")){
-		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		unsigned id;
+		if(sscanf(argv[1], "%u", &id) != 1){
+			return -EINVAL;
+		}
+		struct lc_cache *cache = lc_caches[id];
 		if(! cache){
 			return -EINVAL;
 		}
-		
+
 		mutex_lock(&cache->io_lock);
 		commit_super_block(cache);
 		mutex_unlock(&cache->io_lock);
-		
+
 		return 0;
 	}
 
 	if(! strcasecmp(cmd, "flush_current_buffer")){
-		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		unsigned id;
+		if(sscanf(argv[1], "%u", &id) != 1){
+			return -EINVAL;
+		}
+
+		struct lc_cache *cache = lc_caches[id];
 		if(! cache){
 			return -EINVAL;
 		}
@@ -2042,6 +2168,16 @@ static int __init lc_module_init(void)
 	for(i=0; i < LC_NR_SLOTS; i++){
 		lc_caches[i] = NULL;	
 	}
+
+	/*
+	 * /sys/module/dm_lc/devices
+	 *                  /caches
+	 */
+
+	struct module *mod = THIS_MODULE;
+	struct kobject *lc_kobj = &(mod->mkobj.kobj);
+	devices_kobj = kobject_create_and_add("devices", lc_kobj);
+	caches_kobj = kobject_create_and_add("caches", lc_kobj);
 	
 	return 0;
 }

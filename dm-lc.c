@@ -1845,8 +1845,28 @@ static struct cache_sysfs_entry commit_super_block_interval_entry = {
 	.store = commit_super_block_interval_store,
 };
 
+static ssize_t allow_migrate_show(struct lc_cache *cache, char *page)
+{
+	return var_show(cache->allow_migrate, (page));
+}
+
+static ssize_t allow_migrate_store(struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	cache->allow_migrate = x;
+	return r;
+}
+
+static struct cache_sysfs_entry allow_migrate_entry = {
+	.attr = { .name = "allow_migrate", .mode = S_IRUGO | S_IWUSR },
+	.show = allow_migrate_show,
+	.store = allow_migrate_store,
+};
+
 static struct attribute *cache_default_attrs[] = {
 	&commit_super_block_interval_entry.attr,
+	&allow_migrate_entry.attr,
 	NULL,
 };
 
@@ -1857,7 +1877,6 @@ static struct sysfs_ops cache_sysfs_ops = {
 
 static void cache_release(struct kobject *kobj)
 {
-	DMDEBUG("cache_release");
 	return;
 }
 
@@ -1990,6 +2009,9 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;
 	}
 
+	/*
+	 * TODO Purge
+	 */
 	if(! strcasecmp(cmd, "allow_migrate")){
 		unsigned id;
 		if(sscanf(argv[1], "%u", &id) != 1){
@@ -2006,6 +2028,9 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;
 	}
 
+	/*
+	 * TODO To sysfs
+	 */
 	if(! strcasecmp(cmd, "commit_super_block")){
 		unsigned id;
 		if(sscanf(argv[1], "%u", &id) != 1){
@@ -2023,6 +2048,9 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		return 0;
 	}
 
+	/*
+	 * TODO To sysfs
+	 */
 	if(! strcasecmp(cmd, "flush_current_buffer")){
 		unsigned id;
 		if(sscanf(argv[1], "%u", &id) != 1){

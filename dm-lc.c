@@ -16,6 +16,20 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+static struct kobject *devices_kobj;
+static struct kobject *caches_kobj;
+
+static ssize_t var_show(unsigned long var, char *page)
+{
+	return sprintf(page, "%lu\n", var);
+}
+
+static ssize_t var_store(unsigned long *var, const char *page, size_t len)
+{
+	char *p = (char *) page;
+	*var = simple_strtoul(p, &p, 10);
+	return len;
+}
 
 static ulong alloc_err_count = 0;
 module_param(alloc_err_count, ulong, S_IRUGO);
@@ -213,9 +227,9 @@ typedef u8 device_id;
 typedef u8 cache_id;
 typedef u32 cache_nr;
 
-struct kobject *get_dev_kobject(struct dm_dev *device)
+struct kobject *get_bd_kobject(struct block_device *bd)
 {
-	return &disk_to_dev(device->bdev->bd_disk)->kobj;
+	return &disk_to_dev(bd->bd_disk)->kobj;
 }
 
 #define LC_NR_SLOTS 256
@@ -232,6 +246,8 @@ struct lc_device {
 	struct dm_dev *device;
 
 	size_t nr_dirty_caches; /* TODO */
+	
+	struct mapped_device *md;
 };
 struct lc_device *lc_devices[LC_NR_SLOTS];
 
@@ -1616,14 +1632,91 @@ static int dm_get_device_portable(struct dm_target *ti, const char *path, fmode_
 	return r;
 }
 
+struct device_sysfs_entry {
+	struct attribute attr;
+	ssize_t (*show)(struct lc_device *, char *);
+	ssize_t (*store)(struct lc_device *, const char *, size_t);
+};
+
+#define to_device(attr) container_of((attr), struct device_sysfs_entry, attr)
+static ssize_t device_attr_show(struct kobject *kobj, struct attribute *attr, char *page)
+{
+	struct device_sysfs_entry *entry = to_device(attr);
+	struct lc_device *device =
+		container_of(kobj, struct lc_device, kobj);
+
+	return entry->show(device, page);
+}
+
+static ssize_t device_attr_store(struct kobject *kobj, struct attribute *attr, const char *page, size_t len)
+{
+	struct device_sysfs_entry *entry = to_device(attr);
+	if(! entry->store){
+		return -EIO;
+	}
+
+	struct lc_device *device = container_of(kobj, struct lc_device, kobj);
+	return entry->store(device, page, len);
+}
+
+static ssize_t cache_id_show(struct lc_device *device, char *page)
+{
+	unsigned long id;
+	if(! device->cache){
+		id = 0;
+	}else{
+		id = device->cache->id;
+	}
+	return var_show(id, (page));
+}
+
+static struct device_sysfs_entry cache_id_entry = {
+	.attr = { .name = "cache_id", .mode = S_IRUGO },
+	.show = cache_id_show,
+	/* TODO .store. Purge bind_cache */
+};
+
+static ssize_t dev_show(struct lc_device *device, char *page)
+{
+	return sprintf(page, "%s\n", dm_device_name(device->md));
+}
+
+static struct device_sysfs_entry dev_entry = {
+	.attr = { .name = "dev", .mode = S_IRUGO },
+	.show = dev_show,
+};
+
+static struct attribute *device_default_attrs[] = {
+	&cache_id_entry.attr,
+	&dev_entry.attr,
+	NULL,
+};
+
+static struct sysfs_ops device_sysfs_ops = {
+	.show = device_attr_show,
+	.store = device_attr_store,
+};
+
+static void device_release(struct kobject *kobj)
+{
+	return;
+}
+
+static struct kobj_type device_ktype = {
+	.sysfs_ops = &device_sysfs_ops,
+	.default_attrs = device_default_attrs,
+	.release = device_release,
+};
+
 /*
  * <device-id> <path>
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
-		
+	int r;
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
-	int r = dm_set_target_max_io_len(ti, (1 << 3));
+	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if(r){
 		return r;
 	}
@@ -1658,6 +1751,44 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc_devices[lc->id] = lc;
 
 	ti->private = lc;
+
+	/*
+	 * /sys/module/dm_lc/devices/$id/$atribute
+	 *                              /dev // Note
+	 *                              /device
+	 */
+
+	/*
+	 * (Note)
+	 * It is best to add symlink to /sys/block/$(this volume)
+	 * but is actually infeasible because we have no way to
+	 * get kobject from dm_target.
+	 *
+	 * dm_disk function in the header file is not actually exported,
+	 * though claimed many times,
+	 * and is no use. I don't know why but
+	 * am sure that is the problem in this case.
+	 */
+	lc->md = dm_table_get_md(ti->table);
+			
+	r = kobject_init_and_add(&lc->kobj, &device_ktype, devices_kobj, "%u", lc->id);
+	
+	struct kobject *dev_kobj = get_bd_kobject(lc->device->bdev);
+	r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
+
+	/*
+	const char *name = dm_device_name(lc->md);
+	unsigned int major, minor;
+	DMDEBUG("name:%s", name);
+
+	if(sscanf(name, "%u:%u", &major, &minor) != 1){
+		return -EINVAL;
+	}
+	dev_t _dev = MKDEV(major, minor);
+	struct block_device *bd = bdget(_dev);
+	struct kobject *lv_kobj = get_bd_kobject(bd);
+	r = sysfs_create_link(&lc->kobj, lv_kobj, "lv");
+	*/
 
 	return 0;
 }
@@ -1780,21 +1911,6 @@ static void commit_seg(struct lc_cache *cache, struct segment_header *seg)
 	kfree(buf);
 }
 
-static ssize_t var_show(unsigned long var, char *page)
-{
-	return sprintf(page, "%lu\n", var);
-}
-
-static ssize_t var_store(unsigned long *var, const char *page, size_t len)
-{
-	char *p = (char *) page;
-	*var = simple_strtoul(p, &p, 10);
-	return len;
-}
-
-static struct kobject *devices_kobj;
-static struct kobject *caches_kobj;
-
 struct cache_sysfs_entry {
 	struct attribute attr;
 	ssize_t (*show)(struct lc_cache *, char *);
@@ -1802,7 +1918,6 @@ struct cache_sysfs_entry {
 };
 
 #define to_cache(attr) container_of((attr), struct cache_sysfs_entry, attr)
-
 static ssize_t cache_attr_show(struct kobject *kobj, struct attribute *attr, char *page)
 {
 	struct cache_sysfs_entry *entry = to_cache(attr);
@@ -2056,18 +2171,18 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		clear_stat(cache);
 		
 		/*
-		 * /sys/module/dm_lc/caches/$cache_id/$attribute
-		 *                                   /device -> /sys/block/$name
+		 * /sys/module/dm_lc/caches/$id/$attribute
+		 *                             /device -> /sys/block/$name
 		 */
-		
+
 		int r;
-		
+
 		cache->commit_super_block_interval = 0;
 		r = kobject_init_and_add(&cache->kobj, &cache_ktype, caches_kobj, "%u", cache->id);
-		
-		struct kobject *dev_kobj = get_dev_kobject(cache->device);
+
+		struct kobject *dev_kobj = get_bd_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
-		
+
 		return 0;
 	}
 

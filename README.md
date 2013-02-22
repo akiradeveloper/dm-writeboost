@@ -10,14 +10,15 @@ which archives high throughput and low latency.
 For more detail, please read the published papar [1].  
 Although the first paper was published almost 20 years ago,
 researches on DCD is still hot among researchers.
-For example, Griffin applys DCD to 
+For example, Microsoft's Griffin applys DCD to 
 extend the lifetime of SSD backing storage [2].
 
 ## Features
 * DM-LC boosts the performance of storage systems. 
-* DM-LC performs 250 kiops randon write with a PCI-e SSD card. 
+* DM-LC performs 250 kiops randon writes with a fast enough cache.
 * DM-LC logs write ios and is capable of crash recovery. 
 * DM-LC supports SMP that is not discussed in the original paper [1].
+* DM-LC supports subsidiary daemon to automatically modulate the kernel module.
 
 ## Papers
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)

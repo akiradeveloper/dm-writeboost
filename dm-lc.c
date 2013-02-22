@@ -612,7 +612,6 @@ static void queue_flushing(struct lc_cache *cache)
 
 	size_t n1 = 0;
 	while(atomic_read(&current_seg->nr_inflight_ios)){
-		DMDEBUG("aaa");
 		n1++;
 		if(n1 == 100){
 			DMWARN("Too long to wait for current_seg ios to finish.");
@@ -638,7 +637,6 @@ static void queue_flushing(struct lc_cache *cache)
 	
 	size_t n2 = 0;
 	while(atomic_read(&new_seg->nr_inflight_ios)){
-		DMDEBUG("bbb");
 		n2++;
 		if(n2 == 100){
 			DMWARN("Too long to wait for new_seg ios to finish.");
@@ -870,6 +868,7 @@ struct superblock_device {
 
 static void commit_super_block(struct lc_cache *cache)
 {
+	DMDEBUG("commit_super_block");
 	struct superblock_device o;
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
@@ -1864,9 +1863,72 @@ static struct cache_sysfs_entry allow_migrate_entry = {
 	.store = allow_migrate_store,
 };
 
+static ssize_t commit_super_block_show(struct lc_cache *cache, char *page)
+{
+	return var_show(0, (page));
+}
+
+static ssize_t commit_super_block_store(struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+
+	if(x < 1){
+		return -EIO;
+	}
+
+	mutex_lock(&cache->io_lock);
+	commit_super_block(cache);
+	mutex_unlock(&cache->io_lock);
+
+	return r;
+}
+
+static struct cache_sysfs_entry commit_super_block_entry = {
+	.attr = { .name = "commit_super_block", .mode = S_IRUGO | S_IWUSR },
+	.show = commit_super_block_show,
+	.store = commit_super_block_store,
+};
+
+static ssize_t flush_current_buffer_show(struct lc_cache *cache, char *page)
+{
+	return var_show(0, (page));
+}
+
+static ssize_t flush_current_buffer_store(struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+
+	ssize_t r = var_store(&x, page, count);
+
+	if(x < 1){
+		return -EIO;
+	}
+
+	mutex_lock(&cache->io_lock);
+	struct segment_header *old_seg = cache->current_seg;
+
+	flush_current_buffer(cache);
+	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
+
+	wait_for_completion(&old_seg->flush_done);
+	commit_seg(cache, old_seg);
+	mutex_unlock(&cache->io_lock);
+
+	return r;
+}
+
+static struct cache_sysfs_entry flush_current_buffer_entry = {
+	.attr = { .name = "flush_current_buffer", .mode = S_IRUGO | S_IWUSR },
+	.show = flush_current_buffer_show,
+	.store = flush_current_buffer_store,
+};
+
 static struct attribute *cache_default_attrs[] = {
 	&commit_super_block_interval_entry.attr,
 	&allow_migrate_entry.attr,
+	&commit_super_block_entry.attr,
+	&flush_current_buffer_entry.attr,
 	NULL,
 };
 
@@ -2029,7 +2091,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	/*
-	 * TODO To sysfs
+	 * TODO Purge
 	 */
 	if(! strcasecmp(cmd, "commit_super_block")){
 		unsigned id;
@@ -2049,7 +2111,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	/*
-	 * TODO To sysfs
+	 * TODO Purge
 	 */
 	if(! strcasecmp(cmd, "flush_current_buffer")){
 		unsigned id;

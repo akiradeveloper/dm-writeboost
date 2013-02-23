@@ -404,6 +404,7 @@ struct lc_cache {
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
 
+	unsigned long update_interval;
 	unsigned long commit_super_block_interval;
 };
 
@@ -2051,6 +2052,25 @@ static struct cache_sysfs_entry force_migrate_entry = {
 	.store = force_migrate_store,
 };
 
+static ssize_t update_interval_show(struct lc_cache *cache, char *page)
+{
+	return var_show(cache->update_interval, page);
+}
+
+static ssize_t update_interval_store(struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	cache->update_interval = x;
+	return r;
+}
+
+static struct cache_sysfs_entry update_interval_entry = {
+	.attr = { .name = "update_interval", .mode = S_IRUGO | S_IWUSR },
+	.show = update_interval_show,
+	.store = update_interval_store,
+};
+
 static ssize_t commit_super_block_show(struct lc_cache *cache, char *page)
 {
 	return var_show(0, (page));
@@ -2118,6 +2138,7 @@ static struct attribute *cache_default_attrs[] = {
 	&commit_super_block_entry.attr,
 	&flush_current_buffer_entry.attr,
 	&force_migrate_entry.attr,
+	&update_interval_entry.attr,
 	NULL,
 };
 
@@ -2252,6 +2273,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		int r;
 
+		cache->update_interval = 1;
 		cache->commit_super_block_interval = 0;
 		r = kobject_init_and_add(&cache->kobj, &cache_ktype, caches_kobj, "%u", cache->id);
 

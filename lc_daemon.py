@@ -18,8 +18,8 @@ import dirnode
 
 dc = DaemonContext(
 		pidfile = PIDLockFile('/tmp/lc_daemon.pid'),
-		stdout  = open('lc_daemon_out.log', 'w'),
-		stderr  = open('lc_daemon_err.log', 'w+'))
+		stdout  = open('/var/log/lc_daemon_out.log', 'w'),
+		stderr  = open('/var/log/lc_daemon_err.log', 'w+'))
 
 class Device:
 	def __init__(self, node):

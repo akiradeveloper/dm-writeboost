@@ -227,9 +227,21 @@ typedef u8 device_id;
 typedef u8 cache_id;
 typedef u32 cache_nr;
 
-struct kobject *get_bd_kobject(struct block_device *bd)
+struct kobject *get_bdev_kobject(struct block_device *bdev)
 {
-	return &disk_to_dev(bd->bd_disk)->kobj;
+	return &disk_to_dev(bdev->bd_disk)->kobj;
+}
+
+static struct block_device *get_md_bdev(struct mapped_device *md)
+{
+	const char *name = dm_device_name(md);
+	unsigned int major, minor;
+
+	sscanf(name, "%u:%u", &major, &minor);
+	dev_t _dev = MKDEV(major, minor);
+	struct block_device *bd = bdget(_dev);
+
+	return bd;
 }
 
 #define LC_NR_SLOTS 256
@@ -239,6 +251,8 @@ struct lc_device {
 	struct kobject kobj;
 
 	bool readonly; /* TODO maybe shouldn't. */
+
+	unsigned char migrate_threshold;
 
 	struct lc_cache *cache;
 
@@ -340,7 +354,12 @@ struct segment_header_device {
 	struct metablock_device mbarr[NR_CACHES_INSEG]; 
 };
 
-/* <= 1 sector for atomicity. */
+/* 
+ * <= 1 sector for atomicity.
+ * commit block must be atomic
+ * and we assume that block storage gurantees
+ * atomicity in sector granularity.
+ */
 struct commit_block {
 	size_t global_id;
 };
@@ -375,6 +394,7 @@ struct lc_cache {
 	size_t last_flushed_segment_id;
 	size_t reserving_segment_id;
 	bool allow_migrate;
+	bool force_migrate;
 
 	struct workqueue_struct *migrate_wq;
 	struct work_struct migrate_work;
@@ -884,10 +904,10 @@ struct superblock_device {
 
 static void commit_super_block(struct lc_cache *cache)
 {
-	DMDEBUG("commit_super_block");
 	struct superblock_device o;
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
+	DMDEBUG("commit_super_block last_migrate_segment_id(%lu)", o.last_migrated_segment_id);
 
 	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
@@ -1400,7 +1420,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			bio_remap(bio, orig, bio->bi_sector);	
 			return DM_MAPIO_REMAPPED;
 		}
-		
+
 		/* Read found */
 		lockseg(seg, flags);
 		u8 dirty_bits = mb->dirty_bits;
@@ -1410,17 +1430,17 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			if(dirty_bits){
 				migrate_buffered_mb(cache, mb, dirty_bits);
 			}			
-			
+
 			/*
 			 * TODO(Comment)
 			 * Why shouldn't we cleanup segment and metablock here.
 			 */
-						
+
 			atomic_dec(&seg->nr_inflight_ios);
 			bio_remap(bio, orig, bio->bi_sector);
 			return DM_MAPIO_REMAPPED;
 		}
-		
+
 		/* Found not on buffer */
 		if(likely(dirty_bits == 255)){
 			bio_remap(bio, cache->device, 
@@ -1486,7 +1506,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			unlockseg(seg, flags);
 
 	 		ht_del(cache, mb); /* Delete the old mb from hashtable */
-			
+
 			atomic_dec(&seg->nr_inflight_ios);	
 			goto write_not_found;
 		}
@@ -1495,7 +1515,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 write_not_found:
 	;
 	bool refresh_segment = !( (cache->cursor + 1) % NR_CACHES_INSEG );
-	
+
 	/* Flushing the current buffer if needed */
 	if(refresh_segment){
 		flush_current_buffer(cache);
@@ -1515,7 +1535,7 @@ write_not_found:
 	}
 
 	atomic_inc(&seg->nr_inflight_ios);
-	
+
 	struct metablock *new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
@@ -1686,9 +1706,53 @@ static struct device_sysfs_entry dev_entry = {
 	.show = dev_show,
 };
 
+static ssize_t migrate_threshold_show(struct lc_device *device, char *page)
+{
+	return var_show(device->migrate_threshold, (page));
+}
+
+static ssize_t migrate_threshold_store(struct lc_device *device, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	device->migrate_threshold = x;
+	return r;
+}
+
+static struct device_sysfs_entry migrate_threshold_entry = {
+	.attr = { .name = "migrate_threshold", .mode = S_IRUGO | S_IWUSR },
+	.show = migrate_threshold_show,
+	.store = migrate_threshold_store,
+};
+
+static ssize_t readonly_show(struct lc_device *device, char *page)
+{
+	unsigned long val = 0;
+	if(device->readonly){
+		val = 1;
+	}
+	return var_show(val, page);
+}
+
+static ssize_t readonly_store(struct lc_device *device, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	device->readonly = x; /* FIXME need lock? */
+	return r;
+}
+
+static struct device_sysfs_entry readonly_entry = {
+	.attr = { .name = "readonly", .mode = S_IRUGO | S_IWUSR },
+	.show = readonly_show,
+	.store = readonly_store,
+};
+
 static struct attribute *device_default_attrs[] = {
 	&cache_id_entry.attr,
 	&dev_entry.attr,
+	&migrate_threshold_entry.attr,
+	&readonly_entry.attr,
 	NULL,
 };
 
@@ -1725,6 +1789,8 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 #endif
 
 	struct lc_device *lc = kzalloc(sizeof(*lc), GFP_KERNEL);
+
+	lc->migrate_threshold = 0; /* Don't migrate */
 
 	lc->cache = NULL;
 
@@ -1773,25 +1839,13 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 			
 	r = kobject_init_and_add(&lc->kobj, &device_ktype, devices_kobj, "%u", lc->id);
 	
-	struct kobject *dev_kobj = get_bd_kobject(lc->device->bdev);
+	struct kobject *dev_kobj = get_bdev_kobject(lc->device->bdev);
 	r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
-
-	/*
-	const char *name = dm_device_name(lc->md);
-	unsigned int major, minor;
-	DMDEBUG("name:%s", name);
-
-	if(sscanf(name, "%u:%u", &major, &minor) != 1){
-		return -EINVAL;
-	}
-	dev_t _dev = MKDEV(major, minor);
-	struct block_device *bd = bdget(_dev);
-	struct kobject *lv_kobj = get_bd_kobject(bd);
-	r = sysfs_create_link(&lc->kobj, lv_kobj, "lv");
-	*/
 
 	return 0;
 }
+
+
 
 static void lc_dtr(struct dm_target *ti)
 {
@@ -1978,6 +2032,25 @@ static struct cache_sysfs_entry allow_migrate_entry = {
 	.store = allow_migrate_store,
 };
 
+static ssize_t force_migrate_show(struct lc_cache *cache, char *page)
+{
+	return var_show(cache->force_migrate, page);
+}
+
+static ssize_t force_migrate_store(struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	cache->force_migrate = x;
+	return r;
+}
+
+static struct cache_sysfs_entry force_migrate_entry = {
+	.attr = { .name = "force_migrate", .mode = S_IRUGO | S_IWUSR },
+	.show = force_migrate_show,
+	.store = force_migrate_store,
+};
+
 static ssize_t commit_super_block_show(struct lc_cache *cache, char *page)
 {
 	return var_show(0, (page));
@@ -2044,6 +2117,7 @@ static struct attribute *cache_default_attrs[] = {
 	&allow_migrate_entry.attr,
 	&commit_super_block_entry.attr,
 	&flush_current_buffer_entry.attr,
+	&force_migrate_entry.attr,
 	NULL,
 };
 
@@ -2146,6 +2220,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		DMDEBUG("init htable done");
 		
 		cache->allow_migrate = false;
+		cache->force_migrate = false;
 		cache->reserving_segment_id = 0;
 		
 		cache->migrate_wq = create_singlethread_workqueue("migratewq");
@@ -2180,7 +2255,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->commit_super_block_interval = 0;
 		r = kobject_init_and_add(&cache->kobj, &cache_ktype, caches_kobj, "%u", cache->id);
 
-		struct kobject *dev_kobj = get_bd_kobject(cache->device->bdev);
+		struct kobject *dev_kobj = get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
 
 		return 0;

@@ -14,9 +14,10 @@ For example, Microsoft's Griffin applys DCD to
 extend the lifetime of SSD backing storage [2].
 
 ## Features
-* DM-LC boosts the performance of storage systems. 
+* DM-LC, unlike bcache and flashcache, supports wide-ranging kernel versions from 2.6.30 - 3.7.
+* DM-LC boosts the performance of storage systems.
 * DM-LC performs 250 kiops randon writes with a fast enough cache.
-* DM-LC logs write ios and is capable of crash recovery. 
+* DM-LC logs write ios and is capable of crash recovery.
 * DM-LC supports SMP that is not discussed in the original paper [1].
 * DM-LC supports subsidiary daemon to automatically modulate the kernel module.
 
@@ -31,4 +32,4 @@ extend the lifetime of SSD backing storage [2].
 Akira Hayakawa(@akiradeveloper)  
 e-mail: ruby.wktk@gmail.com
 
-I love linux kernel.
+I love linux kernel programming.

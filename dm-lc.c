@@ -223,8 +223,18 @@ retry_io:
 #define COMMIT 1
 #define NR_CACHES_INSEG 254 /* 256(1MB) - 2 (header and commit block) */
 
+/*
+ * device_id = 0
+ * means invalid cache block.
+ */
 typedef u8 device_id;
+
+/*
+ * cache_id = 0
+ * means no cache.
+ */
 typedef u8 cache_id;
+
 typedef u32 cache_nr;
 
 struct kobject *get_bdev_kobject(struct block_device *bdev)
@@ -232,6 +242,10 @@ struct kobject *get_bdev_kobject(struct block_device *bdev)
 	return &disk_to_dev(bdev->bd_disk)->kobj;
 }
 
+/*
+ * This roundabout is implemented
+ * since dm_disk is not exported by default.
+ */
 static struct block_device *get_md_bdev(struct mapped_device *md)
 {
 	const char *name = dm_device_name(md);
@@ -259,8 +273,8 @@ struct lc_device {
 	device_id id;
 	struct dm_dev *device;
 
-	size_t nr_dirty_caches; /* TODO */
-	
+	atomic64_t nr_dirty_caches;
+
 	struct mapped_device *md;
 };
 struct lc_device *lc_devices[LC_NR_SLOTS];
@@ -297,6 +311,18 @@ struct metablock {
 
 	device_id device_id;
 };
+
+static void inc_nr_dirty_caches(device_id id)
+{
+	struct lc_device *o = lc_devices[id];
+	atomic64_inc(&o->nr_dirty_caches);
+}
+
+static void dec_nr_dirty_caches(device_id id)
+{
+	struct lc_device *o = lc_devices[id];
+	atomic64_dec(&o->nr_dirty_caches);
+}
 
 struct metablock_device {
 	sector_t sector;
@@ -829,17 +855,23 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		lockseg(seg, flags);
 		u8 dirty_bits = mb->dirty_bits;
 		unlockseg(seg, flags);
-		
+
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
-		
+
 		migrate_mb(cache, seg, mb, dirty_bits, false); 
-		
+
+		bool b = false;
 		lockseg(seg, flags);
 		if(mb->dirty_bits){
 			cleanup_segment(seg);
 			mb->dirty_bits = 0;
+			b = true;
 		}
 		unlockseg(seg, flags);
+
+		if(b){
+			dec_nr_dirty_caches(mb->device_id);
+		}
 	}
 	if(seg->nr_dirty_caches_remained){
 		DMERR("nr_dirty_caches_remained is nonzero(%u) after migrating whole segment",
@@ -1023,6 +1055,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 		mb->device_id = mbdev->device_id;
 		mb->dirty_bits = mbdev->dirty_bits;
 		
+		inc_nr_dirty_caches(mb->device_id);
 		nr_dirties++;
 		
 		struct lookup_key key = {
@@ -1426,7 +1459,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		lockseg(seg, flags);
 		u8 dirty_bits = mb->dirty_bits;
 		unlockseg(seg, flags);
-		
+
 		if(unlikely(on_buffer)){
 			if(dirty_bits){
 				migrate_buffered_mb(cache, mb, dirty_bits);
@@ -1451,13 +1484,19 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			wait_for_completion(&seg->flush_done);
 			migrate_mb(cache, seg, mb, dirty_bits, true);
 			
+			bool b = false;
 			lockseg(seg, flags);
 			if(mb->dirty_bits){
 				cleanup_segment(seg);
 				mb->dirty_bits = 0;
+				b = true;
 			}
 			unlockseg(seg, flags);
-			
+
+			if(b){
+				dec_nr_dirty_caches(mb->device_id);
+			}
+
 			atomic_dec(&seg->nr_inflight_ios);	
 			bio_remap(bio, orig, bio->bi_sector);
 		}
@@ -1499,12 +1538,18 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			 * Fullsize dirty cache
 			 * can be discarded without migration.
 			 */
+			bool b = false;
 			lockseg(seg, flags);
 			if(mb->dirty_bits){
 				cleanup_segment(seg);
 				mb->dirty_bits = 0;
+				b = true;
 			}
 			unlockseg(seg, flags);
+
+			if(b){
+				dec_nr_dirty_caches(mb->device_id);
+			}
 
 	 		ht_del(cache, mb); /* Delete the old mb from hashtable */
 
@@ -1555,9 +1600,11 @@ write_on_buffer:
 
 	DMDEBUG("mb addr %p", mb);
 
+	bool b = false;
 	lockseg(seg, flags);
 	if(! mb->dirty_bits){
 		taint_segment(seg);
+		b = true;
 	}
 
 	if(likely(bio_fullsize)){
@@ -1579,6 +1626,10 @@ write_on_buffer:
 	BUG_ON(! mb->dirty_bits);
 
 	unlockseg(seg, flags);
+
+	if(b){
+		inc_nr_dirty_caches(mb->device_id);
+	}
 
 	size_t start = s << SECTOR_SHIFT;
 	void *data = bio_data(bio);
@@ -1749,11 +1800,23 @@ static struct device_sysfs_entry readonly_entry = {
 	.store = readonly_store,
 };
 
+static ssize_t nr_dirty_caches_show(struct lc_device *device, char *page)
+{
+	unsigned long val = atomic64_read(&device->nr_dirty_caches);
+	return var_show(val, page);
+}
+
+static struct device_sysfs_entry nr_dirty_caches_entry = {
+	.attr = { .name = "nr_dirty_caches", .mode = S_IRUGO },
+	.show = nr_dirty_caches_show,
+};
+
 static struct attribute *device_default_attrs[] = {
 	&cache_id_entry.attr,
 	&dev_entry.attr,
 	&migrate_threshold_entry.attr,
 	&readonly_entry.attr,
+	&nr_dirty_caches_entry.attr,
 	NULL,
 };
 
@@ -1790,6 +1853,8 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 #endif
 
 	struct lc_device *lc = kzalloc(sizeof(*lc), GFP_KERNEL);
+
+	atomic64_set(&lc->nr_dirty_caches, 0);
 
 	lc->migrate_threshold = 0; /* Don't migrate */
 

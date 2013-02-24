@@ -1503,8 +1503,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		return DM_MAPIO_REMAPPED;
 	}
 
-	/* TODO readonly(cache) */
-	/* TODO readonly(LV) */
+#if 0
+	if(lc->readonly){
+		return -EIO;
+	}
+#endif
 
 	DMDEBUG("write");
 
@@ -1856,7 +1859,11 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	atomic64_set(&lc->nr_dirty_caches, 0);
 
-	lc->migrate_threshold = 0; /* Don't migrate */
+	/*
+	 * EMC's book says
+	 * storage should keep disk util less than 70%.
+	 */
+	lc->migrate_threshold = 70;
 
 	lc->cache = NULL;
 
@@ -1910,8 +1917,6 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	return 0;
 }
-
-
 
 static void lc_dtr(struct dm_target *ti)
 {

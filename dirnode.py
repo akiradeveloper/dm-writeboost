@@ -9,6 +9,9 @@ from os.path import isdir, isfile, join, realpath
 
 __all__ = ['Dirnode']
 
+def path(node):
+	return node._path_
+
 class Dirnode(object):
 
 	__slots__ = ['_path_', '__dict__']
@@ -20,9 +23,6 @@ class Dirnode(object):
 			raise ValueError("%s is not a directory" % (self._path_))
 		
 		self.__dict__.update(dict.fromkeys(listdir(self._path_)))
-		
-	def path(self):
-		return self._path_
 		
 	def __repr__(self):
 		return "Dirnode(%s)" % (self._path_)
@@ -65,6 +65,7 @@ if __name__ == '__main__':
 	d = Dirnode("dstat-0.7.2")
 	print(d)
 	print(d.docs)
+	print(path(d))
 
 	for e in d:
 		print(e)

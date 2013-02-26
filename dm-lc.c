@@ -642,6 +642,8 @@ static void flush_proc(struct work_struct *work)
 	};
 	dm_safe_io_retry(&io_req, &region, 1, false);
 
+	ctx->cache->last_flushed_segment_id = ctx->seg->global_id;
+
 	complete_all(&ctx->seg->flush_done);
 
 	complete_all(&ctx->wb->done);
@@ -719,7 +721,6 @@ static void queue_flushing(struct lc_cache *cache)
 	 */
 	discard_caches_inseg(cache, new_seg);
 
-	cache->last_flushed_segment_id = current_seg->global_id;
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 
@@ -1182,12 +1183,34 @@ setup_init_segment:
 	struct segment_header *seg = get_segment_header_by_id(cache, init_segment_id);		
 	seg->global_id = init_segment_id;
 	atomic_set(&seg->nr_inflight_ios, 0);
+
+	/*
+	 * Relation Diagram:
+	 * [  seg0  ][  seg1  ][  seg2  ][  seg3  ]
+	 *                      current
+	 *            flushed
+	 *            migrated
+	 *  migrated? migrated? migrated? migrated? <- sup.last_migrate_segment_id
+	 */
 	
 	cache->last_flushed_segment_id = seg->global_id - 1;
 
+	/*
+	 * lastly migrated is at least the same segment
+	 * with index (last_flushed_segment_id % nr_segments).
+	 */
 	cache->last_migrated_segment_id = 
 		cache->last_flushed_segment_id > cache->nr_segments ?
 		cache->last_flushed_segment_id - cache->nr_segments : 0;
+	
+	/*
+	 * last_migrate_segment_id can be updated
+	 * by sup.last_migrate_segment_id
+	 * that may be greater than current cache->last_migrated_segment_id.
+	 */
+	if(sup.last_migrated_segment_id > cache->last_migrated_segment_id){
+		cache->last_migrated_segment_id = sup.last_migrated_segment_id;
+	}
 
 	wait_for_migration(cache, seg->global_id);
 

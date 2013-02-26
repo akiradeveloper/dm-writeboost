@@ -15,7 +15,7 @@ extend the lifetime of SSD backing storage [2].
 
 ## Features
 * DM-LC, unlike bcache, is a complete loadable kernel module.
-* DM-LC, unlike bcache, flashcache and EnhanceIO, supports wide-ranging kernel versions from 2.6.30 - 3.7.
+* DM-LC supports kernel versions since 3.4 LTS.
 * DM-LC boosts the performance of storage systems.
 * DM-LC offloads write ios to cache.
 * DM-LC performs 250 kiops random writes with a fast enough cache.

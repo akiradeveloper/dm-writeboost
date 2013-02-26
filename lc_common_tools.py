@@ -48,20 +48,9 @@ class Device:
 class Cache:
 	def __init__(self, cache_id):
 		self.cache_id = cache_id
-
-	def flush_current_buffer(self):
-		os.system("echo 1 > /sys/module/dm_lc/caches/%d/flush_current_buffer" % (self.cache_id))
-
-	def start_migration(self):
-		os.system("echo 1 > /sys/module/dm_lc/caches/%d/allow_migrate" % (self.cache_id))
-		
-	def stop_migration(self):
-		os.system("echo 0 > /sys/module/dm_lc/caches/%d/allow_migrate" % (self.cache_id))
-		
-	def commit_super_block(self):		
-		os.system("echo 1 > /sys/module/dm_lc/caches/%d/commit_super_block" % (self.cache_id))
-		
-		
+		self.lc_node = Dirnode("/sys/module/dm_lc/caches/%d/" % (self.cache_id))
+		self.last_flushed_segment_id = 0
+			
 def table():
 
 	self.t = {}

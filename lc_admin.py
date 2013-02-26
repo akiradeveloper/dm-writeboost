@@ -24,6 +24,7 @@ class Admin(cmd.Cmd):
 			device.unlock()
 			return
 			
+		# FIXME
 		os.system("echo %d > /sys/module/dm_lc/devices/%d/cache_id" % (cache_id, device_id))
 		device.unlock()
 		
@@ -48,6 +49,7 @@ class Admin(cmd.Cmd):
 				print("could not detach the device. %d caches are still dirty remained." % (device.nr_dirty_caches()))
 				time.sleep(1)	
 				
+			# FIXME	
 			os.system("echo 0 > /sys/module/dm_lc/devices/%d/cache_id" % (device_id))		
 		except KeyboardInterrupt:		
 			pass

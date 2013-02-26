@@ -1415,6 +1415,18 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	struct lc_device *lc = ti->private;
 	struct dm_dev *orig = lc->device;
 
+	/*
+	 * We only discard the backing storage.
+	 * 1. 3.4 kernel doesn't support split_discard_requests.
+	 *    Hence, it is close to impossible to discard blocks on cache.
+	 * 2. Discarding the blocks on cache is meaningless.
+	 *    Because they will be overwritten.
+	 */
+	if(bio->bi_rw & REQ_DISCARD){
+		bio_remap(bio, orig, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
+
 	if(! lc->cache){
 		bio_remap(bio, orig, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
@@ -1431,6 +1443,21 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	int rw = bio_data_dir(bio);
 
 	struct lc_cache *cache = lc->cache;
+
+	/*
+	 * We may have a strong assumption that the
+	 * bio with REQ_FLUSH is empty.
+	 */
+	if(bio->bi_rw & REQ_FLUSH){
+		mutex_lock(&cache->io_lock);
+		queue_current_buffer(cache);
+		mutex_unlock(&cache->io_lock);
+		
+		/* FIXME REQ_FLUSH the cache */
+		
+		bio_remap(bio, orig, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
 
 	struct lookup_key key = {
 		.sector = calc_cache_alignment(cache, bio->bi_sector),
@@ -1607,16 +1634,6 @@ write_not_found:
 
 write_on_buffer:
 	
-	/*
-	 * We should flush before put io into buffer.
-	 * REQ_FLUSH means flushing preceding caches.
-	 */
-	if(bio->bi_rw & REQ_FLUSH){
-		mutex_lock(&cache->io_lock);
-		queue_current_buffer(cache);
-		mutex_unlock(&cache->io_lock);
-	}
-
 	DMDEBUG("The idx to buffer write. update_mb_idx: %u", update_mb_idx);
 	/* DMDEBUG("bio_count: %u", bio_count); */
 
@@ -1865,7 +1882,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc->migrate_threshold = 70;
 
 	lc->readonly = false;
-
+	
 	lc->cache = NULL;
 
 	unsigned device_id;
@@ -1883,6 +1900,11 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc_devices[lc->id] = lc;
 
 	ti->private = lc;
+
+	ti->num_flush_requests = 1;
+
+	ti->num_discard_requests = 1;
+	ti->discard_zeroes_data_unsupported = true;
 
 	/*
 	 * /sys/module/dm_lc/devices/$id/$atribute

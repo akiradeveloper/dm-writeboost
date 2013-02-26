@@ -1085,7 +1085,12 @@ static void recover_cache(struct lc_cache *cache)
 	struct superblock_device sup;
 	read_superblock_device(&sup, cache);
 
+	/*
+	 * FIXME
+	 * Is this line needed?
+	 */
 	cache->last_migrated_segment_id = sup.last_migrated_segment_id;
+
 	DMDEBUG("recover. last_migrated_segment_id: %lu", cache->last_migrated_segment_id);
 
 	size_t i;
@@ -1187,7 +1192,7 @@ setup_init_segment:
 	/*
 	 * Relation Diagram:
 	 * [  seg0  ][  seg1  ][  seg2  ][  seg3  ]
-	 *                      current
+	 *                      current(seg)
 	 *            flushed
 	 *            migrated
 	 *  migrated? migrated? migrated? migrated? <- sup.last_migrate_segment_id

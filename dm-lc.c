@@ -1523,7 +1523,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		return DM_MAPIO_REMAPPED;
 	}
 
-#if 0
 	if(lc->readonly){
 		mutex_unlock(&cache->io_lock);	
 		if(found){
@@ -1531,7 +1530,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}
 		return -EIO;
 	}
-#endif
 
 	DMDEBUG("write");
 
@@ -1597,16 +1595,7 @@ write_not_found:
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
 	update_mb_idx = cache->cursor; /* Update the new metablock */
 
-	/*
-	 * (Optimization)
-	 * We don't have to always compute the segment.
-	 */
-	if(refresh_segment){
-		seg = arr_at(cache->segment_header_array, (update_mb_idx / NR_CACHES_INSEG));
-	}else{
-		seg = cache->current_seg;
-	}
-
+	seg = cache->current_seg;
 	atomic_inc(&seg->nr_inflight_ios);
 
 	struct metablock *new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
@@ -1617,9 +1606,19 @@ write_not_found:
 	mb = new_mb;
 
 write_on_buffer:
+	
+	/*
+	 * We should flush before put io into buffer.
+	 * REQ_FLUSH means flushing preceding caches.
+	 */
+	if(bio->bi_rw & REQ_FLUSH){
+		mutex_lock(&cache->io_lock);
+		queue_current_buffer(cache);
+		mutex_unlock(&cache->io_lock);
+	}
+
 	DMDEBUG("The idx to buffer write. update_mb_idx: %u", update_mb_idx);
 	/* DMDEBUG("bio_count: %u", bio_count); */
-	BUG_ON(! bio_count);
 
 	/* Update the buffer element */
 	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;
@@ -1662,12 +1661,9 @@ write_on_buffer:
 	void *data = bio_data(bio);
 
 	memcpy(cache->current_wb->data + start, data, bio->bi_size);
-	atomic_dec(&cache->current_seg->nr_inflight_ios);
+	atomic_dec(&seg->nr_inflight_ios);
 
-	bool sync;
-	sync = (bio->bi_rw & REQ_SYNC);
-
-	if(sync){
+	if(bio->bi_rw & REQ_FUA){
 		bio_remap(bio, orig, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}

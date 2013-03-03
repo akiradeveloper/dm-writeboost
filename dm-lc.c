@@ -253,7 +253,8 @@ static struct block_device *get_md_bdev(struct mapped_device *md)
 	return bd;
 }
 
-#define LC_NR_SLOTS 256
+#define LC_NR_SLOTS 64
+
 u8 cache_id_ptr;
 struct lc_cache *lc_caches[LC_NR_SLOTS];
 struct lc_device {
@@ -326,7 +327,7 @@ struct metablock_device {
 	u8 dirty_bits;
 
 	u8 color;
-};
+} __attribute__((packed));
 
 /*
  * We preallocate 64 * 1MB writebuffers and use them cyclically.
@@ -377,7 +378,7 @@ struct segment_header_device {
 	size_t global_id;	
 	u8 length;
 	u8 color; /* 0 or 1. 0 initially */
-};
+} __attribute__((packed));
 
 struct lookup_key {
 	device_id device_id;
@@ -926,7 +927,7 @@ static void wait_for_migration(struct lc_cache *cache, size_t id)
 
 struct superblock_device {
 	size_t last_migrated_segment_id;
-};
+} __attribute__((packed));
 
 static void commit_super_block(struct lc_cache *cache)
 {

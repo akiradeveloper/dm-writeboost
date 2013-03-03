@@ -372,6 +372,18 @@ struct segment_header {
 #define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
 #define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
 
+u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
+{
+	u8 r;
+
+	unsigned long flags;
+	lockseg(seg, flags);
+	r = mb->dirty_bits;	
+	unlockseg(seg, flags);
+
+	return r;
+}
+
 /* At most 4KB in total. */
 struct segment_header_device {
 	struct metablock_device mbarr[NR_CACHES_INSEG]; 
@@ -414,6 +426,11 @@ struct lc_cache {
 
 	struct workqueue_struct *migrate_wq;
 	struct work_struct migrate_work;
+
+	wait_queue_head_t migrate_wait_queue;
+	atomic_t migrate_count;
+	bool migrate_dests[LC_NR_SLOTS];
+	void *migrate_buffer;
 
 	bool readonly; /* TODO */
 
@@ -751,7 +768,7 @@ static void queue_flushing(struct lc_cache *cache)
 }
 
 static void migrate_mb(
-		struct lc_cache *cache, struct segment_header *seg, 
+		struct lc_cache *cache, struct segment_header *seg,
 		struct metablock *mb, u8 dirty_bits, bool thread)
 {
 	struct lc_device *lc = lc_devices[mb->device_id];
@@ -841,28 +858,151 @@ static void migrate_mb(
 	}
 }
 
+static void migrate_endio(unsigned long error, void *__context)
+{
+	struct lc_cache *cache = __context;
+	
+	if(error){
+		return;
+	}
+
+	if(atomic_dec_and_test(&cache->migrate_count)){
+		wake_up_interruptible(&cache->migrate_wait_queue);
+	}
+}
+
 static void migrate_whole_segment(struct lc_cache *cache, struct segment_header *seg)
 {
+	DMDEBUG("migrate_whole_segment. nr_dirty_caches_remained: %u", count_dirty_caches_remained(seg));
+
+	struct dm_io_request io_req_r = {
+		.client = lc_io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = cache->migrate_buffer,
+	};
+	struct dm_io_region region_r = {
+		.bdev = cache->device->bdev,
+		.sector = seg->start_sector,
+		.count = (seg->length + 1) << 3,
+	};
+	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
+	
+migrate_write:
+	;
 	unsigned long flags;
+	struct metablock *mb;
+	u8 i, j;
 
-	DMDEBUG("nr_dirty_caches_remained: %u", count_dirty_caches_remained(seg));
+	atomic_set(&cache->migrate_count, 0);
 
-	cache_nr i;
+	for(i=0; i<LC_NR_SLOTS; i++){
+		*(cache->migrate_dests + i) = false;
+	}
+
+	for(i=0; i<seg->length; i++){
+		mb = seg->mb_array + i;	
+		
+		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+
+		if(! dirty_bits){
+			continue;
+		}
+		
+		*(cache->migrate_dests + mb->device_id) = true;
+		
+		if(dirty_bits == 255){
+			atomic_inc(&cache->migrate_count);
+			continue;
+		}
+
+		for(j=0; j<8; j++){
+			if(dirty_bits & (1 << j)){
+				atomic_inc(&cache->migrate_count);
+			}
+		}
+	}
+
+	DMDEBUG("count:%u", atomic_read(&cache->migrate_count));
+
+	struct lc_device *lc;
 	for(i=0; i<seg->length; i++){
 		/* DMDEBUG("idx: %u", idx); */
-		struct metablock *mb = seg->mb_array + i;
+		mb = seg->mb_array + i;
+		lc = lc_devices[mb->device_id];
 		
-		lockseg(seg, flags);
-		u8 dirty_bits = mb->dirty_bits;
-		unlockseg(seg, flags);
-
+		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+		
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
+		
+		if(! dirty_bits){
+			continue;
+		}
+		
+		sector_t base = (1 + i) << 3;
+		
+		if(dirty_bits == 255){
+			struct dm_io_request io_req_w = {
+				.client = lc_io_client,
+				.bi_rw = WRITE,
+				.notify.fn = migrate_endio,
+				.notify.context = cache,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = (void *)(base << SECTOR_SHIFT),
+			};
+			struct dm_io_region region_w = {
+				.bdev = lc->device->bdev,
+				.sector = mb->sector,
+				.count = (1 << 3),
+			};
+			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
+			continue;
+		}
+		
+		for(j=0; j<8; j++){
+			
+			if(! (dirty_bits & (1 << j))){
+				continue;
+			}
 
-		migrate_mb(cache, seg, mb, dirty_bits, false); 
+			struct dm_io_request io_req_w = {
+				.client = lc_io_client,
+				.bi_rw = WRITE,
+				.notify.fn = migrate_endio,
+				.notify.context = cache,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = (void *)((base + j) << SECTOR_SHIFT),
+			};
+			struct dm_io_region region_w = {
+				.bdev = lc->device->bdev,
+				.sector = mb->sector + j,
+				.count = 1,
+			};
+			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
+		}
+	}
+
+	int remained_jiffies = 0;
+	remained_jiffies = wait_event_interruptible_timeout(
+			cache->migrate_wait_queue, atomic_read(&cache->migrate_count) == 0, 
+			msecs_to_jiffies(10000) /* 10 seconds. Long enough */);
+
+	if(! remained_jiffies){
+		DMERR("migrate failed. some writebacks failed. redo.");
+		goto migrate_write;
+	}
+	
+	BUG_ON(atomic_read(&cache->migrate_count));
+
+	DMDEBUG("length:%u", seg->length);
+	for(i=0; i<seg->length; i++){
+		mb = seg->mb_array + i;		
 
 		bool b = false;
 		lockseg(seg, flags);
 		if(mb->dirty_bits){
+			DMDEBUG("clean mb");
 			mb->dirty_bits = 0;
 			b = true;
 		}
@@ -871,6 +1011,15 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		if(b){
 			dec_nr_dirty_caches(mb->device_id);
 		}
+	}
+
+	for(i=1; i<LC_NR_SLOTS; i++){
+		bool b = *(cache->migrate_dests + i);
+		if(! b){
+			continue;	
+		}
+		lc = lc_devices[i];
+		blkdev_issue_flush(lc->device->bdev, GFP_NOIO, NULL);
 	}
 }
 
@@ -1456,9 +1605,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}
 
 		/* Read found */
-		lockseg(seg, flags);
-		u8 dirty_bits = mb->dirty_bits;
-		unlockseg(seg, flags);
+		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
 
 		if(unlikely(on_buffer)){
 
@@ -1523,9 +1670,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			goto write_on_buffer;
 		}else{
 			
-			lockseg(seg, flags);
-			u8 dirty_bits = mb->dirty_bits;
-			unlockseg(seg, flags);
+			u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
 			
 			/*
 			 * First clean up the previous cache.
@@ -2300,9 +2445,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->reserving_segment_id = 0;
 		
 		cache->migrate_wq = create_singlethread_workqueue("migratewq");
-
 		INIT_WORK(&cache->migrate_work, migrate_proc);
 		queue_work(cache->migrate_wq, &cache->migrate_work);
+		
+		init_waitqueue_head(&cache->migrate_wait_queue);
+		atomic_set(&cache->migrate_count, 0);
+		cache->migrate_buffer = kmalloc(1 << 20, GFP_KERNEL);
 
 		recover_cache(cache);
 		DMDEBUG("recover cache done");

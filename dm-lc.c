@@ -940,16 +940,19 @@ migrate_write:
 			continue;
 		}
 		
-		sector_t base = (1 + i) << 3;
+		unsigned long diff = ((1 + i) << 3) << SECTOR_SHIFT;
+		void *base = cache->migrate_buffer + diff;
 		
+		void *addr;
 		if(dirty_bits == 255){
+			addr = base;
 			struct dm_io_request io_req_w = {
 				.client = lc_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
 				.notify.context = cache,
 				.mem.type = DM_IO_KMEM,
-				.mem.ptr.addr = (void *)(base << SECTOR_SHIFT),
+				.mem.ptr.addr = addr,
 			};
 			struct dm_io_region region_w = {
 				.bdev = lc->device->bdev,
@@ -962,17 +965,19 @@ migrate_write:
 		
 		for(j=0; j<8; j++){
 			
-			if(! (dirty_bits & (1 << j))){
+			bool b = dirty_bits & (1 << j);
+			if(! b){
 				continue;
 			}
 
+			addr = base + (j << SECTOR_SHIFT);
 			struct dm_io_request io_req_w = {
 				.client = lc_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
 				.notify.context = cache,
 				.mem.type = DM_IO_KMEM,
-				.mem.ptr.addr = (void *)((base + j) << SECTOR_SHIFT),
+				.mem.ptr.addr = addr,
 			};
 			struct dm_io_region region_w = {
 				.bdev = lc->device->bdev,

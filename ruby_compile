@@ -1,7 +1,8 @@
 #!/bin/sh
 
 mkfs.xfs -f /dev/mapper/perflv 
-mount /dev/mapper/perflv /mnt/perflv
+OPTIONS=-o nobarrier
+mount ${OPTIONS} /dev/mapper/perflv /mnt/perflv
 rm -rf /mnt/perflv/*
 cd /mnt/perflv
 RUBY=ruby-1.9.3-p362

@@ -4,7 +4,7 @@ filename=/dev/mapper/perflv
 
 #loops=4
 #size=32m
-runtime=1800
+runtime=60
 iodepth=32
 ioengine=libaio
 

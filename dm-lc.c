@@ -253,7 +253,8 @@ static struct block_device *get_md_bdev(struct mapped_device *md)
 	return bd;
 }
 
-#define LC_NR_SLOTS 256
+#define LC_NR_SLOTS 64
+
 u8 cache_id_ptr;
 struct lc_cache *lc_caches[LC_NR_SLOTS];
 struct lc_device {
@@ -326,7 +327,7 @@ struct metablock_device {
 	u8 dirty_bits;
 
 	u8 color;
-};
+} __attribute__((packed));
 
 /*
  * We preallocate 64 * 1MB writebuffers and use them cyclically.
@@ -354,7 +355,7 @@ struct segment_header {
 	 */
 	size_t global_id;
 
-	u8 nr_dirty_caches_remained; /* <= NR_CACHES_INSEG */
+	u8 length; /* Log length. <= NR_CACHES_INSEG */
 
 	cache_nr start_idx; /* const */
 	sector_t start_sector; /* const */
@@ -375,9 +376,9 @@ struct segment_header {
 struct segment_header_device {
 	struct metablock_device mbarr[NR_CACHES_INSEG]; 
 	size_t global_id;	
-	u8 nr_dirty_caches_remained;
+	u8 length;
 	u8 color; /* 0 or 1. 0 initially */
-};
+} __attribute__((packed));
 
 struct lookup_key {
 	device_id device_id;
@@ -560,7 +561,7 @@ static void init_segment_header_array(struct lc_cache *cache)
 		seg->start_idx = NR_CACHES_INSEG * segment_idx;
 		seg->start_sector = ((segment_idx % nr_segments) + 1) * (1 << 11);
 		
-		seg->nr_dirty_caches_remained = 0;
+		seg->length = 0;
 		
 		atomic_set(&seg->nr_inflight_ios, 0);
 		
@@ -589,8 +590,22 @@ static u8 calc_segment_color(struct lc_cache *cache, size_t segment_id)
 
 static sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx)
 {
-	size_t i = (mb_idx % NR_CACHES_INSEG) + 1;
-	return seg->start_sector + (1 << 3) * i;
+	size_t k = 1 + (mb_idx % NR_CACHES_INSEG);
+	return seg->start_sector + (k << 3);
+}
+
+static u8 count_dirty_caches_remained(struct segment_header *seg)
+{
+	u8 count = 0;
+	u8 i;
+	struct metablock *mb;
+	for(i=0; i<seg->length; i++){
+		mb = seg->mb_array + i;
+		if(mb->dirty_bits){
+			count++;
+		}
+	}
+	return count;
 }
 
 static void prepare_segment_header_device(
@@ -598,14 +613,25 @@ static void prepare_segment_header_device(
 		struct lc_cache *cache, struct segment_header *src)
 {
 	dest->global_id = src->global_id;
-	dest->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
+	dest->length = src->length;
 	dest->color = calc_segment_color(cache, src->global_id);
 
-	DMDEBUG("Left: %u, Right: %u", src->nr_dirty_caches_remained, (cache->cursor) % NR_CACHES_INSEG);
-	BUG_ON(src->nr_dirty_caches_remained != (cache->cursor % NR_CACHES_INSEG));
+	/*
+	 * FIXME BUG (255, 254) by mishandling REQ_FLUSH.
+	 * If src->length is 0. left is 255.
+	 * We should also adjust cache->cursor to 0.
+	 *
+	 * cursor++;
+	 * length = 1;
+	 * which is like the segment at the initialization.
+	 */
+	u8 left = src->length - 1;
+	u8 right = (cache->cursor) % NR_CACHES_INSEG;
+	DMDEBUG("left: %u, right: %u", left, right);
+	BUG_ON(left != right);
 
 	cache_nr i;
-	for(i=0; i<src->nr_dirty_caches_remained; i++){
+	for(i=0; i<src->length; i++){
 		struct metablock *mb = src->mb_array + i;
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		mbdev->device_id = mb->device_id;
@@ -639,7 +665,7 @@ static void flush_proc(struct work_struct *work)
 	struct dm_io_region region = {
 		.bdev = ctx->cache->device->bdev,	
 		.sector = ctx->seg->start_sector,
-		.count = (ctx->seg->nr_dirty_caches_remained + 1) << 3,
+		.count = (ctx->seg->length + 1) << 3,
 	};
 	dm_safe_io_retry(&io_req, &region, 1, false);
 
@@ -667,7 +693,7 @@ static void queue_flushing(struct lc_cache *cache)
 {
 	struct segment_header *current_seg = cache->current_seg;
 
-	DMDEBUG("flush current segment. seg->nr_dirty_caches_remained: %u", current_seg->nr_dirty_caches_remained);
+	DMDEBUG("flush current segment. nr_dirty_caches_remained: %u", count_dirty_caches_remained(current_seg));
 
 	size_t n1 = 0;
 	while(atomic_read(&current_seg->nr_inflight_ios)){
@@ -703,20 +729,17 @@ static void queue_flushing(struct lc_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
-	if(new_seg->nr_dirty_caches_remained){
-		DMDEBUG("new_seg->nr_dirty_caches_remained: %u", new_seg->nr_dirty_caches_remained);
+	u8 nr_new = count_dirty_caches_remained(new_seg);
+	if(nr_new){
+		DMDEBUG("new_seg->nr_dirty_caches_remained: %u", nr_new);
 		BUG();
 	}
 
-	/*
-	 * FIXME? Is this truely needed?
-	 * I don't think so.
-	 * This code is too be on the safe side.
-	 */
 	discard_caches_inseg(cache, new_seg);
 
 	/* Set the cursor to the last of the flushed segment. */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
+	new_seg->length = 0;
 
 	struct writebuffer *next_wb = cache->wb_pool + (next_id % NR_WB_POOL);
 	wait_for_completion(&next_wb->done);
@@ -725,20 +748,6 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->current_wb = next_wb;
 
 	cache->current_seg = new_seg;
-}
-
-static void taint_segment(struct segment_header *seg)
-{
-	DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
-	BUG_ON(seg->nr_dirty_caches_remained == NR_CACHES_INSEG); /* will overflow */
-	seg->nr_dirty_caches_remained++;
-}
-
-static void cleanup_segment(struct segment_header *seg)
-{
-	/* DMDEBUG("cleanup segment id: %lu", seg->global_id); */
-	DMDEBUG("seg->nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
-	seg->nr_dirty_caches_remained--;
 }
 
 static void migrate_mb(
@@ -836,9 +845,10 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 {
 	unsigned long flags;
 
-	DMDEBUG("nr_dirty_caches_remained: %u", seg->nr_dirty_caches_remained);
+	DMDEBUG("nr_dirty_caches_remained: %u", count_dirty_caches_remained(seg));
+
 	cache_nr i;
-	for(i=0; i<NR_CACHES_INSEG; i++){
+	for(i=0; i<seg->length; i++){
 		/* DMDEBUG("idx: %u", idx); */
 		struct metablock *mb = seg->mb_array + i;
 		
@@ -853,7 +863,6 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		bool b = false;
 		lockseg(seg, flags);
 		if(mb->dirty_bits){
-			cleanup_segment(seg);
 			mb->dirty_bits = 0;
 			b = true;
 		}
@@ -862,11 +871,6 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 		if(b){
 			dec_nr_dirty_caches(mb->device_id);
 		}
-	}
-	if(seg->nr_dirty_caches_remained){
-		DMERR("nr_dirty_caches_remained is nonzero(%u) after migrating whole segment",
-				seg->nr_dirty_caches_remained);
-		BUG();
 	}
 }
 
@@ -923,7 +927,7 @@ static void wait_for_migration(struct lc_cache *cache, size_t id)
 
 struct superblock_device {
 	size_t last_migrated_segment_id;
-};
+} __attribute__((packed));
 
 static void commit_super_block(struct lc_cache *cache)
 {
@@ -1001,20 +1005,17 @@ static void read_segment_header_device(
 static void update_by_segment_header_device(struct lc_cache *cache, struct segment_header_device *src)
 {
 	struct segment_header *seg = get_segment_header_by_id(cache, src->global_id);
-	seg->nr_dirty_caches_remained = src->nr_dirty_caches_remained;
-
-	DMDEBUG("update by segment heaader. nr_dirty_caches_remained: %u, (id=%lu)", src->nr_dirty_caches_remained, src->global_id);
+	seg->length = src->length;
 
 	INIT_COMPLETION(seg->migrate_done);
 
 	/* Update in-memory structures */
 	cache_nr i;
-
-	u8 nr_dirties = 0;
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		struct metablock *mb = seg->mb_array + i;
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
+		
 		if(! mbdev->dirty_bits){
 			DMDEBUG("update. ignore mb(clean), idx: %u", mb->idx);
 			continue;
@@ -1025,7 +1026,6 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 		mb->dirty_bits = mbdev->dirty_bits;
 		
 		inc_nr_dirty_caches(mb->device_id);
-		nr_dirties++;
 		
 		struct lookup_key key = {
 			.device_id = mb->device_id,
@@ -1041,18 +1041,13 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 		}
 		ht_register(cache, head, &key, mb);	
 	}
-
-	if(seg->nr_dirty_caches_remained != nr_dirties){
-		DMERR("nr_dirty_caches_remained inconsistent, nr_dirty_caches_remained: %u, nr_dirties : %u", 
-				seg->nr_dirty_caches_remained, nr_dirties);
-	}
 }
 
 static bool checkup_atomicity(struct segment_header_device *header)
 {
 	size_t i;
 	struct metablock_device *o;
-	for(i=0; i<header->nr_dirty_caches_remained; i++){
+	for(i=0; i<header->length; i++){
 		o = header->mbarr + i;
 		if(o->color != header->color){
 			return false;
@@ -1178,9 +1173,6 @@ setup_init_segment:
 	wait_for_migration(cache, seg->global_id);
 
 	discard_caches_inseg(cache, seg);
-	seg->nr_dirty_caches_remained = 0;	
-
-	cache->current_seg = seg;
 
 	/*
 	 * cursor is set to the first element of the segment.
@@ -1188,6 +1180,9 @@ setup_init_segment:
 	 * I believe this is the simplest principle to implement.
 	 */
 	cache->cursor = seg->start_idx;
+	seg->length = 1;	
+
+	cache->current_seg = seg;
 	DMDEBUG("recover. current seg id: %lu, cursor: %u", seg->global_id, cache->cursor);
 }
 
@@ -1284,11 +1279,14 @@ static sector_t calc_cache_alignment(struct lc_cache *cache, sector_t bio_sector
 
 static void migrate_buffered_mb(struct lc_cache *cache, struct metablock *mb, u8 dirty_bits)
 {
-	sector_t offset = (mb->idx % NR_CACHES_INSEG) * (1 << 3);
+	u8 k = 1 + (mb->idx % NR_CACHES_INSEG);
+	sector_t offset = (k << 3);
+
 	u8 i;
 	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	for(i=0; i<8; i++){
 		bool bit_on = dirty_bits & (1 << i);
+		
 		if(! bit_on){
 			continue;
 		}
@@ -1353,7 +1351,6 @@ static void queue_current_buffer(struct lc_cache *cache)
 	DMDEBUG("wait for flushing id: %lu", next_id);
 	wait_for_completion(&next_seg->flush_done);
 	
-	DMDEBUG("wait for migration id: %lu", next_id);
 	wait_for_migration(cache, next_id);
 
 	DMDEBUG("queue flushing id: %lu", cache->current_seg->global_id);
@@ -1464,6 +1461,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		unlockseg(seg, flags);
 
 		if(unlikely(on_buffer)){
+
 			if(dirty_bits){
 				migrate_buffered_mb(cache, mb, dirty_bits);
 			}			
@@ -1490,7 +1488,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			bool b = false;
 			lockseg(seg, flags);
 			if(mb->dirty_bits){
-				cleanup_segment(seg);
 				mb->dirty_bits = 0;
 				b = true;
 			}
@@ -1549,7 +1546,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			bool b = false;
 			lockseg(seg, flags);
 			if(mb->dirty_bits){
-				cleanup_segment(seg);
 				mb->dirty_bits = 0;
 				b = true;
 			}
@@ -1568,6 +1564,10 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 
 write_not_found:
 	;
+	
+	/*
+	 * If cache->cursor is 254, 509, ...
+	 */
 	bool refresh_segment = !( (cache->cursor + 1) % NR_CACHES_INSEG );
 
 	/* Flushing the current buffer if needed */
@@ -1595,14 +1595,15 @@ write_on_buffer:
 
 	/* Update the buffer element */
 	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;
-	sector_t s = (1 << 3) * (idx_inseg + 1); 
+	sector_t s = (idx_inseg + 1) << 3; 
 
 	DMDEBUG("mb addr %p", mb);
 
 	bool b = false;
 	lockseg(seg, flags);
 	if(! mb->dirty_bits){
-		taint_segment(seg);
+		seg->length++;
+		BUG_ON(seg->length >  NR_CACHES_INSEG);
 		b = true;
 	}
 
@@ -1858,7 +1859,8 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	ti->private = lc;
 
-	ti->num_flush_requests = 1;
+	/* ti->num_flush_requests = 1; */
+	ti->num_flush_requests = 0;
 
 	ti->num_discard_requests = 1;
 	ti->discard_zeroes_data_unsupported = true;

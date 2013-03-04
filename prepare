@@ -3,9 +3,10 @@
 . ./config
 
 modprobe dm-mod
-insmod ${LC_ROOT}/dm-lc.ko
 
-dmsetup create lc-mgr --table "0 1 lc-mgr"
+cd Driver
+make install
+cd ..
 
 size=`blockdev --getsize ${BACKING}`
 dmsetup create perflv --table "0 ${size} lc 1 ${BACKING}"

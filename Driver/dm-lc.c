@@ -1165,6 +1165,8 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 
 	/* Update in-memory structures */
 	cache_nr i;
+	
+	/* FIXME i < src->length ? */
 	for(i=0; i<NR_CACHES_INSEG; i++){
 		struct metablock *mb = seg->mb_array + i;
 		

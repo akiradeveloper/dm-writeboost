@@ -1,3 +1,5 @@
+#!/usr/bin/env/ python
+
 import cmd
 import os
 import time
@@ -13,7 +15,13 @@ class Admin(cmd.Cmd):
 		
 	def do_EOF(self, arg):
 		return True
+
+	def do_remove(self, arg):
+		pass # TODO
 		
+	def help_remove(self):		
+		pass # TODO
+	
 	def do_attach(self, arg):
 		device_id, cache_id = list(map(int, arg.split()))
 		device = tools.Device(device_id)
@@ -29,8 +37,7 @@ class Admin(cmd.Cmd):
 		device.unlock()
 		
 	def help_attach(self):
-		print("Attach a Device to a Cache.")
-		print("Usage: attach [device_id] [cache_id]")
+		print("attach [device_id] [cache_id]")
 		
 	def do_detach(self, arg):
 		device_id = int(arg)
@@ -57,10 +64,9 @@ class Admin(cmd.Cmd):
 		device.unlock()
 		
 	def help_detach(self):
-		print("Detach a Device from a Cache")
-		print("Usage: detach [device_id]") 
+		print("detach [device_id]") 
 		
-	def do_readonly(self, arg):
+	def do_ro(self, arg):
 		device_id, b = list(map(int, arg.split()))
 		device = tools.Device(device_id)
 		
@@ -68,15 +74,11 @@ class Admin(cmd.Cmd):
 		os.system("echo %d > /sys/module/dm_lc/devices/%d/readonly" % (b, device_id))
 		device.unlock()
 		
-	def help_readonly(self):
-		print("Set device enable/disable to make the cache dirtier")
-		print("Usage: readonly [device_id] [bool]")
+	def help_ro(self):
+		print("ro [device_id] [1/0]")
 		
 	def do_quit(self, arg):
 		sys.exit(1)
-		
-	def help_quit(self):
-		print("Quit this admin program.")
 		
 	do_q = do_quit
 

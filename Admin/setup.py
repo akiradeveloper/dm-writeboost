@@ -7,7 +7,7 @@ setup(
 	author = 'Akira Hayakawa',
 	author_email = 'ruby.wktk@gmail.com',
 	packages = ['lc_admin'],
-	script = [
+	scripts = [
 		'bin/lc-create',
 		'bin/lc-format-cache',
 		'bin/lc-admin',

@@ -1,1 +1,15 @@
-#!/usr/bin/env/ python
+#!/usr/bin/env python
+
+from argparse import ArgumentParser
+
+parser = ArgumentParser()
+
+parser.add_argument('path')
+parser.add_argument("--buffersize", type=int, default='11')
+# parser.add_argument("--nobarrier", action="store_true", default=False)
+
+args = parser.parse_args()
+
+print(args.nobarrier)
+
+os.system("dmsetup message lc-mgr 0 format_cache_device %s %d" % (args.path, args.buffersize))

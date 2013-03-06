@@ -2,10 +2,11 @@
 
 import cmd
 import os
+import commands
 import time
 import sys
 
-import lc_common_tools as tools
+import lc_admin.tools as tools
 
 class Admin(cmd.Cmd):
 
@@ -15,13 +16,29 @@ class Admin(cmd.Cmd):
 		
 	def do_EOF(self, arg):
 		return True
+	
+	def do_resume(self, arg):
+		cache_id, path = arg.split()
+		os.system("dmsetup message lc-mgr 0 switch_to %s" % (cache_id))
+		os.system("dmsetup message lc-mgr 0 resume_cache %s" % (path))
+
+	def help_resume(self):
+		print("cache_id path")
+
+	def do_create(self, arg):
+		name, device_id, path = arg.split()
+		size=commands.getoutput("blockdevv --getsize $s" % (path))
+		os.system("dmsetup create %s --table \"0 %s\" lc %s %s" % (name, size, device_id, path))
+		
+	def help_create(self):
+		print("name device_id path")
 
 	def do_remove(self, arg):
 		pass # TODO
 		
 	def help_remove(self):		
 		pass # TODO
-	
+
 	def do_attach(self, arg):
 		device_id, cache_id = list(map(int, arg.split()))
 		device = tools.Device(device_id)
@@ -32,12 +49,12 @@ class Admin(cmd.Cmd):
 			device.unlock()
 			return
 			
-		# FIXME
+		# FIXME use lc_ctr
 		os.system("echo %d > /sys/module/dm_lc/devices/%d/cache_id" % (cache_id, device_id))
 		device.unlock()
 		
 	def help_attach(self):
-		print("attach [device_id] [cache_id]")
+		print("device_id cache_id")
 		
 	def do_detach(self, arg):
 		device_id = int(arg)
@@ -64,7 +81,7 @@ class Admin(cmd.Cmd):
 		device.unlock()
 		
 	def help_detach(self):
-		print("detach [device_id]") 
+		print("device_id") 
 		
 	def do_ro(self, arg):
 		device_id, b = list(map(int, arg.split()))
@@ -75,7 +92,7 @@ class Admin(cmd.Cmd):
 		device.unlock()
 		
 	def help_ro(self):
-		print("ro [device_id] [1/0]")
+		print("device_id bool")
 		
 	def do_quit(self, arg):
 		sys.exit(1)

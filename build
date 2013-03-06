@@ -5,8 +5,8 @@ make clean
 make 2> compile.log # TODO
 echo -n > error.log
 grep error compile.log >> error.log
-python filterlog.py compile.log >> error.log
+python filter_log.py compile.log >> error.log
 echo "" >> error.log
 cd ..
 
-su
+#su

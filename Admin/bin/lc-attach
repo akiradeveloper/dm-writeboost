@@ -1,0 +1,23 @@
+#!/usr/bin/env python
+
+from argparse import ArgumentParser
+import sys
+
+parser = ArgumentParser()
+
+parser.add_argument("--nobarrier", action="store_true", default=False)
+parser.add_argument('device_id', required=True)
+parser.add_argument('cache_id', required=True)
+
+args = parser.parse_args()
+
+device = tools.Device(device_id)
+		
+device.lock()
+if(device.cache_id()):		
+	device.unlock()
+	sys.exit("cache already attached.")
+			
+# FIXME use lc_ctr
+os.system("echo %d > /sys/module/dm_lc/devices/%d/cache_id" % (cache_id, device_id))
+device.unlock()

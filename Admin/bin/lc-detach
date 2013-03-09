@@ -30,9 +30,11 @@ try:
 	os.system("dmsetup message %s 0 remove_sysfs" % (device.dm_name()))
 	os.system("echo 0 %d lc %d %s 0 | dmsetup reload %s" % 
 			(device.size(), device_id, device.backing.path(), device.dm_name()))
+
+	device.unlock()
 	os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
 	
 except KeyboardInterrupt:
-	pass
+	device.unlock()
+	sys.exit()
 
-device.unlock()

@@ -1987,7 +1987,10 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	lc->migrate_threshold = 70;
 	lc->readonly = false;
+
 	atomic64_set(&lc->nr_dirty_caches, 0);
+	atomic64_inc(&lc->nr_dirty_caches);
+	atomic64_dec(&lc->nr_dirty_caches);
 	
 	unsigned device_id;
 	if(sscanf(argv[0], "%u", &device_id) != 1){
@@ -2049,7 +2052,6 @@ static void lc_dtr(struct dm_target *ti)
 	
 	dm_put_device(ti, lc->device);
 
-	lc_devices[lc->id] = NULL;
 	ti->private = NULL;
 	kfree(lc);
 	DMDEBUG("lc_dtr end");
@@ -2081,11 +2083,12 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 		kobject_del(&lc->kobj);
 		kobject_put(&lc->kobj);
 		
+		lc_devices[lc->id] = NULL;
+		
 		/* kobject_uevent(&lc->kobj, KOBJ_REMOVE); */
 		return 0;
 	}
 
-	BUG();
 	return -EINVAL;
 }
 

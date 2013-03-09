@@ -26,7 +26,8 @@ if(device.cache_id()):
 	device.unlock()
 	sys.exit("cache already attached.")
 			
-command = "echo 0 %d lc %d %s %d | dmsetup load %s" % (device.size(), device_id, device.backing.path(), cache_id, device.dm_name())
+# Note changed. load -> reload
+command = "echo 0 %d lc %d %s %d | dmsetup reload %s" % (device.size(), device_id, device.backing.path(), cache_id, device.dm_name())
 print("attach command: %s" % (command))
 
 remove_command = "dmsetup message %s 0 remove_sysfs" % (device.dm_name())
@@ -34,7 +35,8 @@ print(remove_command)
 
 os.system(remove_command)
 os.system(command)
-time.sleep(3)
-os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
-
 device.unlock()
+
+#time.sleep(3)
+#os.system("wait") # will deadlock????
+os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))

@@ -14,9 +14,9 @@ For example, Microsoft's Griffin applys DCD to
 extend the lifetime of SSD backing storage [2].
 
 ## Features
-* DM-LC, unlike caotic bcache, is a complete loadable kernel module.
+* DM-LC, unlike bcache, is a complete loadable kernel module.
 * DM-LC supports kernel versions since 3.4 LTS. 
-* DM-LC supports flush/FUA operations. 
+* DM-LC supports flush/FUA operations to become a complete logical volume.
 * DM-LC boosts storage systems.
 * DM-LC offloads write ios to cache and alleviate the pain of the RAID-ed backing store.
 * DM-LC performs 250 kiops random writes with a fast enough cache.

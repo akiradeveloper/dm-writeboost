@@ -16,7 +16,7 @@ from daemon.pidfile import PIDLockFile
 import time
 import psutil
 
-import dirnode
+import lc_admin.dirnode as dirnode
 import lc_admin.tools as tools
 
 dc = DaemonContext(
@@ -27,11 +27,11 @@ dc = DaemonContext(
 class Daemon:
 	
 	def __init__(self):
-		t = tools.table()
+		self.t = tools.table()
 			
 	def update_migrate_state(self, cache_id):
 		cache = tools.Cache(cache_id)
-		intvl = int(cache.update_interval)
+		intvl = cache.update_interval()
 		t = int(time.time())	
 		
 		if (t % intvl):
@@ -43,11 +43,11 @@ class Daemon:
 			
 			device.backing.update(intvl)
 			
-			thes = int(device.migrate_threshold)
+			thes = device.migrate_threshold()
 			if device.backing.util > thes:
 				b = False
 				
-		if int(cache.lc_node.force_migrate):
+		if cache.force_migrate():
 			b = True
 				
 		if b:		
@@ -61,15 +61,15 @@ class Daemon:
 
 	def should_flush_buffer(self, cache):
 		t = int(time.time())
-		intvl = int(cache.lc_node.flush_current_buffer_interval)
+		intvl = cache.flush_current_buffer_interval()
 		if not intvl:
 			return False
 
 		if(t % intvl):
 			return False
 
-		current_val = int(cache.lc_node.last_flushed_segment_id)
-		b = (current_val != cache.last_flushed_segment_id)
+		current_val = cache.last_flushed_segment_id()
+		b = (current_val == cache.last_flushed_segment_id)
 		cache.last_flushed_segment_id = current_val
 		return b
 
@@ -83,7 +83,7 @@ class Daemon:
 
 	def should_commit_super_block(self, cache):
 		t = int(time.time())
-		intvl = int(cache.lc_node.commit_super_block_interval)
+		intvl = cache.commit_super_block_interval()
 		if not intvl:
 			return False
 

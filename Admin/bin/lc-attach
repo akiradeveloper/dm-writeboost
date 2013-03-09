@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 from argparse import ArgumentParser
 
 import lc_admin.tools as tools
@@ -10,10 +11,13 @@ import lc_admin.tools as tools
 parser = ArgumentParser()
 
 #parser.add_argument("--nobarrier", action="store_true", default=False)
-parser.add_argument('device_id')
-parser.add_argument('cache_id')
+parser.add_argument('device_id', type=int)
+parser.add_argument('cache_id', type=int)
 
 args = parser.parse_args()
+
+device_id = args.device_id
+cache_id = args.cache_id
 
 device = tools.Device(device_id)
 		
@@ -22,6 +26,15 @@ if(device.cache_id()):
 	device.unlock()
 	sys.exit("cache already attached.")
 			
-# FIXME use lc_ctr
-os.system("echo %d > /sys/module/dm_lc/devices/%d/cache_id" % (cache_id, device_id))
+command = "echo 0 %d lc %d %s %d | dmsetup load %s" % (device.size(), device_id, device.backing.path(), cache_id, device.dm_name())
+print("attach command: %s" % (command))
+
+remove_command = "dmsetup message %s 0 remove_sysfs" % (device.dm_name())
+print(remove_command)
+
+os.system(remove_command)
+os.system(command)
+time.sleep(3)
+os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
+
 device.unlock()

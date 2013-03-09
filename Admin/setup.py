@@ -9,7 +9,10 @@ setup(
 	packages = ['lc_admin'],
 	scripts = [
 		'bin/lc-create',
+		'bin/lc-attach',
+		'bin/lc-detach',
 		'bin/lc-format-cache',
+		'bin/lc-resume-cache',
 		'bin/lc-admin',
 		'bin/lc-daemon',
 	]

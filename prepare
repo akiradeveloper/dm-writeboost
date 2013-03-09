@@ -6,15 +6,15 @@ modprobe dm-mod
 
 cd Driver
 make install
-cd ..
+cd -
 
-size=`blockdev --getsize ${BACKING}`
-dmsetup create perflv --table "0 ${size} lc 1 ${BACKING}"
+cd Admin
+python setup.py install
+cd -
 
-dmsetup message lc-mgr 0 switch_to 0
-dmsetup message lc-mgr 0 format_cache_device ${CACHE}
+lc-create perflv 1 ${BACKING}
+lc-format-cache ${CACHE}
+lc-resume-cache 1 ${CACHE}
+lc-attach 1 1
 
-dmsetup message lc-mgr 0 switch_to 1
-dmsetup message lc-mgr 0 resume_cache ${CACHE}
-
-dmsetup message perflv 0 bind_cache 1
+lc-daemon start

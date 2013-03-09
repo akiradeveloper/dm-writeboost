@@ -5,9 +5,9 @@ import sys
 
 parser = ArgumentParser()
 
-parser.add_argument("--nobarrier", action="store_true", default=False)
-parser.add_argument('device_id', required=True)
-parser.add_argument('cache_id', required=True)
+#parser.add_argument("--nobarrier", action="store_true", default=False)
+parser.add_argument('device_id')
+parser.add_argument('cache_id')
 
 args = parser.parse_args()
 

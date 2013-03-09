@@ -14,7 +14,7 @@ clean:
 	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) clean
 	
 install:
-	modprobe dm-lc.ko
+	insmod dm-lc.ko
 	dmsetup create lc-mgr --table "0 1 lc-mgr"
 
 uninstall:

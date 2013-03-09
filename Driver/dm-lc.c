@@ -16,6 +16,9 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+#define LC_SEGMENTSIZE_ORDER 11 /* (1 << x) sector */
+#define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1) 
+
 static struct kobject *devices_kobj;
 static struct kobject *caches_kobj;
 
@@ -216,8 +219,6 @@ retry_io:
 #define dm_safe_io_retry(io_req, region, num_regions, thread) \
 	do_dm_safe_io_retry((io_req), (region), (num_regions), (thread), __LINE__)
 
-#define NR_CACHES_INSEG 255 /* 256(1MB) - 1 (header) */
-
 /*
  * device_id = 0
  * means invalid cache block.
@@ -253,7 +254,10 @@ static struct block_device *get_md_bdev(struct mapped_device *md)
 	return bd;
 }
 
-#define LC_NR_SLOTS 64
+#define LC_NR_SLOTS ((1 << 8) - 1)
+
+/* #define LC_NR_SLOTS 256 */
+/* #define LC_NR_SLOTS 64 */
 
 u8 cache_id_ptr;
 struct lc_cache *lc_caches[LC_NR_SLOTS];
@@ -386,10 +390,12 @@ u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
 
 /* At most 4KB in total. */
 struct segment_header_device {
-	struct metablock_device mbarr[NR_CACHES_INSEG]; 
+	/* --- at most512 byte ---*/
 	size_t global_id;	
 	u8 length;
 	u8 color; /* 0 or 1. 0 initially */
+	/* -----------------------*/
+	struct metablock_device mbarr[NR_CACHES_INSEG]; /* This array must locate at the tail */
 } __attribute__((packed));
 
 struct lookup_key {
@@ -889,19 +895,25 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	};
 	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
 	
+	
 migrate_write:
 	;
+	DMDEBUG("migrate_white");
 	unsigned long flags;
 	struct metablock *mb;
 	u8 i, j;
 
 	atomic_set(&cache->migrate_count, 0);
 
+	DMDEBUG("reset migrte_dests");
 	for(i=0; i<LC_NR_SLOTS; i++){
+		DMDEBUG("i:%u", i);
 		*(cache->migrate_dests + i) = false;
+		/* *(cache->migrate_dests + i) = 0; */
 	}
 
 	for(i=0; i<seg->length; i++){
+		DMDEBUG("setup migrte_dests and migrate_count i:%u", i);
 		mb = seg->mb_array + i;	
 		
 		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
@@ -911,6 +923,7 @@ migrate_write:
 		}
 		
 		*(cache->migrate_dests + mb->device_id) = true;
+		/* *(cache->migrate_dests + mb->device_id) = 1; */
 		
 		if(dirty_bits == 255){
 			atomic_inc(&cache->migrate_count);
@@ -1167,7 +1180,7 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	cache_nr i;
 	
 	/* FIXME i < src->length ? */
-	for(i=0; i<NR_CACHES_INSEG; i++){
+	for(i=0; i<src->length; i++){
 		struct metablock *mb = seg->mb_array + i;
 		
 		struct metablock_device *mbdev = &src->mbarr[i];
@@ -1966,7 +1979,7 @@ static struct kobj_type device_ktype = {
 };
 
 /*
- * <device-id> <path>
+ * <device-id> <path> TODO <begin> <cache-id> <support_barrier>
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {

@@ -17,7 +17,7 @@ import time
 import psutil
 
 import dirnode
-import lc_common_tools as tools
+import lc_admin.tools as tools
 
 dc = DaemonContext(
 		pidfile = PIDLockFile('/tmp/lc_daemon.pid'),
@@ -69,7 +69,7 @@ class Daemon:
 			return False
 
 		current_val = int(cache.lc_node.last_flushed_segment_id)
-		b = (current_val == cache.last_flushed_segment_id)
+		b = (current_val != cache.last_flushed_segment_id)
 		cache.last_flushed_segment_id = current_val
 		return b
 

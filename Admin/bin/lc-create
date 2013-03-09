@@ -4,19 +4,20 @@ from argparse import ArgumentParser
 
 parser = ArgumentParser()
 
-parser.add_argument('--overwrite', help="overwrite the table of a existing dm device")
+#parser.add_argument('--overwrite', help="overwrite the table of a existing dm device")
 
 parser.add_argument('name')
 parser.add_argument('device_id', type=int)
-parser.add_argument('path', type=int, nargs='?', default='null')
+parser.add_argument('path')
 
 args = parser.parse_args()
 
-if not args.overwrite:
-	size=commands.getoutput("blockdevv --getsize $s" % (args.path))
-	os.system("dmsetup create %s --table \"0 %d\" lc %d %s" % (args.name, size, args.device_id, args.path))
+#if not args.overwrite:
+size=int(commands.getoutput("blockdev --getsize $s" % (args.path)))
+os.system("dmsetup create %s --table \"0 %d\" lc %d %s" % 
+		(args.name, size, args.device_id, args.path))
 
-sys.exit("not support")
+#sys.exit("not support")
 
 # TODO (overwrite)
 

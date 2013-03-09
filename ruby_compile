@@ -1,7 +1,7 @@
 #!/bin/sh
 
 mkfs.xfs -f /dev/mapper/perflv 
-OPTIONS=-o nobarrier
+OPTIONS="-o nobarrier"
 mount ${OPTIONS} /dev/mapper/perflv /mnt/perflv
 rm -rf /mnt/perflv/*
 cd /mnt/perflv

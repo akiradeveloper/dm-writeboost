@@ -28,9 +28,18 @@ class Daemon:
 	
 	def __init__(self):
 		self.t = tools.table()
+		self.devices = {}
+		self.caches = {}
+		
+		for cache_id in self.t.keys():
+			for device_id in self.t[cache_id]:
+				self.devices[device_id] = tools.Device(device_id)
+			if not cache_id:		
+				continue
+			self.caches[cache_id] = tools.Cache(cache_id)
 			
 	def update_migrate_state(self, cache_id):
-		cache = tools.Cache(cache_id)
+		cache = self.caches[cache_id]
 		intvl = cache.update_interval()
 		t = int(time.time())	
 		
@@ -39,7 +48,7 @@ class Daemon:
 			
 		b = True
 		for device_id in self.t[cache_id]:
-			device = tools.Device(device_id)
+			device = self.devices[device_id]
 			
 			device.backing.update(intvl)
 			
@@ -49,12 +58,18 @@ class Daemon:
 				b = False
 				
 		if cache.force_migrate():
+			print("force migrate")
 			b = True
 				
+		print("allow migrarte?")		
 		if b:		
-			cache.lc_node.allow_migrate = 1
+			print("yes")
+			# cache.lc_node.allow_migrate = 1
+			dirnode.write(cache.lc_node, "allow_migrate", 1)
 		else:
-			cache.lc_node.allow_migrate = 0
+			print("no")
+			# cache.lc_node.allow_migrate = 0
+			dirnode.write(cache.lc_node, "allow_migrate", 0)
 
 	def modulate_migration(self):
 		for cache_id in self.t.keys():		
@@ -80,12 +95,13 @@ class Daemon:
 		for cache_id in self.t.keys():
 			if not cache_id:
 				continue
-			cache = tools.Cache(cache_id)
+			cache = self.caches[cache_id]
 			if not self.should_flush_buffer(cache):
 				continue
 			
 			print("flush buffer (t:%d)" % (int(time.time())))
-			cache.lc_node.flush_current_buffer = 1
+			# cache.lc_node.flush_current_buffer = 1
+			dirnode.write(cache.lc_node, "flush_current_buffer", 1)
 		return
 
 	def should_commit_super_block(self, cache):
@@ -103,12 +119,13 @@ class Daemon:
 		for cache_id in self.t.keys():
 			if not cache_id:
 				continue
-			cache = tools.Cache(cache_id)
+			cache = self.caches[cache_id]
 			if not self.should_commit_super_block(cache):
 				continue
 			
 			print("commit super block (t:%d)" % (int(time.time())))
-			cache.lc_node.commit_super_block = 1
+			# cache.lc_node.commit_super_block = 1
+			dirnode.write(cache.lc_node, "commit_super_block", 1)
 		return
 
 	def loop(self):

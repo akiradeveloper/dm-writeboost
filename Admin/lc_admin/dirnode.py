@@ -4,10 +4,17 @@ dirnode.py
 Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
 """
 
-from os import listdir
+import os
 from os.path import isdir, isfile, join, realpath, basename
 
 __all__ = ['Dirnode']
+
+def system(command):
+	print(command)
+	os.system(command)
+
+def write(node, member, val):
+	system("echo %s > %s\/%s" % (str(val), node._path_, member))
 
 def name(node):
 	return basename(node._path_)
@@ -22,7 +29,7 @@ class Dirnode(object):
 		if not isdir(self._path_):
 			raise ValueError("%s is not a directory" % (self._path_))
 		
-		self.__dict__.update(dict.fromkeys(listdir(self._path_)))
+		self.__dict__.update(dict.fromkeys(os.listdir(self._path_)))
 		
 	def __repr__(self):
 		return "Dirnode(%s)" % (self._path_)
@@ -32,6 +39,7 @@ class Dirnode(object):
 			return object.__setattribute__(self, name, val)
 		
 		path = realpath(join(self._path_, name))
+		print("write val(%s) to path(%s)" % (str(val), path))
 		
 		if isfile(path):
 			with open(path, 'w') as fp:
@@ -59,7 +67,7 @@ class Dirnode(object):
 		return getattr(self, name)
 
 	def __iter__(self):
-		return iter(listdir(self._path_))
+		return iter(os.listdir(self._path_))
 
 if __name__ == '__main__':
 	d = Dirnode("dstat-0.7.2")

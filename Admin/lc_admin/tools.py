@@ -14,13 +14,20 @@ class Backing:
 		return "/dev/%s" % (dirnode.name(self.block_node))
 		
 	def update(self, interval):	
+		print("backing update interval:%d" % (interval))
 		name = dirnode.name(self.block_node)
 		data_new = psutil.disk_io_counters(perdisk=True)[name]
 		
+		print(self.data_old)
+		
 		if self.data_old:	
+			print("compute new util. new, old")
+			print(data_new)
+			print(self.data_old)
 			diff_r = data_new.read_time - self.data_old.read_time
 			diff_w = data_new.write_time - self.data_old.write_time
 			self.util = 100 * float(diff_r + diff_w) / (interval * 1000)
+			print("computed util %d" % (self.util))
 		
 		self.data_old = data_new
 
@@ -63,7 +70,7 @@ class Device:
 class Cache:
 	def __init__(self, cache_id):
 		self.cache_id = cache_id
-		self.lc_node = dirnode.Dirnode("/sys/module/dm_lc/caches/%d/" % (self.cache_id))
+		self.lc_node = dirnode.Dirnode("/sys/module/dm_lc/caches/%d" % (self.cache_id))
 		self.last_flushed_segment_id_cached = 0
 		
 	def update_interval(self):

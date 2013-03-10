@@ -22,7 +22,7 @@ extend the lifetime of SSD backing storage [2].
 * DM-LC performs 250 kiops random writes with a fast enough cache.
 * DM-LC logs write ios and is capable of crash recovery.
 * DM-LC supports SMP that is not discussed in the original paper [1].
-* DM-LC supports subsidiary daemon to automatically modulate the kernel module.
+* DM-LC supports subsidiary daemon to automatically modulate the kernel module like migrating dirty caches during idle time.
 
 ## References
 

@@ -1826,27 +1826,6 @@ static int lc_end_io(struct dm_target *ti, struct bio *bio, int error, union map
 	return 0;
 }
 
-static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
-{
-	struct lc_device *lc = ti->private;
-
-	char *cmd = argv[0];
-
-	/*
-	 * <cache-id>
-	 */
-	if(! strcasecmp(cmd, "bind_cache")){
-		unsigned cache_id;
-		if(sscanf(argv[1], "%u", &cache_id) != 1){
-			return -EINVAL;
-		}
-		lc->cache = lc_caches[cache_id];
-		return 0;
-	}
-
-	return -EINVAL;
-}
-
 struct device_sysfs_entry {
 	struct attribute attr;
 	ssize_t (*show)(struct lc_device *, char *);
@@ -1874,15 +1853,20 @@ static ssize_t device_attr_store(struct kobject *kobj, struct attribute *attr, c
 	return entry->store(device, page, len);
 }
 
-static ssize_t cache_id_show(struct lc_device *device, char *page)
+static cache_id cache_id_of(struct lc_device *device)
 {
-	unsigned long id;
+	cache_id id;
 	if(! device->cache){
 		id = 0;
 	}else{
 		id = device->cache->id;
 	}
-	return var_show(id, (page));
+	return id;
+}
+
+static ssize_t cache_id_show(struct lc_device *device, char *page)
+{
+	return var_show(cache_id_of(device), (page));
 }
 
 static struct device_sysfs_entry cache_id_entry = {
@@ -1979,10 +1963,11 @@ static struct kobj_type device_ktype = {
 };
 
 /*
- * <device-id> <path> TODO <begin> <cache-id> <support_barrier>
+ * <device-id> <path> <cache-id> 
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
+	DMDEBUG("lc_ctr");
 	int r;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
@@ -1996,18 +1981,17 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	struct lc_device *lc = kzalloc(sizeof(*lc), GFP_KERNEL);
 
-	atomic64_set(&lc->nr_dirty_caches, 0);
-
 	/*
 	 * EMC's book says
 	 * storage should keep its disk util less than 70%.
 	 */
 	lc->migrate_threshold = 70;
-
 	lc->readonly = false;
-	
-	lc->cache = NULL;
 
+	atomic64_set(&lc->nr_dirty_caches, 0);
+	atomic64_inc(&lc->nr_dirty_caches);
+	atomic64_dec(&lc->nr_dirty_caches);
+	
 	unsigned device_id;
 	if(sscanf(argv[0], "%u", &device_id) != 1){
 		return -EINVAL;
@@ -2020,13 +2004,20 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	lc->device = dev;
 
-	lc_devices[lc->id] = lc;
+	lc->cache = NULL;
+	unsigned cache_id;
+	if(sscanf(argv[2], "%u", &cache_id) != 1){
+		return -EINVAL;
+	}
+	if(cache_id){
+		lc->cache = lc_caches[cache_id];
+	}
 
+	lc_devices[lc->id] = lc;
 	ti->private = lc;
 
 	/* ti->num_flush_requests = 1; */
-	ti->num_flush_requests = 0;
-
+	ti->num_flush_requests = 0; /* TODO impl and set 1 */
 	ti->num_discard_requests = 1;
 	ti->discard_zeroes_data_unsupported = true;
 
@@ -2037,6 +2028,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 
 	/*
+	 * TODO Purge
 	 * (Note)
 	 * It is best to add symlink to /sys/block/$(this volume)
 	 * but is actually infeasible because we have no way to
@@ -2047,21 +2039,58 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 * and is no use. I don't know why but
 	 * am sure that is the problem in this case.
 	 */
-	lc->md = dm_table_get_md(ti->table);
-			
-	r = kobject_init_and_add(&lc->kobj, &device_ktype, devices_kobj, "%u", lc->id);
-	
-	struct kobject *dev_kobj = get_bdev_kobject(lc->device->bdev);
-	r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
+	lc->md = dm_table_get_md(ti->table); /* TODO Purge*/
 
+	DMDEBUG("lc_ctr end");
 	return 0;
 }
 
 static void lc_dtr(struct dm_target *ti)
 {
+	DMDEBUG("lc_dtr");
 	struct lc_device *lc = ti->private;
+	
+	dm_put_device(ti, lc->device);
+
+	ti->private = NULL;
 	kfree(lc);
+	DMDEBUG("lc_dtr end");
 }	
+
+static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
+{
+	int r;
+
+	struct lc_device *lc = ti->private;
+
+	char *cmd = argv[0];
+
+	DMDEBUG("lc_message: %s", cmd);
+
+	if(! strcasecmp(cmd, "add_sysfs")){
+		DMDEBUG("add sysfs");
+		r = kobject_init_and_add(&lc->kobj, &device_ktype, devices_kobj, "%u", lc->id);
+		struct kobject *dev_kobj = get_bdev_kobject(lc->device->bdev); 
+		r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
+		
+		/* kobject_uevent(&lc->kobj, KOBJ_ADD); */
+		return 0;
+	}
+
+	if(! strcasecmp(cmd, "remove_sysfs")){
+		DMDEBUG("remove sysfs");
+		sysfs_remove_link(&lc->kobj, "device");
+		kobject_del(&lc->kobj);
+		kobject_put(&lc->kobj);
+		
+		lc_devices[lc->id] = NULL;
+		
+		/* kobject_uevent(&lc->kobj, KOBJ_REMOVE); */
+		return 0;
+	}
+
+	return -EINVAL;
+}
 
 static int lc_merge(struct dm_target *ti, struct bvec_merge_data *bvm, struct bio_vec *biovec, int max_size)
 {
@@ -2110,7 +2139,7 @@ static int lc_status(
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("%d %s", lc->id, lc->device->name);
+		DMEMIT("%d %s %d", lc->id, lc->device->name, cache_id_of(lc));
 		break;
 	}
 	return 0;

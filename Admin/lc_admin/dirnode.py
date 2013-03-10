@@ -5,12 +5,12 @@ Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
 """
 
 from os import listdir
-from os.path import isdir, isfile, join, realpath
+from os.path import isdir, isfile, join, realpath, basename
 
 __all__ = ['Dirnode']
 
-def path(node):
-	return node._path_
+def name(node):
+	return basename(node._path_)
 
 class Dirnode(object):
 
@@ -66,6 +66,7 @@ if __name__ == '__main__':
 	print(d)
 	print(d.docs)
 	print(path(d))
+	print(name(d))
 
 	for e in d:
 		print(e)

@@ -11,6 +11,8 @@ parser.add_argument('device_id', type=int)
 
 args = parser.parse_args()
 
+device_id = args.device_id
+
 device = tools.Device(device_id)
 
 if not device.cache_id():
@@ -25,9 +27,14 @@ try:
 		print("could not detach the device. %d caches are still dirty remained." % (device.nr_dirty_caches()))
 		time.sleep(1)	
 
-	# FIXME	
-	os.system("echo 0 > /sys/module/dm_lc/devices/%d/cache_id" % (device_id))
-except KeyboardInterrupt:
-	pass
+	os.system("dmsetup message %s 0 remove_sysfs" % (device.dm_name()))
+	os.system("echo 0 %d lc %d %s 0 | dmsetup reload %s" % 
+			(device.size(), device_id, device.backing.path(), device.dm_name()))
 
-device.unlock()
+	device.unlock()
+	os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
+	
+except KeyboardInterrupt:
+	device.unlock()
+	sys.exit()
+

@@ -19,8 +19,9 @@ print(args.path)
 _size=commands.getoutput("blockdev --getsize %s" % (args.path))
 print(_size)
 size=int(_size)
-os.system("dmsetup create %s --table \"0 %d lc %d %s\"" % 
+os.system("dmsetup create %s --table \"0 %d lc %d %s 0\"" % 
 		(args.name, size, args.device_id, args.path))
+os.system("dmsetup message %s 0 add_sysfs" % (args.name));
 
 #sys.exit("not support")
 

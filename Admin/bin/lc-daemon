@@ -16,22 +16,22 @@ from daemon.pidfile import PIDLockFile
 import time
 import psutil
 
-import dirnode
+import lc_admin.dirnode as dirnode
 import lc_admin.tools as tools
 
 dc = DaemonContext(
 		pidfile = PIDLockFile('/tmp/lc_daemon.pid'),
-		stdout  = open('/var/log/lc_daemon_out.log', 'w'),
+		stdout  = open('/var/log/lc_daemon_out.log', 'w', 0),
 		stderr  = open('/var/log/lc_daemon_err.log', 'w+'))
 				
 class Daemon:
 	
 	def __init__(self):
-		t = tools.table()
+		self.t = tools.table()
 			
 	def update_migrate_state(self, cache_id):
 		cache = tools.Cache(cache_id)
-		intvl = int(cache.update_interval)
+		intvl = cache.update_interval()
 		t = int(time.time())	
 		
 		if (t % intvl):
@@ -43,11 +43,12 @@ class Daemon:
 			
 			device.backing.update(intvl)
 			
-			thes = int(device.migrate_threshold)
+			thes = device.migrate_threshold()
+			print("util %d" % (device.backing.util))
 			if device.backing.util > thes:
 				b = False
 				
-		if int(cache.lc_node.force_migrate):
+		if cache.force_migrate():
 			b = True
 				
 		if b:		
@@ -57,33 +58,39 @@ class Daemon:
 
 	def modulate_migration(self):
 		for cache_id in self.t.keys():		
-			update_migrate_state(cache_id)
+			if not cache_id:
+				continue
+			self.update_migrate_state(cache_id)
 
 	def should_flush_buffer(self, cache):
 		t = int(time.time())
-		intvl = int(cache.lc_node.flush_current_buffer_interval)
+		intvl = cache.flush_current_buffer_interval()
 		if not intvl:
 			return False
 
 		if(t % intvl):
 			return False
 
-		current_val = int(cache.lc_node.last_flushed_segment_id)
-		b = (current_val != cache.last_flushed_segment_id)
-		cache.last_flushed_segment_id = current_val
+		current_val = cache.last_flushed_segment_id()
+		b = (current_val == cache.last_flushed_segment_id_cached)
+		cache.last_flushed_segment_id_cached = current_val
 		return b
 
 	def flush_buffer_periodically(self):
 		for cache_id in self.t.keys():
-			cache = tools.Cache(cache_id)
-			if not should_flush_buffer(cache):
+			if not cache_id:
 				continue
+			cache = tools.Cache(cache_id)
+			if not self.should_flush_buffer(cache):
+				continue
+			
+			print("flush buffer (t:%d)" % (int(time.time())))
 			cache.lc_node.flush_current_buffer = 1
 		return
 
 	def should_commit_super_block(self, cache):
 		t = int(time.time())
-		intvl = int(cache.lc_node.commit_super_block_interval)
+		intvl = cache.commit_super_block_interval()
 		if not intvl:
 			return False
 
@@ -94,17 +101,23 @@ class Daemon:
 
 	def commit_super_block_periodically(self):
 		for cache_id in self.t.keys():
-			cache = tools.Cache(cache_id)
-			if not should_commit_super_block(cache):
+			if not cache_id:
 				continue
+			cache = tools.Cache(cache_id)
+			if not self.should_commit_super_block(cache):
+				continue
+			
+			print("commit super block (t:%d)" % (int(time.time())))
 			cache.lc_node.commit_super_block = 1
 		return
 
 	def loop(self):
 		while True:
-			modulate_migration()
-			flush_buffer_periodically()
-			commit_super_block_periodically()
+			print("daemon loop (t:%d)" % (int(time.time())))
+			
+			self.modulate_migration()
+			self.flush_buffer_periodically()
+			self.commit_super_block_periodically()
 			
 			time.sleep(1)
 

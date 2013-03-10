@@ -927,7 +927,7 @@ migrate_write:
 
 	DMDEBUG("reset migrte_dests");
 	for(i=0; i<LC_NR_SLOTS; i++){
-		DMDEBUG("i:%u", i);
+		/* DMDEBUG("i:%u", i); */
 		*(cache->migrate_dests + i) = false;
 		/* *(cache->migrate_dests + i) = 0; */
 	}
@@ -1564,7 +1564,6 @@ static void barrier_deadline_proc(unsigned long data)
 	struct lc_cache *cache = (struct lc_cache *) data;	
 		
 	struct bio_list bios;
-	bio_list_init(&bios);
 
 	if(bio_list_empty(&cache->barrier_ios)){
 		return;
@@ -2061,7 +2060,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc_devices[lc->id] = lc;
 	ti->private = lc;
 
-	ti->num_flush_requests = 1;
+	ti->num_flush_requests = 0;
 	ti->num_discard_requests = 1;
 	ti->discard_zeroes_data_unsupported = true;
 

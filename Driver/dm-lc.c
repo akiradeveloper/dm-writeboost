@@ -16,7 +16,7 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
-#define LC_SEGMENTSIZE_ORDER 11 /* (1 << x) sector */
+#define LC_SEGMENTSIZE_ORDER 6 /* (1 << x) sector */
 #define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1) 
 
 static struct kobject *devices_kobj;
@@ -255,9 +255,6 @@ static struct block_device *get_md_bdev(struct mapped_device *md)
 }
 
 #define LC_NR_SLOTS ((1 << 8) - 1)
-
-/* #define LC_NR_SLOTS 256 */
-/* #define LC_NR_SLOTS 64 */
 
 u8 cache_id_ptr;
 struct lc_cache *lc_caches[LC_NR_SLOTS];
@@ -582,7 +579,7 @@ static void init_segment_header_array(struct lc_cache *cache)
 	for(segment_idx=0; segment_idx<nr_segments; segment_idx++){
 		struct segment_header *seg = arr_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = NR_CACHES_INSEG * segment_idx;
-		seg->start_sector = ((segment_idx % nr_segments) + 1) * (1 << 11);
+		seg->start_sector = ((segment_idx % nr_segments) + 1) * (1 << LC_SEGMENTSIZE_ORDER);
 		
 		seg->length = 0;
 		
@@ -898,7 +895,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	
 migrate_write:
 	;
-	DMDEBUG("migrate_white");
+	DMDEBUG("migrate_white id:%lu", seg->global_id);
 	unsigned long flags;
 	struct metablock *mb;
 	u8 i, j;
@@ -1144,7 +1141,7 @@ static void read_superblock_device(struct superblock_device *dest, struct lc_cac
 
 static sector_t calc_segment_header_start(size_t segment_idx)
 {
-	return (1 << 11) * (segment_idx + 1);
+	return (1 << LC_SEGMENTSIZE_ORDER) * (segment_idx + 1);
 }
 
 static void read_segment_header_device(
@@ -1377,7 +1374,7 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	 *
 	 * and simplify the code :)
 	 */
-	return devsize / (1 << 11) - 1;
+	return devsize / (1 << LC_SEGMENTSIZE_ORDER) - 1;
 }
 
 static void format_cache_device(struct dm_dev *dev)
@@ -2343,8 +2340,10 @@ static ssize_t flush_current_buffer_store(struct lc_cache *cache, const char *pa
 
 	mutex_lock(&cache->io_lock);
 	struct segment_header *old_seg = cache->current_seg;
+
 	queue_current_buffer(cache);
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
+	cache->current_seg->length = 1;
 	mutex_unlock(&cache->io_lock);
 
 	wait_for_completion(&old_seg->flush_done);
@@ -2477,7 +2476,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			init_completion(&wb->done);
 			complete_all(&wb->done);
 
-			wb->data = kmalloc(1 << 20, GFP_KERNEL);
+			wb->data = kmalloc(1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT), GFP_KERNEL);
 		}
 		/* Select arbitrary one */
 		cache->current_wb = cache->wb_pool + 0;
@@ -2499,7 +2498,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		
 		init_waitqueue_head(&cache->migrate_wait_queue);
 		atomic_set(&cache->migrate_count, 0);
-		cache->migrate_buffer = kmalloc(1 << 20, GFP_KERNEL);
+		cache->migrate_buffer = kmalloc(1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT), GFP_KERNEL);
 
 		recover_cache(cache);
 		DMDEBUG("recover cache done");
@@ -2512,7 +2511,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		 * therefore it makes full use of the disk bandwidth.
 		 * So, parallelizing flushing segment is close to useless
 		 * but only complicates locking.
-		 * My decision is to have flush_wq stay singlethreaded.
+		 * My decision is to keep flush_wq stay singlethreaded.
 		 */
 		cache->flush_wq = create_singlethread_workqueue("flushwq");
 

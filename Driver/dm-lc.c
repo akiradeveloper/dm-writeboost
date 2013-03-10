@@ -439,6 +439,7 @@ struct lc_cache {
 	struct timer_list barrier_deadline_timer;
 	struct bio_list barrier_ios;
 	unsigned long barrier_deadline_ms;
+	struct work_struct barrier_deadline_work;
 
 	bool readonly; /* TODO */
 
@@ -709,7 +710,8 @@ static void flush_proc(struct work_struct *work)
 		while((bio = bio_list_pop(&ctx->barrier_ios))){
 			bio_endio(bio, 0);
 		}
-		mod_timer(&cache->barrier_deadline_timer, cache->barrier_deadline_ms);
+		mod_timer(&cache->barrier_deadline_timer, 
+				msecs_to_jiffies(cache->barrier_deadline_ms));
 	}
 
 	kfree(ctx);
@@ -1559,17 +1561,20 @@ static void flush_current_buffer_sync(struct lc_cache *cache)
 	wait_for_completion(&old_seg->flush_done);
 }
 
-static void barrier_deadline_proc(unsigned long data)
+static void flush_barrier_ios(struct work_struct *work)
 {
-	struct lc_cache *cache = (struct lc_cache *) data;	
-		
-	struct bio_list bios;
+	struct lc_cache *cache = container_of(work, struct lc_cache, barrier_deadline_work);
 
 	if(bio_list_empty(&cache->barrier_ios)){
 		return;
 	}
-
 	flush_current_buffer_sync(cache);
+}
+
+static void barrier_deadline_proc(unsigned long data)
+{
+	struct lc_cache *cache = (struct lc_cache *) data;	
+	schedule_work(&cache->barrier_deadline_work);
 }
 
 static void queue_barrier_io(struct lc_cache *cache, struct bio *bio)
@@ -1579,7 +1584,8 @@ static void queue_barrier_io(struct lc_cache *cache, struct bio *bio)
 	mutex_unlock(&cache->io_lock);
 
 	if(! timer_pending(&cache->barrier_deadline_timer)){
-		mod_timer(&cache->barrier_deadline_timer, cache->barrier_deadline_ms);
+		mod_timer(&cache->barrier_deadline_timer, 
+				msecs_to_jiffies(cache->barrier_deadline_ms));
 	}
 }
 
@@ -2060,7 +2066,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc_devices[lc->id] = lc;
 	ti->private = lc;
 
-	ti->num_flush_requests = 0;
+	ti->num_flush_requests = 1;
 	ti->num_discard_requests = 1;
 	ti->discard_zeroes_data_unsupported = true;
 
@@ -2561,6 +2567,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		setup_timer(&cache->barrier_deadline_timer, barrier_deadline_proc, (unsigned long) cache);
 		bio_list_init(&cache->barrier_ios);
 		cache->barrier_deadline_ms = 30;
+		INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
 		recover_cache(cache);
 		DMDEBUG("recover cache done");

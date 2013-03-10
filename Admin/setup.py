@@ -15,5 +15,10 @@ setup(
 		'bin/lc-resume-cache',
 		'bin/lc-admin',
 		'bin/lc-daemon',
-	]
+	],
+	install_requires = [
+		'python-daemon',
+		'argparse',
+		'psutil',
+	],
 )

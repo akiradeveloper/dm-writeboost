@@ -15,6 +15,7 @@
 #include <linux/sched.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
+#include <linux/timer.h>
 
 #define LC_SEGMENTSIZE_ORDER 6 /* (1 << x) sector */
 #define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1) 
@@ -435,6 +436,11 @@ struct lc_cache {
 	bool migrate_dests[LC_NR_SLOTS];
 	void *migrate_buffer;
 
+	struct timer_list barrier_deadline_timer;
+	struct bio_list barrier_ios;
+	unsigned long barrier_deadline_ms;
+	struct work_struct barrier_deadline_work;
+
 	bool readonly; /* TODO */
 
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
@@ -667,13 +673,16 @@ struct flush_context {
 	struct lc_cache *cache;
 	struct segment_header *seg; 
 	struct writebuffer *wb;
+	struct bio_list barrier_ios;
 };
 
 static void flush_proc(struct work_struct *work)
 {
 	struct flush_context *ctx = container_of(work, struct flush_context, work);
+	struct lc_cache *cache = ctx->cache;
+	struct segment_header *seg = ctx->seg;
 
-	DMDEBUG("flush proc id: %lu", ctx->seg->global_id);
+	DMDEBUG("flush proc id: %lu", seg->global_id);
 
 	struct dm_io_request io_req = {
 		.client = lc_io_client,
@@ -683,17 +692,28 @@ static void flush_proc(struct work_struct *work)
 		.mem.ptr.addr = ctx->wb->data,
 	};
 	struct dm_io_region region = {
-		.bdev = ctx->cache->device->bdev,	
-		.sector = ctx->seg->start_sector,
-		.count = (ctx->seg->length + 1) << 3,
+		.bdev = cache->device->bdev,	
+		.sector = seg->start_sector,
+		.count = (seg->length + 1) << 3,
 	};
 	dm_safe_io_retry(&io_req, &region, 1, false);
 
-	ctx->cache->last_flushed_segment_id = ctx->seg->global_id;
+	cache->last_flushed_segment_id = seg->global_id;
 
-	complete_all(&ctx->seg->flush_done);
+	complete_all(&seg->flush_done);
 
 	complete_all(&ctx->wb->done);
+	
+	if(! bio_list_empty(&ctx->barrier_ios)){
+		blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
+		struct bio *bio;
+		while((bio = bio_list_pop(&ctx->barrier_ios))){
+			bio_endio(bio, 0);
+		}
+		mod_timer(&cache->barrier_deadline_timer, 
+				msecs_to_jiffies(cache->barrier_deadline_ms));
+	}
+
 	kfree(ctx);
 }
 
@@ -733,6 +753,11 @@ static void queue_flushing(struct lc_cache *cache)
 	ctx->cache = cache;
 	ctx->seg = current_seg;
 	ctx->wb = cache->current_wb;
+
+	bio_list_init(&ctx->barrier_ios);
+	bio_list_merge(&ctx->barrier_ios, &cache->barrier_ios);
+	bio_list_init(&cache->barrier_ios);
+			
 	INIT_WORK(&ctx->work, flush_proc);
 	queue_work(cache->flush_wq, &ctx->work);
 	
@@ -904,7 +929,7 @@ migrate_write:
 
 	DMDEBUG("reset migrte_dests");
 	for(i=0; i<LC_NR_SLOTS; i++){
-		DMDEBUG("i:%u", i);
+		/* DMDEBUG("i:%u", i); */
 		*(cache->migrate_dests + i) = false;
 		/* *(cache->migrate_dests + i) = 0; */
 	}
@@ -1523,6 +1548,47 @@ static void queue_current_buffer(struct lc_cache *cache)
 	queue_flushing(cache);
 }
 
+static void flush_current_buffer_sync(struct lc_cache *cache)
+{
+	mutex_lock(&cache->io_lock);
+	struct segment_header *old_seg = cache->current_seg;
+
+	queue_current_buffer(cache);
+	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
+	cache->current_seg->length = 1;
+	mutex_unlock(&cache->io_lock);
+
+	wait_for_completion(&old_seg->flush_done);
+}
+
+static void flush_barrier_ios(struct work_struct *work)
+{
+	struct lc_cache *cache = container_of(work, struct lc_cache, barrier_deadline_work);
+
+	if(bio_list_empty(&cache->barrier_ios)){
+		return;
+	}
+	flush_current_buffer_sync(cache);
+}
+
+static void barrier_deadline_proc(unsigned long data)
+{
+	struct lc_cache *cache = (struct lc_cache *) data;	
+	schedule_work(&cache->barrier_deadline_work);
+}
+
+static void queue_barrier_io(struct lc_cache *cache, struct bio *bio)
+{
+	mutex_lock(&cache->io_lock);
+	bio_list_add(&cache->barrier_ios, bio);
+	mutex_unlock(&cache->io_lock);
+
+	if(! timer_pending(&cache->barrier_deadline_timer)){
+		mod_timer(&cache->barrier_deadline_timer, 
+				msecs_to_jiffies(cache->barrier_deadline_ms));
+	}
+}
+
 static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
@@ -1530,6 +1596,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 
 	struct lc_device *lc = ti->private;
 	struct dm_dev *orig = lc->device;
+
+	if(! lc->cache){
+		bio_remap(bio, orig, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
 
 	/*
 	 * We only discard the backing storage.
@@ -1543,9 +1614,12 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		return DM_MAPIO_REMAPPED;
 	}
 
-	if(! lc->cache){
-		bio_remap(bio, orig, bio->bi_sector);
-		return DM_MAPIO_REMAPPED;
+	struct lc_cache *cache = lc->cache;
+
+	if(bio->bi_rw & REQ_FLUSH){
+		BUG_ON(bio->bi_size);
+		queue_barrier_io(cache, bio);	
+		return DM_MAPIO_SUBMITTED;
 	}
 
 	unsigned long flags;
@@ -1557,26 +1631,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	sector_t bio_offset = bio->bi_sector % (1 << 3); 
 
 	int rw = bio_data_dir(bio);
-
-	struct lc_cache *cache = lc->cache;
-
-	/*
-	 * We may have a strong assumption that the
-	 * bio with REQ_FLUSH is empty.
-	 */
-	if(bio->bi_rw & REQ_FLUSH){
-		BUG_ON(bio_count);
-		mutex_lock(&cache->io_lock);
-		queue_current_buffer(cache);
-		mutex_unlock(&cache->io_lock);
-		
-		/* FIXME defer */
-		/* FIXME REQ_FLUSH the cache */
-		/* FIXME Wait for flush job finish */
-		
-		bio_remap(bio, orig, bio->bi_sector);
-		return DM_MAPIO_REMAPPED;
-	}
 
 	struct lookup_key key = {
 		.sector = calc_cache_alignment(cache, bio->bi_sector),
@@ -1800,9 +1854,8 @@ write_on_buffer:
 	atomic_dec(&seg->nr_inflight_ios);
 
 	if(bio->bi_rw & REQ_FUA){
-		/* FIXME defer */
-		bio_remap(bio, orig, bio->bi_sector);
-		return DM_MAPIO_REMAPPED;
+		queue_barrier_io(cache, bio);
+		return DM_MAPIO_SUBMITTED;
 	}
 
 	/* dump_memory(cache->writebuffer + (1 << 12) #<{(| skip 4KB |)}>#, 16); #<{(| DEBUG |)}># */
@@ -2013,8 +2066,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc_devices[lc->id] = lc;
 	ti->private = lc;
 
-	/* ti->num_flush_requests = 1; */
-	ti->num_flush_requests = 0; /* TODO impl and set 1 */
+	ti->num_flush_requests = 1;
 	ti->num_discard_requests = 1;
 	ti->discard_zeroes_data_unsupported = true;
 
@@ -2338,16 +2390,7 @@ static ssize_t flush_current_buffer_store(struct lc_cache *cache, const char *pa
 		return -EIO;
 	}
 
-	mutex_lock(&cache->io_lock);
-	struct segment_header *old_seg = cache->current_seg;
-
-	queue_current_buffer(cache);
-	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
-	cache->current_seg->length = 1;
-	mutex_unlock(&cache->io_lock);
-
-	wait_for_completion(&old_seg->flush_done);
-
+	flush_current_buffer_sync(cache);
 	return r;
 }
 
@@ -2377,6 +2420,26 @@ static struct cache_sysfs_entry last_migrated_segment_id_entry = {
 	.show = last_migrated_segment_id_show,
 };
 
+static ssize_t barrier_deadline_ms_show(struct lc_cache *cache, char *page)
+{
+	return var_show(cache->barrier_deadline_ms, (page));
+}
+
+static ssize_t barrier_deadline_ms_store(struct lc_cache *cache, const char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+
+	cache->barrier_deadline_ms = x;
+	return r;
+}
+
+static struct cache_sysfs_entry barrier_deadline_ms_entry = {
+	.attr = { .name = "barrier_deadline_ms", .mode = S_IRUGO | S_IWUSR },
+	.show = barrier_deadline_ms_show,
+	.store = barrier_deadline_ms_store,
+};
+
 static struct attribute *cache_default_attrs[] = {
 	&commit_super_block_interval_entry.attr,
 	&allow_migrate_entry.attr,
@@ -2387,6 +2450,7 @@ static struct attribute *cache_default_attrs[] = {
 	&update_interval_entry.attr,
 	&last_flushed_segment_id_entry.attr,
 	&last_migrated_segment_id_entry.attr,
+	&barrier_deadline_ms_entry.attr,
 	NULL,
 };
 
@@ -2499,6 +2563,11 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		init_waitqueue_head(&cache->migrate_wait_queue);
 		atomic_set(&cache->migrate_count, 0);
 		cache->migrate_buffer = kmalloc(1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT), GFP_KERNEL);
+		
+		setup_timer(&cache->barrier_deadline_timer, barrier_deadline_proc, (unsigned long) cache);
+		bio_list_init(&cache->barrier_ios);
+		cache->barrier_deadline_ms = 30;
+		INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
 		recover_cache(cache);
 		DMDEBUG("recover cache done");

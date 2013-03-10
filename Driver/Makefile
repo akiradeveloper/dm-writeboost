@@ -3,7 +3,7 @@ KERNEL_TREE := /lib/modules/$(shell uname -r)/build
 
 PWD := $(shell pwd)
 
-EXTRA_CFLAGS += -O0 -DCONFIG_DM_DEBUG -fno-inline #-Wall
+# EXTRA_CFLAGS += -O0 -DCONFIG_DM_DEBUG -fno-inline #-Wall
 
 obj-m := dm-lc.o
 

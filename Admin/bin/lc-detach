@@ -15,12 +15,13 @@ device_id = args.device_id
 
 device = tools.Device(device_id)
 
+device.lock()
 if not device.cache_id():
+	device.unlock()
 	sys.exit("cache not bound")
 
-device.lock()
 cache = tools.Cache(device.cache_id())
-cache.flush_current_buffer()
+dirnode.write(cache.lc_node, "flush_current_buffer", 1)
 
 try:
 	while(device.nr_dirty_caches()):	
@@ -37,4 +38,3 @@ try:
 except KeyboardInterrupt:
 	device.unlock()
 	sys.exit()
-

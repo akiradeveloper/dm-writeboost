@@ -23,18 +23,27 @@ if not device.cache_id():
 cache = tools.Cache(device.cache_id())
 dirnode.write(cache.lc_node, "flush_current_buffer", 1)
 
-try:
-	while(device.nr_dirty_caches()):	
-		print("could not detach the device. %d caches are still dirty remained." % (device.nr_dirty_caches()))
-		time.sleep(1)	
+interrupted = False
 
-	os.system("dmsetup message %s 0 remove_sysfs" % (device.dm_name()))
-	os.system("echo 0 %d lc %d %s 0 | dmsetup reload %s" % 
+while True:
+	try:
+		nr = device.nr_dirty_caches()
+		while nr:
+			if interrupted:
+				device.unlock()
+				sys.exit()
+
+			print("could not detach the device. %d caches are still dirty remained." % (nr))
+			time.sleep(1)
+
+	except KeyboardInterrupt:
+		interrupted = True
+		continue
+
+	finally:
+		os.system("dmsetup message %s 0 remove_sysfs" % (device.dm_name()))
+		os.system("echo 0 %d lc %d %s 0 | dmsetup reload %s" %
 			(device.size(), device_id, device.backing.path(), device.dm_name()))
 
-	device.unlock()
-	os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
-	
-except KeyboardInterrupt:
-	device.unlock()
-	sys.exit()
+		device.unlock()
+		os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))

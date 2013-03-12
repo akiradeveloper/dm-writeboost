@@ -328,7 +328,7 @@ struct metablock_device {
 
 	u8 dirty_bits;
 
-	u8 color;
+	u32 color;
 } __attribute__((packed));
 
 /*
@@ -391,7 +391,7 @@ struct segment_header_device {
 	/* --- at most512 byte ---*/
 	size_t global_id;	
 	u8 length;
-	u8 color; /* 0 or 1. 0 initially */
+	u32 color; /* initially 0. 1 for first turn. */
 	/* -----------------------*/
 	struct metablock_device mbarr[NR_CACHES_INSEG]; /* This array must locate at the tail */
 } __attribute__((packed));
@@ -608,10 +608,10 @@ static struct segment_header *get_segment_header_by_id(struct lc_cache *cache, s
 	return r;
 }
 
-static u8 calc_segment_color(struct lc_cache *cache, size_t segment_id)
+static u32 calc_segment_color(struct lc_cache *cache, size_t segment_id)
 {
-	size_t turn = (segment_id - 1) / cache->nr_segments;	
-	return (turn + 1) % 2;
+	u32 turn = (segment_id - 1) / cache->nr_segments;
+	return turn + 1;
 };
 
 static sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx)

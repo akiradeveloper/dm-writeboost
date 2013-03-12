@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
 import os
+import sys
 from argparse import ArgumentParser
 
+import lc_admin.dirnode as dirnode
 import lc_admin.tools as tools
 
 parser = ArgumentParser()
@@ -36,14 +38,20 @@ while True:
 			print("could not detach the device. %d caches are still dirty remained." % (nr))
 			time.sleep(1)
 
+		print("no dirty cache remained in the device")	
+
 	except KeyboardInterrupt:
 		interrupted = True
 		continue
 
 	finally:
+
+		load_command = "echo 0 %d lc %d %s 0 | dmsetup reload %s" % \
+				(device.size(), device_id, device.backing.path(), device.dm_name())
+
 		os.system("dmsetup message %s 0 remove_sysfs" % (device.dm_name()))
-		os.system("echo 0 %d lc %d %s 0 | dmsetup reload %s" %
-			(device.size(), device_id, device.backing.path(), device.dm_name()))
+		os.system(load_command)
 
 		device.unlock()
 		os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
+		break

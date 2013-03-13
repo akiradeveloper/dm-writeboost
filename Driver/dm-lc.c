@@ -1029,7 +1029,7 @@ migrate_write:
 			msecs_to_jiffies(10000) /* 10 seconds. Long enough */);
 
 	if(! remained_jiffies){
-		DMERR("migrate failed. some writebacks failed. redo.");
+		DMERR("migrate failed. %u writebacks failed. redo.", atomic_read(&cache->migrate_count));
 		goto migrate_write;
 	}
 	

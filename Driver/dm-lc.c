@@ -1695,12 +1695,12 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		}
 
 		/* Found not on buffer */
+		wait_for_completion(&seg->flush_done);
 		if(likely(dirty_bits == 255)){
 			bio_remap(bio, cache->device, 
 				calc_mb_start_sector(seg, mb->idx) + bio_offset);
 			map_context->ptr = seg;
 		}else{
-			wait_for_completion(&seg->flush_done);
 			migrate_mb(cache, seg, mb, dirty_bits, true);
 			
 			bool b = false;

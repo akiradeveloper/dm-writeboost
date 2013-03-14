@@ -17,9 +17,9 @@ setup(
 		'bin/lc-admin',
 		'bin/lc-daemon',
 	],
-	install_requires = [
-		'python-daemon',
-		'argparse',
-		'psutil',
-	],
+	# install_requires = [
+		# 'python-daemon',
+		# 'argparse',
+		# 'psutil',
+	# ],
 )

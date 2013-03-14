@@ -432,7 +432,9 @@ struct lc_cache {
 	struct work_struct migrate_work;
 
 	wait_queue_head_t migrate_wait_queue;
-	atomic_t migrate_count;
+	atomic_t migrate_fail_count;
+	atomic_t migrate_io_count;
+	u8 dirtiness_snapshot[NR_CACHES_INSEG];
 	bool migrate_dests[LC_NR_SLOTS];
 	void *migrate_buffer;
 
@@ -891,10 +893,10 @@ static void migrate_endio(unsigned long error, void *__context)
 	struct lc_cache *cache = __context;
 	
 	if(error){
-		return;
+		atomic_inc(&cache->migrate_fail_count);
 	}
 
-	if(atomic_dec_and_test(&cache->migrate_count)){
+	if(atomic_dec_and_test(&cache->migrate_io_count)){
 		wake_up_interruptible(&cache->migrate_wait_queue);
 	}
 }
@@ -917,7 +919,6 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	};
 	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
 	
-	
 migrate_write:
 	;
 	DMDEBUG("migrate_white id:%lu", seg->global_id);
@@ -925,7 +926,8 @@ migrate_write:
 	struct metablock *mb;
 	u8 i, j;
 
-	atomic_set(&cache->migrate_count, 0);
+	atomic_set(&cache->migrate_io_count, 0);
+	atomic_set(&cache->migrate_fail_count, 0);
 
 	DMDEBUG("reset migrte_dests");
 	for(i=0; i<LC_NR_SLOTS; i++){
@@ -935,39 +937,41 @@ migrate_write:
 	}
 
 	for(i=0; i<seg->length; i++){
-		DMDEBUG("setup migrte_dests and migrate_count i:%u", i);
-		mb = seg->mb_array + i;	
-		
-		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+		*(cache->dirtiness_snapshot + i) =
+			atomic_read_mb_dirtiness(seg, (seg->mb_array + i));
+	}
 
+	for(i=0; i<seg->length; i++){
+		DMDEBUG("setup migrte_dests and migrate_io_count i:%u", i);
+		
+		u8 dirty_bits = *(cache->dirtiness_snapshot + i);
+		
 		if(! dirty_bits){
 			continue;
 		}
 		
 		*(cache->migrate_dests + mb->device_id) = true;
-		/* *(cache->migrate_dests + mb->device_id) = 1; */
 		
 		if(dirty_bits == 255){
-			atomic_inc(&cache->migrate_count);
+			atomic_inc(&cache->migrate_io_count);
 			continue;
 		}
 
 		for(j=0; j<8; j++){
 			if(dirty_bits & (1 << j)){
-				atomic_inc(&cache->migrate_count);
+				atomic_inc(&cache->migrate_io_count);
 			}
 		}
 	}
 
-	DMDEBUG("count:%u", atomic_read(&cache->migrate_count));
+	DMDEBUG("count:%u", atomic_read(&cache->migrate_io_count));
 
 	struct lc_device *lc;
 	for(i=0; i<seg->length; i++){
 		/* DMDEBUG("idx: %u", idx); */
-		mb = seg->mb_array + i;
-		lc = lc_devices[mb->device_id];
 		
-		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+		lc = lc_devices[mb->device_id];
+		u8 dirty_bits = *(cache->dirtiness_snapshot) + i;
 		
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
 		
@@ -1023,17 +1027,16 @@ migrate_write:
 		}
 	}
 
-	int remained_jiffies = 0;
-	remained_jiffies = wait_event_interruptible_timeout(
-			cache->migrate_wait_queue, atomic_read(&cache->migrate_count) == 0, 
-			msecs_to_jiffies(10000) /* 10 seconds. Long enough */);
+	wait_event_interruptible(cache->migrate_wait_queue,
+				atomic_read(&cache->migrate_io_count) == 0);
 
-	if(! remained_jiffies){
-		DMERR("migrate failed. %u writebacks failed. redo.", atomic_read(&cache->migrate_count));
+	if(atomic_read(&cache->migrate_fail_count)){
+		DMERR("migrate failed. %u writebacks failed. redo.", 
+				atomic_read(&cache->migrate_fail_count));
 		goto migrate_write;
 	}
 	
-	BUG_ON(atomic_read(&cache->migrate_count));
+	BUG_ON(atomic_read(&cache->migrate_io_count));
 
 	DMDEBUG("length:%u", seg->length);
 	for(i=0; i<seg->length; i++){
@@ -2561,7 +2564,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		queue_work(cache->migrate_wq, &cache->migrate_work);
 		
 		init_waitqueue_head(&cache->migrate_wait_queue);
-		atomic_set(&cache->migrate_count, 0);
+		atomic_set(&cache->migrate_fail_count, 0);
+		atomic_set(&cache->migrate_io_count, 0);
 		cache->migrate_buffer = kmalloc(1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT), GFP_KERNEL);
 		
 		setup_timer(&cache->barrier_deadline_timer, barrier_deadline_proc, (unsigned long) cache);

@@ -17,7 +17,7 @@
 #include <linux/dm-io.h>
 #include <linux/timer.h>
 
-#define LC_SEGMENTSIZE_ORDER 6 /* (1 << x) sector */
+#define LC_SEGMENTSIZE_ORDER 7 /* (1 << x) sector */
 #define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1) 
 
 static struct kobject *devices_kobj;
@@ -410,9 +410,12 @@ struct lc_cache {
 	cache_nr nr_caches; /* const */
 	size_t nr_segments; /* const */
 	struct arr *segment_header_array;
+
+	/*
+	 * Chained hashtable.
+	 */
 	struct arr *htable;
 	size_t htsize;
-	
 	struct ht_head *null_head;
 
 	cache_nr cursor; /* Index that has done write */
@@ -420,17 +423,30 @@ struct lc_cache {
 	struct writebuffer *current_wb; /* Preallocated buffer. 1024KB */
 	struct writebuffer *wb_pool;
 
-	struct workqueue_struct *flush_wq; 
-
 	size_t last_migrated_segment_id;
 	size_t last_flushed_segment_id;
 	size_t reserving_segment_id;
+
+	/*
+	 * For Flush daemon
+	 */
+	spinlock_t flush_queue_lock;
+	struct list_head flush_queue;
+	struct work_struct flush_work;
+	wait_queue_head_t flush_wait_queue;
+	struct workqueue_struct *flush_wq; 
+
+	/*
+	 * For Migration daemon
+	 */
 	bool allow_migrate;
 	bool force_migrate;
-
 	struct workqueue_struct *migrate_wq;
 	struct work_struct migrate_work;
 
+	/*
+	 * For migration I/O
+	 */
 	wait_queue_head_t migrate_wait_queue;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
@@ -438,12 +454,13 @@ struct lc_cache {
 	bool migrate_dests[LC_NR_SLOTS];
 	void *migrate_buffer;
 
+	/*
+	 * For deferred flush/FUA handling.
+	 */
 	struct timer_list barrier_deadline_timer;
 	struct bio_list barrier_ios;
 	unsigned long barrier_deadline_ms;
 	struct work_struct barrier_deadline_work;
-
-	bool readonly; /* TODO */
 
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
@@ -451,6 +468,8 @@ struct lc_cache {
 	unsigned long update_interval;
 	unsigned long commit_super_block_interval;
 	unsigned long flush_current_buffer_interval;
+
+	bool readonly; /* TODO */
 };
 
 static void inc_stat(struct lc_cache *cache, int rw, bool found, bool on_buffer, bool fullsize)
@@ -671,8 +690,7 @@ static void prepare_segment_header_device(
 }
 
 struct flush_context {
-	struct work_struct work;
-	struct lc_cache *cache;
+	struct list_head flush_queue;
 	struct segment_header *seg; 
 	struct writebuffer *wb;
 	struct bio_list barrier_ios;
@@ -680,43 +698,70 @@ struct flush_context {
 
 static void flush_proc(struct work_struct *work)
 {
-	struct flush_context *ctx = container_of(work, struct flush_context, work);
-	struct lc_cache *cache = ctx->cache;
-	struct segment_header *seg = ctx->seg;
+	unsigned long flags;
+	struct lc_cache *cache = container_of(work, struct lc_cache, flush_work);
 
-	DMDEBUG("flush proc id: %lu", seg->global_id);
-
-	struct dm_io_request io_req = {
-		.client = lc_io_client,
-		.bi_rw = WRITE,
-		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = ctx->wb->data,
-	};
-	struct dm_io_region region = {
-		.bdev = cache->device->bdev,	
-		.sector = seg->start_sector,
-		.count = (seg->length + 1) << 3,
-	};
-	dm_safe_io_retry(&io_req, &region, 1, false);
-
-	cache->last_flushed_segment_id = seg->global_id;
-
-	complete_all(&seg->flush_done);
-
-	complete_all(&ctx->wb->done);
-	
-	if(! bio_list_empty(&ctx->barrier_ios)){
-		blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
-		struct bio *bio;
-		while((bio = bio_list_pop(&ctx->barrier_ios))){
-			bio_endio(bio, 0);
+	while(true){
+		DMDEBUG("flush_proc repeat");
+		
+		spin_lock_irqsave(&cache->flush_queue_lock, flags);
+		while(list_empty(&cache->flush_queue)){
+			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+			DMDEBUG("flush_queue is empty. sleep for a while.");
+			wait_event_interruptible_timeout(
+				cache->flush_wait_queue,				
+				(! list_empty(&cache->flush_queue)),
+				msecs_to_jiffies(100));
+			spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		}
-		mod_timer(&cache->barrier_deadline_timer, 
-				msecs_to_jiffies(cache->barrier_deadline_ms));
+		
+		DMDEBUG("flush_proc id");
+		
+		/* Pop the first entry */
+		struct flush_context *ctx;
+		ctx = list_first_entry(
+			&cache->flush_queue, struct flush_context, flush_queue);
+		list_del(&ctx->flush_queue);
+		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+	
+		struct segment_header *seg = ctx->seg;
+	
+		DMDEBUG("flush_proc start id: %lu", seg->global_id);
+	
+		struct dm_io_request io_req = {
+			.client = lc_io_client,
+			.bi_rw = WRITE,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = ctx->wb->data,
+		};
+		struct dm_io_region region = {
+			.bdev = cache->device->bdev,	
+			.sector = seg->start_sector,
+			.count = (seg->length + 1) << 3,
+		};
+		dm_safe_io_retry(&io_req, &region, 1, false);
+	
+		cache->last_flushed_segment_id = seg->global_id;
+	
+		complete_all(&seg->flush_done);
+	
+		complete_all(&ctx->wb->done);
+		
+		DMDEBUG("flush I/O done");
+		
+		if(! bio_list_empty(&ctx->barrier_ios)){
+			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
+			struct bio *bio;
+			while((bio = bio_list_pop(&ctx->barrier_ios))){
+				bio_endio(bio, 0);
+			}
+			mod_timer(&cache->barrier_deadline_timer, 
+					msecs_to_jiffies(cache->barrier_deadline_ms));
+		}
+	
+		kfree(ctx);
 	}
-
-	kfree(ctx);
 }
 
 static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, struct segment_header *seg)
@@ -733,6 +778,7 @@ static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, 
 
 static void queue_flushing(struct lc_cache *cache)
 {
+	unsigned long flags;
 	struct segment_header *current_seg = cache->current_seg;
 
 	DMDEBUG("flush current segment. nr_dirty_caches_remained: %u", count_dirty_caches_remained(current_seg));
@@ -752,7 +798,7 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_COMPLETION(current_seg->flush_done);
 
 	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
-	ctx->cache = cache;
+	INIT_LIST_HEAD(&ctx->flush_queue);
 	ctx->seg = current_seg;
 	ctx->wb = cache->current_wb;
 
@@ -760,9 +806,14 @@ static void queue_flushing(struct lc_cache *cache)
 	bio_list_merge(&ctx->barrier_ios, &cache->barrier_ios);
 	bio_list_init(&cache->barrier_ios);
 			
-	INIT_WORK(&ctx->work, flush_proc);
-	queue_work(cache->flush_wq, &ctx->work);
-	
+	spin_lock_irqsave(&cache->flush_queue_lock, flags);
+	bool empty = list_empty(&cache->flush_queue);
+	list_add_tail(&ctx->flush_queue, &cache->flush_queue);
+	spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+	if(empty){
+		wake_up_interruptible(&cache->flush_wait_queue);
+	}
+
 	size_t next_id = current_seg->global_id + 1;
 	struct segment_header *new_seg = get_segment_header_by_id(cache, next_id);
 	new_seg->global_id = next_id;
@@ -891,12 +942,16 @@ static void migrate_mb(
 static void migrate_endio(unsigned long error, void *__context)
 {
 	struct lc_cache *cache = __context;
+
+	DMDEBUG("migrate_endio");
 	
 	if(error){
+		DMDEBUG("error");
 		atomic_inc(&cache->migrate_fail_count);
 	}
 
 	if(atomic_dec_and_test(&cache->migrate_io_count)){
+		DMDEBUG("dec and test. wake up");
 		wake_up_interruptible(&cache->migrate_wait_queue);
 	}
 }
@@ -921,7 +976,7 @@ static void migrate_whole_segment(struct lc_cache *cache, struct segment_header 
 	
 migrate_write:
 	;
-	DMDEBUG("migrate_white id:%lu", seg->global_id);
+	DMDEBUG("migrate_write id:%lu", seg->global_id);
 	unsigned long flags;
 	struct metablock *mb;
 	u8 i, j;
@@ -929,7 +984,7 @@ migrate_write:
 	atomic_set(&cache->migrate_io_count, 0);
 	atomic_set(&cache->migrate_fail_count, 0);
 
-	DMDEBUG("reset migrte_dests");
+	DMDEBUG("reset migrate_dests");
 	for(i=0; i<LC_NR_SLOTS; i++){
 		/* DMDEBUG("i:%u", i); */
 		*(cache->migrate_dests + i) = false;
@@ -937,11 +992,14 @@ migrate_write:
 	}
 
 	for(i=0; i<seg->length; i++){
-		*(cache->dirtiness_snapshot + i) =
-			atomic_read_mb_dirtiness(seg, (seg->mb_array + i));
+		mb = seg->mb_array + i;
+		
+		*(cache->dirtiness_snapshot + i) = atomic_read_mb_dirtiness(seg, mb);
 	}
 
 	for(i=0; i<seg->length; i++){
+		mb = seg->mb_array + i;
+		
 		DMDEBUG("setup migrte_dests and migrate_io_count i:%u", i);
 		
 		u8 dirty_bits = *(cache->dirtiness_snapshot + i);
@@ -953,12 +1011,14 @@ migrate_write:
 		*(cache->migrate_dests + mb->device_id) = true;
 		
 		if(dirty_bits == 255){
+			DMDEBUG("migrate count full dirty (%u)", i);
 			atomic_inc(&cache->migrate_io_count);
 			continue;
 		}
 
 		for(j=0; j<8; j++){
 			if(dirty_bits & (1 << j)){
+				DMDEBUG("migrate count paritial dirty (%u, %u)", i, j);
 				atomic_inc(&cache->migrate_io_count);
 			}
 		}
@@ -968,10 +1028,12 @@ migrate_write:
 
 	struct lc_device *lc;
 	for(i=0; i<seg->length; i++){
+		mb = seg->mb_array + i;
+		
 		/* DMDEBUG("idx: %u", idx); */
 		
 		lc = lc_devices[mb->device_id];
-		u8 dirty_bits = *(cache->dirtiness_snapshot) + i;
+		u8 dirty_bits = *(cache->dirtiness_snapshot + i);
 		
 		/* DMDEBUG("the mb to migrate. mb->dirty_bits: %u", mb->dirty_bits); */
 		
@@ -998,6 +1060,8 @@ migrate_write:
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
+			
+			DMDEBUG("submit full migration I/O (%u)", i);
 			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
 			continue;
 		}
@@ -1023,12 +1087,16 @@ migrate_write:
 				.sector = mb->sector + j,
 				.count = 1,
 			};
+			
+			DMDEBUG("submit partial migration I/O (%u, %u)", i, j);
 			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
 		}
 	}
 
+	DMDEBUG("wait for migrateion I/Os done");
 	wait_event_interruptible(cache->migrate_wait_queue,
-				atomic_read(&cache->migrate_io_count) == 0);
+				(atomic_read(&cache->migrate_io_count) == 0));
+	DMDEBUG("all migration I/Os done");
 
 	if(atomic_read(&cache->migrate_fail_count)){
 		DMERR("migrate failed. %u writebacks failed. redo.", 
@@ -1071,6 +1139,8 @@ static void migrate_proc(struct work_struct *work)
 	struct lc_cache *cache = container_of(work, struct lc_cache, migrate_work);
 	
 	while(true){
+		DMDEBUG("migrate_proc repeat");
+		
 		/*
 		 * reserving_id > 0 means 
 		 * that migration is immediate.
@@ -1081,6 +1151,7 @@ static void migrate_proc(struct work_struct *work)
 		if(! allow_migrate){
 			/* DMDEBUG("migrate proc sleep branch-1"); */
 			/* DMDEBUG("allow_migrate: %u, reserving_segment_id: %lu", cache->allow_migrate, cache->reserving_segment_id); */
+			DMDEBUG("migration not allowed");
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -1088,6 +1159,7 @@ static void migrate_proc(struct work_struct *work)
 		bool need_migrate = (cache->last_migrated_segment_id < cache->last_flushed_segment_id);
 		if(! need_migrate){
 			/* DMDEBUG("migrate proc sleep branch-2"); */
+			DMDEBUG("migration not needed");
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -1204,7 +1276,6 @@ static void update_by_segment_header_device(struct lc_cache *cache, struct segme
 	/* Update in-memory structures */
 	cache_nr i;
 	
-	/* FIXME i < src->length ? */
 	for(i=0; i<src->length; i++){
 		struct metablock *mb = seg->mb_array + i;
 		
@@ -2559,6 +2630,13 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->force_migrate = false;
 		cache->reserving_segment_id = 0;
 		
+		cache->flush_wq = create_singlethread_workqueue("flushwq");
+		spin_lock_init(&cache->flush_queue_lock);
+		INIT_WORK(&cache->flush_work, flush_proc);
+		INIT_LIST_HEAD(&cache->flush_queue);
+		init_waitqueue_head(&cache->flush_wait_queue);
+		queue_work(cache->flush_wq, &cache->flush_work);
+		
 		cache->migrate_wq = create_singlethread_workqueue("migratewq");
 		INIT_WORK(&cache->migrate_work, migrate_proc);
 		queue_work(cache->migrate_wq, &cache->migrate_work);
@@ -2576,17 +2654,6 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		recover_cache(cache);
 		DMDEBUG("recover cache done");
 		lc_caches[cache->id] = cache;
-		
-		/*
-		 * (Locking)
-		 * flush_wq may not nessesarily be singlethreaded.  
-		 * But, flushing a segment is sequential of 1MB
-		 * therefore it makes full use of the disk bandwidth.
-		 * So, parallelizing flushing segment is close to useless
-		 * but only complicates locking.
-		 * My decision is to keep flush_wq stay singlethreaded.
-		 */
-		cache->flush_wq = create_singlethread_workqueue("flushwq");
 
 		clear_stat(cache);
 		

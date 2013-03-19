@@ -17,7 +17,7 @@
 #include <linux/dm-io.h>
 #include <linux/timer.h>
 
-#define LC_SEGMENTSIZE_ORDER 6 /* (1 << x) sector */
+#define LC_SEGMENTSIZE_ORDER 7 /* (1 << x) sector */
 #define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1) 
 
 static struct kobject *devices_kobj;
@@ -430,6 +430,7 @@ struct lc_cache {
 	/*
 	 * For Flush daemon
 	 */
+	spinlock_t flush_queue_lock;
 	struct list_head flush_queue;
 	struct work_struct flush_work;
 	wait_queue_head_t flush_wait_queue;
@@ -697,28 +698,31 @@ struct flush_context {
 
 static void flush_proc(struct work_struct *work)
 {
+	unsigned long flags;
 	struct lc_cache *cache = container_of(work, struct lc_cache, flush_work);
 
 	while(true){
 		DMDEBUG("flush_proc repeat");
 		
+		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while(list_empty(&cache->flush_queue)){
+			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 			DMDEBUG("flush_queue is empty. sleep for a while.");
 			wait_event_interruptible_timeout(
 				cache->flush_wait_queue,				
 				(! list_empty(&cache->flush_queue)),
 				msecs_to_jiffies(100));
+			spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		}
 		
 		DMDEBUG("flush_proc id");
 		
 		/* Pop the first entry */
 		struct flush_context *ctx;
-		mutex_lock(&cache->io_lock);
 		ctx = list_first_entry(
 			&cache->flush_queue, struct flush_context, flush_queue);
 		list_del(&ctx->flush_queue);
-		mutex_unlock(&cache->io_lock);
+		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 	
 		struct segment_header *seg = ctx->seg;
 	
@@ -774,6 +778,7 @@ static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache, 
 
 static void queue_flushing(struct lc_cache *cache)
 {
+	unsigned long flags;
 	struct segment_header *current_seg = cache->current_seg;
 
 	DMDEBUG("flush current segment. nr_dirty_caches_remained: %u", count_dirty_caches_remained(current_seg));
@@ -801,8 +806,10 @@ static void queue_flushing(struct lc_cache *cache)
 	bio_list_merge(&ctx->barrier_ios, &cache->barrier_ios);
 	bio_list_init(&cache->barrier_ios);
 			
+	spin_lock_irqsave(&cache->flush_queue_lock, flags);
 	bool empty = list_empty(&cache->flush_queue);
 	list_add_tail(&ctx->flush_queue, &cache->flush_queue);
+	spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 	if(empty){
 		wake_up_interruptible(&cache->flush_wait_queue);
 	}
@@ -2624,6 +2631,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->reserving_segment_id = 0;
 		
 		cache->flush_wq = create_singlethread_workqueue("flushwq");
+		spin_lock_init(&cache->flush_queue_lock);
 		INIT_WORK(&cache->flush_work, flush_proc);
 		INIT_LIST_HEAD(&cache->flush_queue);
 		init_waitqueue_head(&cache->flush_wait_queue);

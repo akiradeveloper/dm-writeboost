@@ -17,7 +17,17 @@
 #include <linux/dm-io.h>
 #include <linux/timer.h>
 
-#define LC_SEGMENTSIZE_ORDER 7 /* (1 << x) sector */
+/*
+ * Comments are described upon the
+ * condition that the segment size order is 11
+ * which means the segment size is the maxium, 1MB.
+ */
+
+/* 
+ * (1 << x) sector.
+ * 4 <= x <= 11
+ */
+#define LC_SEGMENTSIZE_ORDER 11
 #define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1) 
 
 static struct kobject *devices_kobj;
@@ -227,13 +237,13 @@ retry_io:
 
 /*
  * device_id = 0
- * means invalid cache block.
+ * is reserved for invalid cache block.
  */
 typedef u8 device_id;
 
 /*
  * cache_id = 0
- * means no cache.
+ * is reserved for no cache.
  */
 typedef u8 cache_id;
 
@@ -1395,7 +1405,7 @@ static void recover_cache(struct lc_cache *cache)
 		
 		/* 
 		 * If the segments are too old. Needless to recover. 
-		 * Because the data is already on the backing storage.
+		 * Because the data is already on the backing store.
 		 */
 		if(header->global_id < sup.last_migrated_segment_id){
 			continue;
@@ -1447,7 +1457,7 @@ setup_init_segment:
 	/*
 	 * cursor is set to the first element of the segment.
 	 * This means that we will not use the element.
-	 * I believe this is the simplest principle to implement.
+	 * I believe this is the simplest implementation.
 	 */
 	cache->cursor = seg->start_idx;
 	seg->length = 1;	
@@ -1466,11 +1476,10 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	sector_t devsize = dm_devsize(dev);
 
 	/*
-	 * Disk format (if segment_order is 11):
+	 * Disk format:
 	 * superblock(512B/1024KB) [segment(1024KB)]+
 	 * segment = segment_header(4KB) metablock(4KB)*NR_CACHES_INSEG 
-	 *
-	 * We use the first segment as the superblock.
+	 * We reserve the first segment (1MB) as the superblock.
 	 */
 	return devsize / (1 << LC_SEGMENTSIZE_ORDER) - 1;
 }
@@ -1585,28 +1594,29 @@ static void queue_current_buffer(struct lc_cache *cache)
 	 * Why does the code operate '+1'?
 	 *
 	 * We must consider overwriting
-	 * not only the segment data on cache
+	 * not only the segment metadata on the cache
 	 * but also the in-memory segment metadata. 
 	 * Overwriting either will crash the cache.
 	 *
 	 * There are several choices to solve this problem.
 	 * For simplicity,
 	 * I have chose design that 
-	 * cleaning up the in-memory segment
-	 * before next global id touching it.
+	 * cleaning up the in-memory segment first
+	 * in precedense of next global id touching it.
 	 *
 	 * For these reason,
-	 * a client must prepare cache device
+	 * you must prepare cache device
 	 * with at least two segments that
 	 * is 3MB in size, including superblock.
 	 *
 	 * If we had only one segment,
-	 * Following steps will incur the problem.
+	 * a superblock and a segment,
+	 * following steps will reproduce the problem.
 	 * 1. Flushing segments[0] on cache device.
 	 * 2. Select in-memory segments[0] for the next segment.
 	 * 3. Update the segments[0] along with buffer writes.
 	 * 4. Let's migrate the segments[0] on cache device!
-	 * 5. The in-memory segments[0] is not correct lol
+	 * 5. The in-memory segments[0] is not correct orz
 	 */
 
 	size_t next_id = cache->current_seg->global_id + 1; /* See above comment */
@@ -1676,11 +1686,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	}
 
 	/*
-	 * We only discard the backing storage.
+	 * We only discard the backing store.
 	 * 1. 3.4 kernel doesn't support split_discard_requests.
 	 *    Hence, it is close to impossible to discard blocks on cache.
 	 * 2. Discarding the blocks on cache is meaningless.
-	 *    Because they will be overwritten.
+	 *    Because they will be overwritten eventually.
 	 */
 	if(bio->bi_rw & REQ_DISCARD){
 		bio_remap(bio, orig, bio->bi_sector);
@@ -1738,7 +1748,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 		DMDEBUG("read");
 				
 		if(! found){
-			/* To the backing storage */
+			/* To the backing store */
 			bio_remap(bio, orig, bio->bi_sector);	
 			return DM_MAPIO_REMAPPED;
 		}
@@ -1854,7 +1864,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 				dec_nr_dirty_caches(mb->device_id);
 			}
 
-	 		ht_del(cache, mb); /* Delete the old mb from hashtable */
+	 		ht_del(cache, mb); /* Delete the old mb from hashtable. */
 
 			atomic_dec(&seg->nr_inflight_ios);	
 			goto write_not_found;
@@ -1869,13 +1879,15 @@ write_not_found:
 	 */
 	bool refresh_segment = !( (cache->cursor + 1) % NR_CACHES_INSEG );
 
-	/* Flushing the current buffer if needed */
+	/* 
+	 * Flushing the current buffer if needed.
+	 */
 	if(refresh_segment){
 		queue_current_buffer(cache);
 	}
 
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
-	update_mb_idx = cache->cursor; /* Update the new metablock */
+	update_mb_idx = cache->cursor; /* Update the new metablock. */
 
 	seg = cache->current_seg;
 	atomic_inc(&seg->nr_inflight_ios);

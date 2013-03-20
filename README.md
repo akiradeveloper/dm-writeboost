@@ -31,10 +31,8 @@ extend the lifetime of SSD backing storage [2].
 * [2] G. Soundararajan et al. -- [Extending SSD lifetimes with Disk-Based Write Caches](http://research.microsoft.com/apps/pubs/?id=115352) (2010)
 
 ### Patents
-* [3] Q. Yang and Y. Hu -- [U.S. Patent and Trademark Office, No. 5754888](http://patft.uspto.gov/netacgi/nph-Parser?Sect1=PTO1&Sect2=HITOFF&d=PALL&p=1&u=%2Fnetahtml%2FPTO%2Fsrchnum.htm&r=1&f=G&l=50&s1=5754888.PN.&OS=PN/5754888&RS=PN/5754888) (1996)
+* [3] Q. Yang and Y. Hu -- [U.S. Patent and Trademark Office, No. 5754888](http://patft.uspto.gov/netacgi/nph-Parser?Sect1=PTO1&Sect2=HITOFF&d=PALL&p=1&u=%2Fnetahtml%2FPTO%2Fsrchnum.htm&r=1&f=G&l=50&s1=5754888.PN.&OS=PN/5754888&RS=PN/5754888) (filed in 1996. will be abondaned in Jan 18, 2016)
 
 ## Developer Info
 Akira Hayakawa(@akiradeveloper)  
 e-mail: ruby.wktk@gmail.com
-
-I love linux kernel programming.

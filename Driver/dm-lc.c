@@ -112,7 +112,9 @@ static void *arr_at(struct arr *arr, size_t i)
 	return part->memory + (arr->elemsize * k);
 }
 
-/* dump 8bit * 16 */
+/* 
+ * Dump 8bit * 16 
+ */
 static void dump_memory_16(void *p)
 {
 	u8 x[16];
@@ -153,15 +155,13 @@ static void safe_io_proc(struct work_struct *work)
 }
 
 /*
- * Wrapper for dm_io
- * which cares deadlock case in stacked device.
- *
+ * dm_io wrapper.
  * @thread run operation this in other thread.
  */
-static int dm_safe_io(
+static int dm_safe_io_internal(
 		struct dm_io_request *io_req,
 		struct dm_io_region *region, unsigned num_regions,
-		unsigned long *err_bits, bool thread)
+		unsigned long *err_bits, bool thread, int lineno)
 {
 	int err;
 	if(thread){
@@ -182,43 +182,48 @@ static int dm_safe_io(
 		err = dm_io(io_req, num_regions, region, err_bits);
 	}
 
+	dev_t dev = region->bdev->bd_dev;
+	if(err || err_bits){
+		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)", lineno, err, err_bits);
+		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+	}
+
 	return err;
 }
+#define dm_safe_io(io_req, region, num_regions, thread) \
+	dm_safe_io_internal((io_req), (region), (num_regions), (thread), __LINE__)
 
-static void do_dm_safe_io_retry(
+static void dm_safe_io_retry_internal(
 		struct dm_io_request *io_req,
 		struct dm_io_region *region, unsigned num_regions, bool thread, int lineno)
 {
-	bool failed = false;
 	int err;
 	unsigned long err_bits;
+
 	int count = 0;
 
 retry_io:
 	err_bits = 0;
-	err = dm_safe_io(io_req, region, num_regions, &err_bits, thread);
-	
+	err = dm_safe_io_internal(io_req, region, num_regions, &err_bits, thread, lineno);
+
 	dev_t dev = region->bdev->bd_dev;
 	if(err || err_bits){
-		io_err_count++;
-
-		failed = true;
-		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)", lineno, err, err_bits);
-		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+		io_err_count++; /* Global */
 
 		count++;
 		DMERR("failed io count(%d)", count);
+
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));	
 		goto retry_io;
 	}
 
-	if(failed){
-		DMINFO("L.%d: io has just turned fail to OK.", lineno);
-		DMINFO("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+	if(count){
+		DMERR("L.%d: io has just turned fail to OK.", lineno);
+		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
 }
 #define dm_safe_io_retry(io_req, region, num_regions, thread) \
-	do_dm_safe_io_retry((io_req), (region), (num_regions), (thread), __LINE__)
+	dm_safe_io_retry_internal((io_req), (region), (num_regions), (thread), __LINE__)
 
 /*
  * device_id = 0
@@ -1427,8 +1432,8 @@ setup_init_segment:
 		cache->last_flushed_segment_id - cache->nr_segments : 0;
 	
 	/*
-	 * last_migrate_segment_id can be updated
-	 * by sup.last_migrate_segment_id
+	 * last_migrate_segment_id can be replaced
+	 * with sup.last_migrate_segment_id
 	 * that may be greater than current cache->last_migrated_segment_id.
 	 */
 	if(sup.last_migrated_segment_id > cache->last_migrated_segment_id){
@@ -1461,17 +1466,11 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	sector_t devsize = dm_devsize(dev);
 
 	/*
-	 * Disk format:
+	 * Disk format (if segment_order is 11):
 	 * superblock(512B/1024KB) [segment(1024KB)]+
 	 * segment = segment_header(4KB) metablock(4KB)*NR_CACHES_INSEG 
 	 *
-	 * (Optimization)
-	 * We discard first full 1024KB for superblock
-	 * but only use 512B at the head.
-	 * Maybe the cache device is effient in 1024KB aligned write
-	 * e.g. erase unit of flash device is 256K, 512K.. 
-	 *
-	 * and simplify the code :)
+	 * We use the first segment as the superblock.
 	 */
 	return devsize / (1 << LC_SEGMENTSIZE_ORDER) - 1;
 }
@@ -1714,7 +1713,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	cache_nr k = ht_hash(cache, &key);
 	struct ht_head *head = arr_at(cache->htable, k);
 
-	struct segment_header *seg;
+	struct segment_header *seg = NULL;
 	struct metablock *mb;
 
 	mutex_lock(&cache->io_lock);
@@ -1733,11 +1732,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 	DMDEBUG("on_buffer: %d", on_buffer);
 	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
 		
-	/* 
-	 * [Read]
-	 * Read io doesn't have any side-effects
-	 * which should be processed before write.
-	 */
 	if(! rw){
 		mutex_unlock(&cache->io_lock);
 		
@@ -1759,8 +1753,12 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 			}			
 
 			/*
-			 * TODO(Comment)
-			 * Why shouldn't we cleanup segment and metablock here.
+			 * Dirtiness of a live cache
+			 *
+			 * We keep dirtiness of a cache only increase
+			 * when it is on the buffer, we call this cache is live.
+			 * This eases the locking because
+			 * we don't worry the dirtiness of a live cache fluctuates.
 			 */
 
 			atomic_dec(&seg->nr_inflight_ios);
@@ -1775,6 +1773,17 @@ static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_con
 				calc_mb_start_sector(seg, mb->idx) + bio_offset);
 			map_context->ptr = seg;
 		}else{
+
+			/*
+			 * Dirtiness of a stable cache
+			 *
+			 * Unlike the live caches doesn't fluctuate the dirtiness,
+			 * stable caches which is not on the buffer but on the cache device
+			 * may fall the dirtiness by other processes than the migrate daemon.
+			 * This works fine because migrating the same cache twice
+			 * doesn't abandon the cache concistency.
+			 */
+
 			migrate_mb(cache, seg, mb, dirty_bits, true);
 			
 			bool b = false;

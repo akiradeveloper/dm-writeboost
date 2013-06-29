@@ -1,9 +1,10 @@
-from distutils.core import setup
+#from distutils.core import setup
+from setuptools import setup
 
 setup(
 	name = 'lc-admin',
 	version = '1.0',
-	description = 'Tools for dm-lc admins.',
+	description = 'Tools for dm-lc admins',
 	author = 'Akira Hayakawa',
 	author_email = 'ruby.wktk@gmail.com',
 	packages = ['lc_admin'],
@@ -17,9 +18,9 @@ setup(
 		'bin/lc-admin',
 		'bin/lc-daemon',
 	],
-	# install_requires = [
-		# 'python-daemon',
-		# 'argparse',
-		# 'psutil',
-	# ],
+	install_requires = [
+		'python-daemon',
+		'argparse',
+		'psutil',
+	],
 )

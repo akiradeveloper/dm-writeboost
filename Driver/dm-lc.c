@@ -2271,7 +2271,7 @@ static int lc_status(
 		unsigned flags,
 #endif
 		char *result,
-		unsigned int maxlen)
+		unsigned maxlen)
 {
 	unsigned int sz = 0;
 

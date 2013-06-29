@@ -194,7 +194,7 @@ static int dm_safe_io_internal(
 
 	dev_t dev = region->bdev->bd_dev;
 	if(err || err_bits){
-		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)", lineno, err, err_bits);
+		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)", lineno, err, *err_bits);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
 

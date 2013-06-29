@@ -1,5 +1,5 @@
-KERNEL_TREE := /lib/modules/$(shell uname -r)/build
-# KERNEL_TREE := $(HOME)/linux-$(KERN_VERSION)
+#KERNEL_TREE := /lib/modules/$(shell uname -r)/build
+KERNEL_TREE := $(HOME)/linux-$(KERN_VERSION)
 
 PWD := $(shell pwd)
 

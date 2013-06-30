@@ -1,0 +1,15 @@
+[global]
+filename=/dev/mapper/perflv
+randrepeat=1
+ioengine=libaio
+bs=4k
+ba=4k
+size=2G
+direct=1
+gtod_reduce=1
+norandommap
+iodepth=64
+stonewall
+
+[perf]
+rw=randwrite

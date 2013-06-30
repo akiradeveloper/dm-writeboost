@@ -12,11 +12,16 @@ cd Admin
 python setup.py install
 cd -
 
+echo lc-create
 lc-create perflv 1 ${BACKING}
+echo lc-format-cache
 lc-format-cache ${CACHE}
+echo lc-resume-cache
 lc-resume-cache 1 ${CACHE}
+echo lc-attach
 lc-attach 1 1
 
+echo lc-daemon start
 lc-daemon start
 echo 1 > /sys/module/dm_lc/caches/1/flush_current_buffer_interval
 echo 1 > /sys/module/dm_lc/caches/1/commit_super_block_interval

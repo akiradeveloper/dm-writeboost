@@ -33,11 +33,14 @@ print("attach command: %s" % (load_command))
 
 remove_command = "dmsetup message %s 0 remove_sysfs" % (device.dm_name())
 print(remove_command)
-
 os.system(remove_command)
+
+print(load_command)
 os.system(load_command)
 device.unlock()
 
 #time.sleep(3)
 #os.system("wait") # will deadlock????
-os.system("dmsetup message %s 0 add_sysfs" % (device.dm_name()))
+attach_command = "dmsetup message %s 0 add_sysfs" % device.dm_name()
+print(attach_command)
+os.system(attach_command)

@@ -1509,12 +1509,12 @@ static void format_cache_device(struct dm_dev *dev)
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req_sup, &region_sup, 1, true);
+	dm_safe_io_retry(&io_req_sup, &region_sup, 1, false);
 	kfree(buf);
 
 	size_t i;
+	buf = kzalloc(1 << 12, GFP_KERNEL);
 	for(i=0; i<nr_segments; i++){
-		buf = kzalloc(1 << 12, GFP_KERNEL);
 		struct dm_io_request io_req_seg = {
 			.client = lc_io_client,
 			.bi_rw = WRITE_FUA,
@@ -1527,9 +1527,9 @@ static void format_cache_device(struct dm_dev *dev)
 			.sector = calc_segment_header_start(i),
 			.count = (1 << 3),
 		};
-		dm_safe_io_retry(&io_req_seg, &region_seg, 1, true);
-		kfree(buf);
+		dm_safe_io_retry(&io_req_seg, &region_seg, 1, false);
 	}
+	kfree(buf);
 }
 
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)

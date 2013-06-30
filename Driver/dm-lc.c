@@ -17,6 +17,7 @@
 #include <linux/dm-io.h>
 #include <linux/timer.h>
 
+
 /*
  * Comments are described upon the
  * condition that the segment size order is 11
@@ -592,8 +593,14 @@ static struct metablock *ht_lookup(struct lc_cache *cache, struct ht_head *head,
 {
 	struct metablock *found = NULL;
 	struct metablock *mb;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0)
+	hlist_for_each_entry(mb, &head->ht_list, ht_list)
+#else
 	struct hlist_node *pos;
-	hlist_for_each_entry(mb, pos, &head->ht_list, ht_list){
+	hlist_for_each_entry(mb, pos, &head->ht_list, ht_list)
+#endif
+	{
 		if(mb_hit(mb, key)){
 			found = mb;
 			break;
@@ -1672,7 +1679,11 @@ static void queue_barrier_io(struct lc_cache *cache, struct bio *bio)
 	}
 }
 
-static int lc_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
+static int lc_map(struct dm_target *ti, struct bio *bio
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+		, union map_info *map_context
+#endif
+		)
 {
 	/* DMDEBUG("bio->bi_size :%u", bio->bi_size); */
 	/* DMDEBUG("bio->bi_sector: %lu", bio->bi_sector); */
@@ -1959,7 +1970,11 @@ write_on_buffer:
 	return DM_MAPIO_SUBMITTED;
 }
 
-static int lc_end_io(struct dm_target *ti, struct bio *bio, int error, union map_info *map_context)
+static int lc_end_io(struct dm_target *ti, struct bio *bio, int error
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+		, union map_info *map_context
+#endif
+		)
 {
 	if(! map_context->ptr){
 		return 0;
@@ -2113,9 +2128,9 @@ static struct kobj_type device_ktype = {
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	DMDEBUG("lc_ctr");
-	int r;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+	int r;
 	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if(r){
 		return r;
@@ -2161,8 +2176,14 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc_devices[lc->id] = lc;
 	ti->private = lc;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0)
+	ti->num_flush_bios = 1;
+	ti->num_discard_bios = 1;
+#else
 	ti->num_flush_requests = 1;
 	ti->num_discard_requests = 1;
+#endif
+
 	ti->discard_zeroes_data_unsupported = true;
 
 	/*
@@ -2265,7 +2286,13 @@ static void lc_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	blk_limits_io_opt(limits, 4096);
 }
 
-static int lc_status(
+static 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0)
+void 
+#else
+int 
+#endif
+lc_status(
 		struct dm_target *ti, status_type_t type,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
 		unsigned flags,
@@ -2286,7 +2313,9 @@ static int lc_status(
 		DMEMIT("%d %s %d", lc->id, lc->device->name, cache_id_of(lc));
 		break;
 	}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
 	return 0;
+#endif
 }
 
 static struct target_type lc_target = {
@@ -2304,7 +2333,11 @@ static struct target_type lc_target = {
 	.iterate_devices = lc_iterate_devices,
 };
 
-static int lc_mgr_map(struct dm_target *ti, struct bio *bio, union map_info *map_context)
+static int lc_mgr_map(struct dm_target *ti, struct bio *bio
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+		, union map_info *map_context
+#endif
+		)
 {
 	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
@@ -2707,7 +2740,13 @@ static size_t calc_static_memory_consumption(struct lc_cache *cache)
 	return seg + ht;
 };
 
-static int lc_mgr_status(
+static
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0)
+void 
+#else
+int 
+#endif
+lc_mgr_status(
 		struct dm_target *ti, status_type_t type,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
 		unsigned flags,
@@ -2731,7 +2770,11 @@ static int lc_mgr_status(
 		
 		struct lc_cache *cache = lc_caches[cache_id_ptr];
 		if(! cache){
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
 			return -EINVAL;
+#else
+			return;
+#endif
 		}
 		
 		DMEMIT("static RAM(approx.): %lu (byte)\n", calc_static_memory_consumption(cache));
@@ -2761,7 +2804,9 @@ static int lc_mgr_status(
 		break;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
 	return 0;
+#endif
 }
 
 static struct target_type lc_mgr_target = {

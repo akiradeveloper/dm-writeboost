@@ -2,7 +2,7 @@
 
 export LC_ROOT=`pwd`
 
-BACKING=/dev/vg1/backing
+BACKING=/dev/vg2/back18g
 export BACKING
 
 CACHE=/dev/vg1/cache3m

@@ -194,7 +194,7 @@ static int dm_safe_io_internal(
 	}
 
 	dev_t dev = region->bdev->bd_dev;
-	if(err || err_bits){
+	if(err || *err_bits){
 		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)", lineno, err, *err_bits);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)", io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
@@ -1679,8 +1679,15 @@ static void queue_barrier_io(struct lc_cache *cache, struct bio *bio)
 	}
 }
 
+#define PER_BIO_VERSION KERNEL_VERSION(3,8,0)
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+struct per_bio_data {
+	void *ptr;
+};
+#endif
+
 static int lc_map(struct dm_target *ti, struct bio *bio
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+#if LINUX_VERSION_CODE < PER_BIO_VERSION
 		, union map_info *map_context
 #endif
 		)
@@ -1718,6 +1725,10 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 
 	unsigned long flags;
 
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+	struct per_bio_data *map_context = 
+		dm_per_bio_data(bio, ti->per_bio_data_size);
+#endif
 	map_context->ptr = NULL;
 
 	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
@@ -1971,11 +1982,15 @@ write_on_buffer:
 }
 
 static int lc_end_io(struct dm_target *ti, struct bio *bio, int error
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,8,0)
+#if LINUX_VERSION_CODE < PER_BIO_VERSION
 		, union map_info *map_context
 #endif
 		)
 {
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+	struct per_bio_data *map_context =
+		dm_per_bio_data(bio, ti->per_bio_data_size);
+#endif
 	if(! map_context->ptr){
 		return 0;
 	}
@@ -2175,6 +2190,10 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	lc_devices[lc->id] = lc;
 	ti->private = lc;
+
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+	ti->per_bio_data_size = sizeof(struct per_bio_data);
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,9,0)
 	ti->num_flush_bios = 1;

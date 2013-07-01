@@ -1491,6 +1491,16 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	return devsize / (1 << LC_SEGMENTSIZE_ORDER) - 1;
 }
 
+struct format_segmd_context {
+	atomic64_t count;
+};
+
+static void format_segmd_endio(unsigned long error, void *__context)
+{
+	struct format_segmd_context *context = __context;
+	atomic64_dec(&context->count);
+}
+
 static void format_cache_device(struct dm_dev *dev)
 {
 	size_t nr_segments = calc_nr_segments(dev);
@@ -1512,13 +1522,17 @@ static void format_cache_device(struct dm_dev *dev)
 	dm_safe_io_retry(&io_req_sup, &region_sup, 1, false);
 	kfree(buf);
 
+	struct format_segmd_context context;
+	atomic64_set(&context.count, nr_segments);
+
 	size_t i;
 	buf = kzalloc(1 << 12, GFP_KERNEL);
 	for(i=0; i<nr_segments; i++){
 		struct dm_io_request io_req_seg = {
 			.client = lc_io_client,
-			.bi_rw = WRITE_FUA,
-			.notify.fn = NULL,
+			.bi_rw = WRITE,
+			.notify.fn = format_segmd_endio,
+			.notify.context = &context,
 			.mem.type = DM_IO_KMEM,
 			.mem.ptr.addr = buf,
 		};
@@ -1530,6 +1544,12 @@ static void format_cache_device(struct dm_dev *dev)
 		dm_safe_io_retry(&io_req_seg, &region_seg, 1, false);
 	}
 	kfree(buf);
+
+	while(atomic64_read(&context.count)){
+		schedule_timeout_interruptible(msecs_to_jiffies(100));
+	}
+
+	blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
 }
 
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)

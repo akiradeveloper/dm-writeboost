@@ -7,7 +7,7 @@ make clean
 make 2> $COMPILE_LOG 
 echo -n > $ERROR_LOG
 grep error $COMPILE_LOG >> $ERROR_LOG
-python filterlog.py $COMPILE_LOG >> $ERROR_LOG
+python filter-log.py $COMPILE_LOG >> $ERROR_LOG
 echo "" >> $ERROR_LOG
 cd -
 

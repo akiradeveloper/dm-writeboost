@@ -25,7 +25,7 @@ See also the DCD paper [1].
 You are provided with nice scripts for quick starting.  
 Assuming dm-lc is located in `LC_DIR`,
 
-```
+```c
 $ cd $LC_DIR
 $ vi config // configure device paths etc.
 $ source build

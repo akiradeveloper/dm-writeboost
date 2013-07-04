@@ -21,6 +21,21 @@ See also the DCD paper [1].
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
 
+## Quick Start
+You are provided with nice scripts for quick starting.  
+Assuming dm-lc is located in `LC_DIR`,
+
+```
+$ cd $LC_DIR
+$ vi config // configure device paths etc.
+$ source build
+# cd $LC_DIR
+# source prepare
+```
+
+And you are ready for `/dev/mapper/perflv` powered by dm-lc.  
+Try `$LC_DIR/testing` and `$LC_DIR/performance` and see what is happening.
+
 ## Developer Info
 Akira Hayakawa (@akiradeveloper)  
 e-mail: ruby.wktk@gmail.com

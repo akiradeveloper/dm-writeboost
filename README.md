@@ -6,8 +6,7 @@ dm-lc is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/re
 DCD is an extra logical block layer that 
 gathers in-coming small random writes 
 into a big sequential write
-which then performs high throughput and low latency.  
-See also the DCD paper [1].  
+which then performs high throughput and low latency. See also the DCD paper [1].  
 
 ## Features
 * Log-structured caching principle ensures the durability to server crash.  
@@ -33,6 +32,9 @@ Assuming you have expanded dm-lc under /home/akira,
 
 And you are ready for `/dev/mapper/perflv` powered by dm-lc.  
 Try testing and performance and see what is happening.
+
+## Contributing to dm-lc
+To be written.
 
 ## Developer Info
 Akira Hayakawa (@akiradeveloper)  

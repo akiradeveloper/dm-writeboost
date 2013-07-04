@@ -34,7 +34,17 @@ And you are ready for `/dev/mapper/perflv` powered by dm-lc.
 Try testing and performance and see what is happening.
 
 ## Contributing to dm-lc
-To be written.
+Any type of contribution is all welcome.  
+Not even by code, by documents or by issue reporting is granted as a form of contribution.   
+
+To contribute by code or documents, pull-requests style seems to be a nice one.  
+To make pull-requests,  
+
+1. Fork it.   
+2. Create your feature branch ( `git checkout -b my-new-feature` ).  
+3. Commit your changes ( `git commit -am 'Added some features'` ).  
+4. Push to the forked repository ( `git push origin my-new-feature` ).  
+5. Create a new Pull Request.
 
 ## Developer Info
 Akira Hayakawa (@akiradeveloper)  

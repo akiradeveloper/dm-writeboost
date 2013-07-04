@@ -12,10 +12,13 @@ cd -
 
 echo lc-create ...
 lc-create perflv 1 ${BACKING}
+
 echo lc-format-cache ...
 lc-format-cache ${CACHE}
+
 echo lc-resume-cache ...
 lc-resume-cache 1 ${CACHE}
+
 echo lc-attach ...
 lc-attach 1 1
 

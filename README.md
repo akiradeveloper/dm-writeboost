@@ -23,18 +23,16 @@ See also the DCD paper [1].
 
 ## Quick Start
 You are provided with nice scripts for quick starting.  
-Assuming dm-lc is located in `LC_DIR`,
+Assuming you have expanded dm-lc under /home/akira,
 
-```c
-$ cd $LC_DIR
-$ vi config // configure device paths etc.
-$ source build
-# cd $LC_DIR
-# source prepare
-```
+	$ cd /home/akira/dm-lc
+	$ vi config // configure device paths etc.
+	$ source build
+	# cd /home/akira/dm-lc
+	# source prepare
 
 And you are ready for `/dev/mapper/perflv` powered by dm-lc.  
-Try `$LC_DIR/testing` and `$LC_DIR/performance` and see what is happening.
+Try testing and performance and see what is happening.
 
 ## Developer Info
 Akira Hayakawa (@akiradeveloper)  

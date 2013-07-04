@@ -1,0 +1,10 @@
+#!/usr/bin/env python
+
+import os
+from argparse import ArgumentParser
+
+parser = ArgumentParser()
+
+parser.add_argument('cache_id', type=int)
+os.system("dmsetup message lc-mgr 0 switch_to %d" % (args.cache_id))
+os.system("dmsetup message lc-mgr 0 free_cache")

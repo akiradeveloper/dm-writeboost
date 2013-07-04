@@ -1,0 +1,14 @@
+#!/bin/sh
+
+lc-daemon start
+
+lc-detach 1
+lc-remove 1
+
+lc-daemon stop
+
+lc-free-cache
+
+cd Driver
+make uninstall
+cd -

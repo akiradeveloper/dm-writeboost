@@ -2,8 +2,6 @@
 
 . ./config
 
-modprobe dm-mod
-
 cd Driver
 make install
 cd -

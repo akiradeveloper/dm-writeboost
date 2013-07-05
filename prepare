@@ -13,6 +13,12 @@ cd -
 echo lc-create ...
 lc-create perflv 1 ${BACKING}
 
+# Discard the whole cache device before formatting
+# blkdiscard command is included in upstream util-linux.
+# But don't worry, without discarding, dm-lc works correctly.
+# This is only a performance-relevant issue.
+blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
+
 echo lc-format-cache ...
 lc-format-cache ${CACHE}
 

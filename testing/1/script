@@ -16,3 +16,6 @@ dmsetup message lc-mgr 0 clear_stat
 
 make -j 8
 make test
+
+fuser -muv /mnt/perflv
+umount -l /mnt/perflv

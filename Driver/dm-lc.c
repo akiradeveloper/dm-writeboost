@@ -329,12 +329,14 @@ struct metablock {
 static void inc_nr_dirty_caches(device_id id)
 {
 	struct lc_device *o = lc_devices[id];
+	BUG_ON(! o);
 	atomic64_inc(&o->nr_dirty_caches);
 }
 
 static void dec_nr_dirty_caches(device_id id)
 {
 	struct lc_device *o = lc_devices[id];
+	BUG_ON(! o);
 	atomic64_dec(&o->nr_dirty_caches);
 }
 

@@ -18,4 +18,4 @@ os.system("lc-detach %d" % (device_id))
 
 name = device.dm_name()
 os.system("dmsetup message %s 0 remove_sysfs" % name)
-os.system("dmsetup remove %s" % name)
+os.system("dmsetup remove --retry %s" % name)

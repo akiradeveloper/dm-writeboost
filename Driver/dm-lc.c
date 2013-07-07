@@ -2262,7 +2262,6 @@ static void lc_dtr(struct dm_target *ti)
 	dm_put_device(ti, lc->device);
 
 	ti->private = NULL;
-	lc_devices[lc->id] = NULL;
 	kfree(lc);
 
 	DMDEBUG("lc_dtr end");
@@ -2293,6 +2292,8 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 		sysfs_remove_link(&lc->kobj, "device");
 		kobject_del(&lc->kobj);
 		kobject_put(&lc->kobj);
+
+		lc_devices[lc->id] = NULL;
 		
 		/* kobject_uevent(&lc->kobj, KOBJ_REMOVE); */
 		return 0;

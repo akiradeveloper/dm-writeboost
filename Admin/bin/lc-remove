@@ -16,4 +16,6 @@ device = tools.Device(device_id)
 # this device is not bound to any cache.
 os.system("lc-detach %d" % (device_id))
 
-os.system("dmsetup remove %s" % (device.dm_name()))
+name = device.dm_name()
+os.system("dmsetup message %s 0 remove_sysfs" % name)
+os.system("dmsetup remove %s" % name)

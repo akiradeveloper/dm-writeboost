@@ -12,5 +12,8 @@ args = parser.parse_args()
 device_id = args.device_id
 device = tools.Device(device_id)
 
+# This line makes sure that
+# this device is not bound to any cache.
 os.system("lc-detach %d" % (device_id))
+
 os.system("dmsetup remove %s" % (device.dm_name()))

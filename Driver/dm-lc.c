@@ -478,6 +478,8 @@ struct lc_cache {
 	unsigned long barrier_deadline_ms;
 	struct work_struct barrier_deadline_work;
 
+	bool on_terminate;
+
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
 
@@ -735,6 +737,10 @@ static void flush_proc(struct work_struct *work)
 				(! list_empty(&cache->flush_queue)),
 				msecs_to_jiffies(100));
 			spin_lock_irqsave(&cache->flush_queue_lock, flags);
+
+			if(cache->on_terminate){
+				return;
+			}
 		}
 		
 		DMDEBUG("flush_proc id");
@@ -1162,6 +1168,10 @@ static void migrate_proc(struct work_struct *work)
 	
 	while(true){
 		DMDEBUG("migrate_proc repeat");
+
+		if(cache->on_terminate){
+			return;
+		}
 		
 		/*
 		 * reserving_id > 0 means 
@@ -2719,6 +2729,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		ht_empty_init(cache);
 		DMDEBUG("init htable done");
 		
+		cache->on_terminate = false;
 		cache->allow_migrate = false;
 		cache->force_migrate = false;
 		cache->reserving_segment_id = 0;
@@ -2764,6 +2775,43 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		struct kobject *dev_kobj = get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
+
+		return 0;
+	}
+
+	if(! strcasecmp(cmd, "free_cache")){
+		cache_id id = cache_id_ptr;
+		struct lc_cache *cache = lc_caches[id];
+
+		cache->on_terminate = true;
+
+		DMDEBUG("hoge1");
+		cancel_work_sync(&cache->flush_work);
+		destroy_workqueue(cache->flush_wq);
+
+		DMDEBUG("hoge2");
+		cancel_work_sync(&cache->barrier_deadline_work);
+
+		/* Not read */
+
+		DMDEBUG("hoge3");
+		kfree(cache->migrate_buffer);
+		cancel_work_sync(&cache->migrate_work);
+		destroy_workqueue(cache->migrate_wq);
+		kfree(cache->wb_pool);
+
+		DMDEBUG("hoge4");
+		kill_arr(cache->htable);
+		kill_arr(cache->segment_header_array);
+
+		DMDEBUG("hoge5");
+		sysfs_remove_link(&cache->kobj, "device");
+		kobject_del(&cache->kobj);
+		kobject_put(&cache->kobj);
+
+		kfree(cache);
+
+		lc_caches[id] = NULL;
 
 		return 0;
 	}

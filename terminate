@@ -1,18 +1,18 @@
 #!/bin/sh
 
-lc-daemon start
+#lc-daemon start
 
 echo lc-detach ...
 lc-detach 1
-
-echo lc-remove ...
-lc-remove 1
 
 echo lc-daemon stop ...
 lc-daemon stop
 
 echo lc-free-cache ...
-lc-free-cache
+lc-free-cache 1
+
+echo lc-remove ...
+lc-remove 1
 
 cd Driver
 make uninstall

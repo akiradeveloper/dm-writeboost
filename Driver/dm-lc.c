@@ -729,7 +729,7 @@ static void flush_proc(struct work_struct *work)
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while(list_empty(&cache->flush_queue)){
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
-			DMDEBUG("flush_queue is empty. sleep for a while.");
+			/* DMDEBUG("flush_queue is empty. sleep for a while."); */
 			wait_event_interruptible_timeout(
 				cache->flush_wait_queue,				
 				(! list_empty(&cache->flush_queue)),
@@ -2719,6 +2719,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		ht_empty_init(cache);
 		DMDEBUG("init htable done");
 		
+		/* cache->on_terminate = false; */
 		cache->allow_migrate = false;
 		cache->force_migrate = false;
 		cache->reserving_segment_id = 0;
@@ -2764,6 +2765,43 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		struct kobject *dev_kobj = get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
+
+		return 0;
+	}
+
+	if(! strcasecmp(cmd, "free_cache")){
+		cache_id id = cache_id_ptr;
+		struct lc_cache *cache = lc_caches[id];
+
+		/* cache->on_terminate = true; */
+
+		DMDEBUG("hoge1");
+		cancel_work_sync(&cache->flush_work);
+		destroy_workqueue(cache->flush_wq);
+
+		DMDEBUG("hoge2");
+		cancel_work_sync(&cache->barrier_deadline_work);
+
+		/* Not read */
+
+		DMDEBUG("hoge3");
+		kfree(cache->migrate_buffer);
+		cancel_work_sync(&cache->migrate_work);
+		destroy_workqueue(cache->migrate_wq);
+		kfree(cache->wb_pool);
+
+		DMDEBUG("hoge4");
+		kill_arr(cache->htable);
+		kill_arr(cache->segment_header_array);
+
+		DMDEBUG("hoge5");
+		sysfs_remove_link(&cache->kobj, "device");
+		kobject_del(&cache->kobj);
+		kobject_put(&cache->kobj);
+
+		kfree(cache);
+
+		lc_caches[id] = NULL;
 
 		return 0;
 	}

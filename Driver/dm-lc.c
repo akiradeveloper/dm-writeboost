@@ -2785,26 +2785,21 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		cache->on_terminate = true;
 
-		DMDEBUG("hoge1");
 		cancel_work_sync(&cache->flush_work);
 		destroy_workqueue(cache->flush_wq);
 
-		DMDEBUG("hoge2");
 		cancel_work_sync(&cache->barrier_deadline_work);
 
 		/* Not read */
 
-		DMDEBUG("hoge3");
 		kfree(cache->migrate_buffer);
 		cancel_work_sync(&cache->migrate_work);
 		destroy_workqueue(cache->migrate_wq);
 		kfree(cache->wb_pool);
 
-		DMDEBUG("hoge4");
 		kill_arr(cache->htable);
 		kill_arr(cache->segment_header_array);
 
-		DMDEBUG("hoge5");
 		sysfs_remove_link(&cache->kobj, "device");
 		kobject_del(&cache->kobj);
 		kobject_put(&cache->kobj);

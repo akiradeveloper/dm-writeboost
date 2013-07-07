@@ -923,9 +923,7 @@ static void migrate_mb(
 		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
 		
 		kfree(buf);
-
 	}else{
-		
 		void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 		size_t i;
 		for(i=0; i<8; i++){
@@ -1041,13 +1039,12 @@ migrate_write:
 		if(dirty_bits == 255){
 			DMDEBUG("migrate count full dirty (%u)", i);
 			atomic_inc(&cache->migrate_io_count);
-			continue;
-		}
-
-		for(j=0; j<8; j++){
-			if(dirty_bits & (1 << j)){
-				DMDEBUG("migrate count paritial dirty (%u, %u)", i, j);
-				atomic_inc(&cache->migrate_io_count);
+		} else {
+			for(j=0; j<8; j++){
+				if(dirty_bits & (1 << j)){
+					DMDEBUG("migrate count paritial dirty (%u, %u)", i, j);
+					atomic_inc(&cache->migrate_io_count);
+				}
 			}
 		}
 	}
@@ -1091,33 +1088,31 @@ migrate_write:
 			
 			DMDEBUG("submit full migration I/O (%u)", i);
 			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
-			continue;
-		}
-		
-		for(j=0; j<8; j++){
-			
-			bool b = dirty_bits & (1 << j);
-			if(! b){
-				continue;
+		} else {
+			for(j=0; j<8; j++){
+				bool b = dirty_bits & (1 << j);
+				if(! b){
+					continue;
+				}
+	
+				addr = base + (j << SECTOR_SHIFT);
+				struct dm_io_request io_req_w = {
+					.client = lc_io_client,
+					.bi_rw = WRITE,
+					.notify.fn = migrate_endio,
+					.notify.context = cache,
+					.mem.type = DM_IO_KMEM,
+					.mem.ptr.addr = addr,
+				};
+				struct dm_io_region region_w = {
+					.bdev = lc->device->bdev,
+					.sector = mb->sector + j,
+					.count = 1,
+				};
+				
+				DMDEBUG("submit partial migration I/O (%u, %u)", i, j);
+				dm_safe_io_retry(&io_req_w, &region_w, 1, false);
 			}
-
-			addr = base + (j << SECTOR_SHIFT);
-			struct dm_io_request io_req_w = {
-				.client = lc_io_client,
-				.bi_rw = WRITE,
-				.notify.fn = migrate_endio,
-				.notify.context = cache,
-				.mem.type = DM_IO_KMEM,
-				.mem.ptr.addr = addr,
-			};
-			struct dm_io_region region_w = {
-				.bdev = lc->device->bdev,
-				.sector = mb->sector + j,
-				.count = 1,
-			};
-			
-			DMDEBUG("submit partial migration I/O (%u, %u)", i, j);
-			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
 		}
 	}
 

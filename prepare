@@ -20,10 +20,10 @@ lc-create perflv 1 ${BACKING}
 blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
 
 echo lc-format-cache ...
-lc-format-cache ${CACHE}
+time lc-format-cache ${CACHE}
 
 echo lc-resume-cache ...
-lc-resume-cache 1 ${CACHE}
+time lc-resume-cache 1 ${CACHE}
 
 echo lc-attach ...
 lc-attach 1 1

@@ -478,6 +478,8 @@ struct lc_cache {
 	unsigned long barrier_deadline_ms;
 	struct work_struct barrier_deadline_work;
 
+	bool on_terminate;
+
 	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
 	atomic64_t stat[2][2][2][2];
 
@@ -729,12 +731,16 @@ static void flush_proc(struct work_struct *work)
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while(list_empty(&cache->flush_queue)){
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
-			/* DMDEBUG("flush_queue is empty. sleep for a while."); */
+			DMDEBUG("flush_queue is empty. sleep for a while.");
 			wait_event_interruptible_timeout(
 				cache->flush_wait_queue,				
 				(! list_empty(&cache->flush_queue)),
 				msecs_to_jiffies(100));
 			spin_lock_irqsave(&cache->flush_queue_lock, flags);
+
+			if(cache->on_terminate){
+				return;
+			}
 		}
 		
 		DMDEBUG("flush_proc id");
@@ -1162,6 +1168,10 @@ static void migrate_proc(struct work_struct *work)
 	
 	while(true){
 		DMDEBUG("migrate_proc repeat");
+
+		if(cache->on_terminate){
+			return;
+		}
 		
 		/*
 		 * reserving_id > 0 means 
@@ -2719,7 +2729,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		ht_empty_init(cache);
 		DMDEBUG("init htable done");
 		
-		/* cache->on_terminate = false; */
+		cache->on_terminate = false;
 		cache->allow_migrate = false;
 		cache->force_migrate = false;
 		cache->reserving_segment_id = 0;
@@ -2773,7 +2783,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache_id id = cache_id_ptr;
 		struct lc_cache *cache = lc_caches[id];
 
-		/* cache->on_terminate = true; */
+		cache->on_terminate = true;
 
 		DMDEBUG("hoge1");
 		cancel_work_sync(&cache->flush_work);

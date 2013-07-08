@@ -2802,6 +2802,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		kobject_del(&cache->kobj);
 		kobject_put(&cache->kobj);
 
+		dm_put_device(ti, cache->device);
 		kfree(cache);
 
 		lc_caches[id] = NULL;

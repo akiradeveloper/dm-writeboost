@@ -13,7 +13,7 @@ which then performs high throughput and low latency. See also the DCD paper [1].
 * Unlike bcache, dm-lc is a complete loadable kernel module.  
 * Fully supports REQ_FLUSH/REQ_FUA operations to emulate block device.  
 * Kernel versions since 3.2 are widely supported.  
-* Capable of performing 350 kiops random writes with a fast enough cache.  
+* Capable of performing 375kiops(1.5GB/sec) random writes with a fast enough cache.  
 * Concurrency not discussed in DCD paper is implemented.  
 * Auxiliary daemon automatically controls the behavior of the kernel module. Migration is automated.  
 

@@ -2234,23 +2234,18 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	/*
 	 * /sys/module/dm_lc/devices/$id/$atribute
-	 *                              /dev // Note
+	 *                              /dev // -> Note
 	 *                              /device
 	 */
 
 	/*
-	 * TODO Purge
-	 * (Note)
-	 * It is best to add symlink to /sys/block/$(this volume)
-	 * but is actually infeasible because we have no way to
-	 * get kobject from dm_target.
-	 *
-	 * dm_disk function in the header file is not actually exported,
-	 * though claimed many times,
-	 * and is no use. I don't know why but
-	 * am sure that is the problem in this case.
+	 * Note:
+	 * reference to the mapped_device
+	 * is used to show device name (major:minor).
+	 * major:minor is used in admin scripts
+	 * to get the sysfs node of a lc_device.
 	 */
-	lc->md = dm_table_get_md(ti->table); /* TODO Purge*/
+	lc->md = dm_table_get_md(ti->table);
 
 	DMDEBUG("lc_ctr end");
 	return 0;

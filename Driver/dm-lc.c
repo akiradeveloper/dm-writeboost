@@ -2788,11 +2788,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		cancel_work_sync(&cache->barrier_deadline_work);
 
-		/* Not read */
-
 		kfree(cache->migrate_buffer);
 		cancel_work_sync(&cache->migrate_work);
 		destroy_workqueue(cache->migrate_wq);
+
+		size_t i;
+		struct writebuffer *wb;
+		for(i=0; i<NR_WB_POOL; i++){
+			wb = cache->wb_pool + i;
+			kfree(wb->data);
+		}
 		kfree(cache->wb_pool);
 
 		kill_arr(cache->htable);

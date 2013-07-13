@@ -25,7 +25,7 @@ You are provided with nice scripts for quick starting.
 Assuming you have expanded dm-lc under /home/akira,
 
 	$ cd /home/akira/dm-lc
-	$ vi config // configure device paths etc.
+	$ vi config # configure device paths etc.
 	$ source build
 	# cd /home/akira/dm-lc
 	# source prepare
@@ -41,9 +41,9 @@ To contribute by code or documents, pull-requests style seems to be a nice one.
 To make pull-requests,  
 
 1. Fork it.   
-2. Create your feature branch ( `git checkout -b my-new-feature` ).  
-3. Commit your changes ( `git commit -am 'Added some features'` ).  
-4. Push to the forked repository ( `git push origin my-new-feature` ).  
+2. Create your feature branch (`git checkout -b my-new-feature`).  
+3. Commit your changes (`git commit -am 'Added some features'`).  
+4. Push to the forked repository (`git push origin my-new-feature`).  
 5. Create a new Pull Request.
 
 ## Developer Info

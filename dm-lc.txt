@@ -5,55 +5,64 @@ dm-lc provides write-back log-structured caching.
 
 1. Setup
 ========
-
-dm-lc is composed of two target_type lc and lc-mgr.
-lc is responsible for creating cached volume and controlling ios and 
+dm-lc is composed of two target_type named lc and lc-mgr.
+lc is responsible for creating virtual volumes and controlling ios and 
 lc-mgr is reponsible for managing
 formatting/initializing/destructing cache devices.
 Operating dm-lc through these native interfaces are not recommended.
 
-To safely get started with dm-lc, nice userland tools are provided in
+To easily get started with dm-lc, nice userland tools are provided in
 https://github.com/akiradeveloper/dm-lc
 where you are also accesible to portable dm-lc kernel code
-that supports since 3.2 until before dm-lc staged upstream.
+that supports since 3.2 until before dm-lc staged upstream, 3.x.
 please git clone it.
-
+	
 To install the tools,
 move under Admin directory and run
-python setup.py install
-and you are dm-lc admin.
+
+	python setup.py install
+
+and now you are dm-lc admin.
 
 2. Example scripts
 ==================
 Let's create a virtual volume named myLV
-backed by /dev/myBacking
-and use /dev/myCache as cache device.
+backed by /dev/myVg/myBacking
+and use /dev/myCache as a cache device.
 
-myLV -- (backing) /dev/myBacking
+myLV -- (backing) /dev/myVg/myBacking
      -- (cache)   /dev/myCache
 
-# Step 1:
+Step 1
+------
 Format the cache device and
 resume the device.
 
 resuming constructs in-memory structures like hashtables
 from the metadata on the cache device.
 
-lc-format-cache /dev/myCache
-lc-resume 1 /dev/myCache
+	lc-format-cache /dev/myCache
+	lc-resume 1 /dev/myCache
 
-# Step 2:
+Step 2
+------
 Create a virtual volume and
 attach to the cache device.
 
-lc-create myLV 1 /dev/myBacking
-lc-attach 1 1
+	lc-create myLV 1 /dev/myVg/myBacking
+	llc-attach 1 1
 
-lc-daemon start
+Step 3
+------
+Start lc-daemon.
+dm-lc provides daemon program
+that autonomously control the module behavior
+such as write-back from cache device to backing store
+which dm-lc calls "migration".
+
+	lc-daemon start
 
 3. Sysfs
 ========
 dm-lc provides several sysfs interfaces
-to control the behavior.
-
-TODO I am hungry...
+to control the module behavior.

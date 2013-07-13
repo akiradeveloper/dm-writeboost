@@ -302,7 +302,7 @@ struct metablock_device {
 
 	u8 dirty_bits;
 
-	u32 color;
+	u32 lap;
 } __packed;
 
 /*
@@ -368,7 +368,7 @@ struct segment_header_device {
 	/* --- at most512 byte ---*/
 	size_t global_id;
 	u8 length;
-	u32 color; /* initially 0. 1 for first turn. */
+	u32 lap; /* initially 0. 1 for the first lap. */
 	/* -----------------------*/
 	/* This array must locate at the tail */
 	struct metablock_device mbarr[NR_CACHES_INSEG];
@@ -637,10 +637,10 @@ static struct segment_header *get_segment_header_by_id(struct lc_cache *cache,
 	return r;
 }
 
-static u32 calc_segment_color(struct lc_cache *cache, size_t segment_id)
+static u32 calc_segment_lap(struct lc_cache *cache, size_t segment_id)
 {
-	u32 turn = (segment_id - 1) / cache->nr_segments;
-	return turn + 1;
+	u32 a = (segment_id - 1) / cache->nr_segments;
+	return a + 1;
 };
 
 static sector_t calc_mb_start_sector(struct segment_header *seg,
@@ -669,7 +669,7 @@ static void prepare_segment_header_device(
 {
 	dest->global_id = src->global_id;
 	dest->length = src->length;
-	dest->color = calc_segment_color(cache, src->global_id);
+	dest->lap = calc_segment_lap(cache, src->global_id);
 
 	u8 left = src->length - 1;
 	u8 right = (cache->cursor) % NR_CACHES_INSEG;
@@ -682,7 +682,7 @@ static void prepare_segment_header_device(
 		mbdev->device_id = mb->device_id;
 		mbdev->sector = mb->sector;
 		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->color = dest->color;
+		mbdev->lap = dest->lap;
 	}
 }
 
@@ -1277,7 +1277,7 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	struct metablock_device *o;
 	for (i = 0; i < header->length; i++) {
 		o = header->mbarr + i;
-		if (o->color != header->color)
+		if (o->lap != header->lap)
 			return false;
 	}
 	return true;

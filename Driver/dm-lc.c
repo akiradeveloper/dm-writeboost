@@ -419,6 +419,14 @@ struct lookup_key {
 	sector_t sector;
 };
 
+enum STATFLAG {
+	STAT_WRITE = 0,
+	STAT_HIT,
+	STAT_ON_BUFFER,
+	STAT_FULLSIZE,
+};
+#define STATLEN (1 << 4)
+
 struct lc_cache {
 	struct kobject kobj;
 
@@ -482,8 +490,7 @@ struct lc_cache {
 
 	bool on_terminate;
 
-	/* (write/read), (hit/miss), (buffer/dev), (full/partial) */
-	atomic64_t stat[2][2][2][2];
+	atomic64_t stat[STATLEN];
 
 	unsigned long update_interval;
 	unsigned long commit_super_block_interval;
@@ -494,25 +501,27 @@ struct lc_cache {
 
 static void inc_stat(struct lc_cache *cache, int rw, bool found, bool on_buffer, bool fullsize)
 {
-	int i0 = rw ? 1 : 0;
-	int i1 = found ? 1 : 0;
-	int i2 = on_buffer ? 1 : 0;
-	int i3 = fullsize ? 1 : 0;
+	int i = 0;
+	if (rw)
+		i |= (1 << STAT_WRITE);
+	if (found)
+		i |= (1 << STAT_HIT);
+	if (on_buffer)
+		i |= (1 << STAT_ON_BUFFER);
+	if (fullsize)
+		i |= (1 << STAT_FULLSIZE);
 	
-	atomic64_t *v = &cache->stat[i0][i1][i2][i3];
+	atomic64_t *v = &cache->stat[i];
 	atomic64_inc(v);
 }
 
 static void clear_stat(struct lc_cache *cache)
 {
-	int i0, i1, i2, i3;
-	for(i0=0; i0<2; i0++){
-	for(i1=0; i1<2; i1++){
-	for(i2=0; i2<2; i2++){
-	for(i3=0; i3<2; i3++){
-		atomic64_t *v = &cache->stat[i0][i1][i2][i3];
+	int i;
+	for(i=0; i<STATLEN; i++){
+		atomic64_t *v = &cache->stat[i];
 		atomic64_set(v, 0);
-	}}}}		
+	}
 }
 
 static struct metablock *mb_at(struct lc_cache *cache, cache_nr idx)
@@ -1790,7 +1799,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 	}
 	DMDEBUG("on_buffer: %d", on_buffer);
 	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
-		
+
 	if(! rw){
 		mutex_unlock(&cache->io_lock);
 		
@@ -2866,19 +2875,22 @@ lc_mgr_status(
 		DMEMIT("last_flushed_segment_id: %lu\n", cache->last_flushed_segment_id);
 		DMEMIT("current segment id: %lu\n", cache->current_seg->global_id);
 		DMEMIT("cursor: %u\n", cache->cursor);
+		DMEMIT("\n");
 		DMEMIT("write? hit? on_buffer? fullsize?\n");
-		int i0, i1, i2, i3;
-		for(i0=0; i0<2; i0++){
-		for(i1=0; i1<2; i1++){
-		for(i2=0; i2<2; i2++){
-		for(i3=0; i3<2; i3++){
-			atomic64_t *v = &cache->stat[i0][i1][i2][i3];
-			DMEMIT("%d %d %d %d %lu", i0, i1, i2, i3, atomic64_read(v));
-			if(i0 * i1 * i2 * i3){
-				continue;
-			}
+		int i;
+		for(i=0; i<STATLEN; i++){
+			if (i == (STATLEN-1))
+				break;
+
+			atomic64_t *v = &cache->stat[i];
+			DMEMIT("%d %d %d %d %lu",
+				i & (1 << STAT_WRITE)      ? 1 : 0,	
+				i & (1 << STAT_HIT)        ? 1 : 0,
+				i & (1 << STAT_ON_BUFFER)  ? 1 : 0,
+				i & (1 << STAT_FULLSIZE)   ? 1 : 0,
+				atomic64_read(v));
 			DMEMIT("\n");
-		}}}}
+		}
 		break;
 		
 	case STATUSTYPE_TABLE:

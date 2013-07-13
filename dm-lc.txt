@@ -35,32 +35,48 @@ myLV -- (backing) /dev/myVg/myBacking
 
 Step 1
 ------
-Format the cache device and
-resume the device.
+Format myCache and
+resume myCache
 
-resuming constructs in-memory structures like hashtables
-from the metadata on the cache device.
+Resuming constructs in-memory structures like hashtables
+from the metadata on myCache.
 
 	lc-format-cache /dev/myCache
 	lc-resume 1 /dev/myCache
 
 Step 2
 ------
-Create a virtual volume and
-attach to the cache device.
+Create myLV and
+attach to myCache
 
 	lc-create myLV 1 /dev/myVg/myBacking
-	llc-attach 1 1
+	lc-attach 1 1
 
 Step 3
 ------
-Start lc-daemon.
+Start userland daemon
+
 dm-lc provides daemon program
 that autonomously control the module behavior
-such as write-back from cache device to backing store
+such as write-back from myCache to myBacking
 which dm-lc calls "migration".
 
 	lc-daemon start
+
+Step 4
+------
+Terminate myLV
+
+Safely terminating myLV attached to myCache
+is difficult and that's why dm-lc provides these admin tools.
+myLV can not detach from myCache
+until all the dirty caches on myCache
+are migrated to myBacking 
+
+	lc-detach 1
+	lc-daemon stop
+	lc-free-cache 1
+	lc-remove 1
 
 3. Sysfs
 ========

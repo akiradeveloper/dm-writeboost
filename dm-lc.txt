@@ -2,26 +2,24 @@ dm-lc
 =====
 
 dm-lc provides write-back log-structured caching.
+It batches random writes into a big sequential write.
 
 1. Setup
 ========
-dm-lc is composed of two target_type named lc and lc-mgr.
+dm-lc is composed of two target_type instances named lc and lc-mgr.
 lc is responsible for creating virtual volumes and controlling ios and 
 lc-mgr is reponsible for managing
-formatting/initializing/destructing cache devices.
+formatting/initializing/destructing cache devices on the other hand.
 Operating dm-lc through these native interfaces are not recommended.
 
 To easily get started with dm-lc, nice userland tools are provided in
-https://github.com/akiradeveloper/dm-lc
+	https://github.com/akiradeveloper/dm-lc
 where you are also accesible to portable dm-lc kernel code
-that supports since 3.2 until before dm-lc staged upstream, 3.x.
+that supports since 3.2 kernel until before dm-lc staged upstream, 3.x.
 please git clone it.
 	
-To install the tools,
-move under Admin directory and run
-
+To install the tools, move under Admin directory and run
 	python setup.py install
-
 and now you are dm-lc admin.
 
 2. Example scripts
@@ -30,27 +28,27 @@ Let's create a virtual volume named myLV
 backed by /dev/myVg/myBacking
 and use /dev/myCache as a cache device.
 
-myLV -- (backing) /dev/myVg/myBacking
-     -- (cache)   /dev/myCache
+myLV -- (backing store) /dev/myVg/myBacking
+     -- (cache device)  /dev/myCache
 
 Step 1
 ------
 Format myCache and
 resume myCache
 
-Resuming constructs in-memory structures like hashtables
-from the metadata on myCache.
+Resuming builds in-memory structures like hashtables
+reading from the metadata on myCache.
 
 	lc-format-cache /dev/myCache
-	lc-resume 1 /dev/myCache
+	lc-resume 3 /dev/myCache
 
 Step 2
 ------
 Create myLV and
 attach to myCache
 
-	lc-create myLV 1 /dev/myVg/myBacking
-	lc-attach 1 1
+	lc-create myLV 5 /dev/myVg/myBacking
+	lc-attach 5 3
 
 Step 3
 ------
@@ -67,18 +65,96 @@ Step 4
 ------
 Terminate myLV
 
-Safely terminating myLV attached to myCache
-is difficult and that's why dm-lc provides these admin tools.
+Safely terminating myLV already attached to myCache
+is easy to mistake and that's why dm-lc provides these admin tools.
 myLV can not detach from myCache
 until all the dirty caches on myCache
 are migrated to myBacking 
 
-	lc-detach 1
+	lc-detach 5
 	lc-daemon stop
-	lc-free-cache 1
-	lc-remove 1
+	lc-free-cache 3
+	lc-remove 5
 
 3. Sysfs
 ========
-dm-lc provides several sysfs interfaces
-to control the module behavior.
+dm-lc provides some sysfs interfaces to control the module behavior.
+The sysfs tree is located under /sys/module/dm_lc.
+
+/sys/module/dm_lc
+|
+|-- devices
+|   `-- 5
+|       |-- cache_id
+|       |-- dev
+|       |-- device -> ../../../../devices/virtual/block/dm-0
+|       |-- migrate_threshold
+|       |-- nr_dirty_caches
+|
+|-- caches
+|   `-- 3
+|       |-- allow_migrate
+|       |-- barrier_deadline_ms
+|       |-- commit_super_block
+|       |-- commit_super_block_interval
+|       |-- device -> ../../../../devices/virtual/block/dm-1
+|       |-- flush_current_buffer
+|       |-- flush_current_buffer_interval
+|       |-- force_migrate
+|       |-- last_flushed_segment_id
+|       |-- last_migrated_segment_id
+|       `-- update_interval
+
+4. Technical Issues
+===================
+There are not a few technical issues 
+that distinguishes dm-lc from other similar cache softwares.
+
+4.1 RAM buffer and immediate completion
+dm-lc allocated RAM buffers of 64MB in total by default.
+All of the writes are first stored in one of these RAM buffers
+and immediate completion is notified to the upper layer
+that is usually in few microseconds that is unimaginably fast.
+
+4.2 Metadata durability
+After RAM buffer gets full or some deadline comes
+dm-lc creates segment log that gathers RAM buffer and its metadata.
+Metadata have information such as connection between
+address in cache device and the counterpart in backing store.
+As the segment log finally is written to persistent cache device,
+any data will not be lost after machine failure.
+
+4.3 Asynchronous log flushing
+dm-lc has a background worker called flush daemon.
+Flushing segment log starts from simplly queueing the flush task.
+Flush daemon in background asynchronously checks if the queue has some tasks
+and actually executes the tasks if exists.
+The fact that the upper layer doesn't block in queueing the task
+maximizes the write throughput
+that is 259MB/s random writes with cache device of 266MB/s sequential write
+which is only 4% loss
+and 1.5GB/s theoritically with a fast enough cache like PCI-e SSDs.
+
+4.4 Asynchronous and automated migration
+Some time after a log segment is flushed to cache device
+it will be migrated to backing store.
+Migrate daemon is also a background worker 
+that periodically check if log segments to migrate exist.
+
+Restlessly migrating highly loads backing store
+so migration is better to execute when the backing store is in low load.
+lc-daemon in userland surveils the load of backing store
+and turns migration on and off according to the load.
+
+4.5 Lazy handling of REQ_FUA and REQ_FLUSH bios
+Some applications such as XFS and databases often submit SYNC write that
+leads to bios flagged with REQ_FUA or REQ_FLUSH.
+Handling these irregular bios immediately and thus synchronously
+desparately deteriorates the whole throughput.
+To address this issue, dm-lc handles these bios lazily or in deferred manner.
+Completion related to these bios will not be done until 
+they are written persistently to the cache device
+so this storategy doesn't break the semantics.
+In worst case, a bio with some of these flags
+is completed in deadline period that is described
+in barrier_deadline_ms in sysfs.

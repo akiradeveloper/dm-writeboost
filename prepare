@@ -10,9 +10,6 @@ cd Admin
 python setup.py install
 cd -
 
-echo lc-create ...
-lc-create perflv 1 ${BACKING}
-
 # Discard the whole cache device before formatting
 # blkdiscard command is included in upstream util-linux.
 # But don't worry, without discarding, dm-lc works correctly.
@@ -23,15 +20,18 @@ echo lc-format-cache ...
 time lc-format-cache ${CACHE}
 
 echo lc-resume-cache ...
-time lc-resume-cache 1 ${CACHE}
+time lc-resume-cache 3 ${CACHE}
+
+echo lc-create ...
+lc-create perflv 5 ${BACKING}
 
 echo lc-attach ...
-lc-attach 1 1
+lc-attach 5 3
 
 echo lc-daemon start ...
 # To disable automated controll by lc-daemon.
 # Comment out this line.
 lc-daemon start
 
-echo 1 > /sys/module/dm_lc/caches/1/flush_current_buffer_interval
-echo 1 > /sys/module/dm_lc/caches/1/commit_super_block_interval
+echo 1 > /sys/module/dm_lc/caches/3/flush_current_buffer_interval
+echo 1 > /sys/module/dm_lc/caches/3/commit_super_block_interval

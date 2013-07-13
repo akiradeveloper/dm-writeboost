@@ -207,8 +207,6 @@ typedef u8 device_id;
 struct lc_device {
 	struct kobject kobj;
 
-	bool readonly;
-
 	unsigned char migrate_threshold;
 
 	struct lc_cache *cache;
@@ -459,8 +457,6 @@ struct lc_cache {
 	unsigned long update_interval;
 	unsigned long commit_super_block_interval;
 	unsigned long flush_current_buffer_interval;
-
-	bool readonly; /* TODO */
 };
 
 static void inc_stat(struct lc_cache *cache,
@@ -1781,13 +1777,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		return DM_MAPIO_REMAPPED;
 	}
 
-	if (lc->readonly) {
-		mutex_unlock(&cache->io_lock);
-		if (found)
-			atomic_dec(&seg->nr_inflight_ios);
-		return -EIO;
-	}
-
 	cache_nr update_mb_idx;
 	if (found) {
 
@@ -2027,30 +2016,6 @@ static struct device_sysfs_entry migrate_threshold_entry = {
 	.store = migrate_threshold_store,
 };
 
-static ssize_t readonly_show(struct lc_device *device, char *page)
-{
-	unsigned long val = 0;
-	if (device->readonly)
-		val = 1;
-
-	return var_show(val, page);
-}
-
-static ssize_t readonly_store(struct lc_device *device,
-			      const char *page, size_t count)
-{
-	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
-	device->readonly = x; /* FIXME need lock? */
-	return r;
-}
-
-static struct device_sysfs_entry readonly_entry = {
-	.attr = { .name = "readonly", .mode = S_IRUGO | S_IWUSR },
-	.show = readonly_show,
-	.store = readonly_store,
-};
-
 static ssize_t nr_dirty_caches_show(struct lc_device *device, char *page)
 {
 	unsigned long val = atomic64_read(&device->nr_dirty_caches);
@@ -2066,7 +2031,6 @@ static struct attribute *device_default_attrs[] = {
 	&cache_id_entry.attr,
 	&dev_entry.attr,
 	&migrate_threshold_entry.attr,
-	&readonly_entry.attr,
 	&nr_dirty_caches_entry.attr,
 	NULL,
 };
@@ -2109,7 +2073,6 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 * storage should keep its disk util less than 70%.
 	 */
 	lc->migrate_threshold = 70;
-	lc->readonly = false;
 
 	atomic64_set(&lc->nr_dirty_caches, 0);
 	atomic64_inc(&lc->nr_dirty_caches);

@@ -755,18 +755,7 @@ static void flush_proc(struct work_struct *work)
 static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache,
 				     struct segment_header *seg)
 {
-	/*
-	 * We dynamically alloc here because
-	 * segment_header_device is too big to alloc in stack.
-	 */
-	struct segment_header_device *header =
-		kmalloc_retry(sizeof(*header), GFP_NOIO);
-	prepare_segment_header_device(header, cache, seg);
-	void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
-	memcpy(buf, header, sizeof(*header));
-	kfree(header);
-	memcpy(writebuffer, buf, 1 << 12);
-	kfree(buf);
+	prepare_segment_header_device(writebuffer, cache, seg);
 }
 
 static void queue_flushing(struct lc_cache *cache)

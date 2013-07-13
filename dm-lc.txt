@@ -38,6 +38,9 @@ resume myCache
 
 Resuming builds in-memory structures like hashtables
 reading from the metadata on myCache.
+If the cache device was formatted before,
+lc-format-cache can be omitted
+in such a case like server reboot.
 
 	lc-format-cache /dev/myCache
 	lc-resume 3 /dev/myCache

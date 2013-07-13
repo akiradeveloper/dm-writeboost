@@ -1083,6 +1083,22 @@ migrate_write:
 		lc = lc_devices[i];
 		blkdev_issue_flush(lc->device->bdev, GFP_NOIO, NULL);
 	}
+
+	/*
+	 * Discarding the migrated regions
+	 * can avoid unnecessary wear amplifier in the future.
+	 * But note that we should not discard
+	 * the metablock region because
+	 * it varies across flash devices whether to ensure
+	 * the discarded block returns certain value
+	 * and discarding the metablock may lead to
+	 * integrity collapsion.
+	 */
+	blkdev_issue_discard(
+		cache->device->bdev,
+		seg->start_sector + (1 << 3),
+		seg->length << 3,
+		GFP_NOIO, 0);
 }
 
 static void migrate_proc(struct work_struct *work)

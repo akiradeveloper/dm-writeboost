@@ -1,0 +1,8 @@
+config DM_LC
+	tristate "Log-structured Caching (EXPERIMENTAL)"
+	depends on BLK_DEV_DM
+	default y
+	---help---
+	  dm-lc is a cache layer that tranparently
+	  batches the random writes into a big sequential write
+	  to the designated cache device in Log-structured manner.

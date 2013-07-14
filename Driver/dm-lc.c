@@ -1268,6 +1268,7 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	return true;
 }
 
+
 static void recover_cache(struct lc_cache *cache)
 {
 	struct superblock_device sup;
@@ -1280,8 +1281,7 @@ static void recover_cache(struct lc_cache *cache)
 		kmalloc(sizeof(*header), GFP_KERNEL);
 
 	/*
-	 * Finding the oldest, non-zero, id
-	 * and its index.
+	 * Finding the oldest, non-zero id and its index.
 	 */
 
 	size_t max_id = SZ_MAX; /* This global_id is forbidden. */
@@ -1300,22 +1300,47 @@ static void recover_cache(struct lc_cache *cache)
 	}
 
 	size_t last_flushed_id = 0;
+
+	/*
+	 * This is an invariant.
+	 * We always start from the segment
+	 * that is right after the last_flush_id.
+	 */
 	size_t init_segment_id = last_flushed_id + 1;
 
 	/*
-	 * If no segments have been flushed
+	 * If no segment was flushed
 	 * then there is nothing to recover.
 	 */
 	if (oldest_id == max_id)
 		goto setup_init_segment;
 
+	/*
+	 * What we have to do in the next loop is to
+	 * reincarnate the segments that are
+	 * flushed but yet not migrated.
+	 */
+
+	/*
+	 * Example:
+	 * There are only 5 segments.
+	 * The segments we will consider is of id k+2 and k+3.
+	 *
+	 * id: [   k+3   ][    k+4   ][     k     ][   k+1    ][   K+2   ]
+	 *       flushed    init_seg    last         migrated    flushed
+	 *                              _migrated
+	 */
 	size_t j;
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
 		j = i % nr_segments;
 		read_segment_header_device(header, cache, j);
 
 		/*
-		 * global_id must uniformly increase.
+		 * global_id must uniformly increase from 1.
+		 * Since last_flush_id is 0 at first,
+		 * if global_id is 0,
+		 * we consider this and the subsequents
+		 * are all invalid.
 		 */
 		if (header->global_id <= last_flushed_id)
 			break;
@@ -1331,12 +1356,16 @@ static void recover_cache(struct lc_cache *cache)
 		init_segment_id = last_flushed_id + 1;
 
 		/*
-		 * If the segments are too old. Needless to recover.
-		 * Because the data is already on the backing store.
+		 * If the data is already on the backing store,
+		 * we ignore the segment.
 		 */
-		if (header->global_id < sup.last_migrated_segment_id)
+		if (header->global_id <= sup.last_migrated_segment_id)
 			continue;
 
+		/*
+		 * Only those to be migrated are counted in.
+		 * These segments will not be available until migrated.
+		 */
 		update_by_segment_header_device(cache, header);
 	}
 
@@ -1348,29 +1377,12 @@ setup_init_segment:
 	seg->global_id = init_segment_id;
 	atomic_set(&seg->nr_inflight_ios, 0);
 
-	/*
-	 * Relation Diagram:
-	 * [    seg0    ][    seg1    ][    seg2    ]
-	 *                current(seg)
-	 *    flushed
-	 *                  migrated      migrated
-	 */
-
 	cache->last_flushed_segment_id = seg->global_id - 1;
 
-	/*
-	 * lastly migrated is at least the same segment
-	 * with index (last_flushed_segment_id % nr_segments).
-	 */
 	cache->last_migrated_segment_id =
 		cache->last_flushed_segment_id > cache->nr_segments ?
 		cache->last_flushed_segment_id - cache->nr_segments : 0;
 
-	/*
-	 * last_migrate_segment_id can be replaced
-	 * with sup.last_migrate_segment_id
-	 * that may be greater than current cache->last_migrated_segment_id.
-	 */
 	if (sup.last_migrated_segment_id > cache->last_migrated_segment_id)
 		cache->last_migrated_segment_id = sup.last_migrated_segment_id;
 

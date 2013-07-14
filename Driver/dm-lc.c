@@ -18,8 +18,8 @@
 #include <linux/timer.h>
 
 /*
- * Comments are described upon the
- * condition that the segment size order is 11
+ * Comments are described
+ * in the case the segment size order is 11
  * which means the segment size is the maxium, 1MB.
  */
 
@@ -124,7 +124,7 @@ static void safe_io_proc(struct work_struct *work)
 
 /*
  * dm_io wrapper.
- * @thread run operation this in other thread.
+ * @thread run operation this in other thread to avoid deadlock.
  */
 static int dm_safe_io_internal(
 		struct dm_io_request *io_req,
@@ -204,6 +204,7 @@ retry_io:
  * is reserved for invalid cache block.
  */
 typedef u8 device_id;
+
 struct lc_device {
 	struct kobject kobj;
 
@@ -233,6 +234,7 @@ typedef u8 cache_id;
 #define LC_NR_SLOTS ((1 << 8) - 1)
 
 cache_id cache_id_ptr;
+
 struct lc_cache *lc_caches[LC_NR_SLOTS];
 
 struct lc_device *lc_devices[LC_NR_SLOTS];
@@ -363,7 +365,7 @@ static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
 
 /* At most 4KB in total. */
 struct segment_header_device {
-	/* --- at most512 byte ---*/
+	/* --- at most512 byte for atomicity. ---*/
 	size_t global_id;
 	u8 length;
 	u32 lap; /* initially 0. 1 for the first lap. */
@@ -882,11 +884,11 @@ static void migrate_mb(
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = buf,
 			};
+			/* A tmp variable just to avoid 80 cols rule */
+			sector_t src = calc_mb_start_sector(seg, mb->idx) + i;
 			struct dm_io_region region_r = {
 				.bdev = cache->device->bdev,
-				.sector = calc_mb_start_sector(
-						seg, mb->idx)
-					  + i,
+				.sector = src,
 				.count = 1,
 			};
 			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
@@ -979,7 +981,6 @@ migrate_write:
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
 
-
 		lc = lc_devices[mb->device_id];
 		u8 dirty_bits = *(cache->dirtiness_snapshot + i);
 
@@ -1005,7 +1006,6 @@ migrate_write:
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
-
 			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
 		} else {
 			for (j = 0; j < 8; j++) {
@@ -1027,7 +1027,6 @@ migrate_write:
 					.sector = mb->sector + j,
 					.count = 1,
 				};
-
 				dm_safe_io_retry(
 					&io_req_w, &region_w, 1, false);
 			}
@@ -1035,7 +1034,7 @@ migrate_write:
 	}
 
 	wait_event_interruptible(cache->migrate_wait_queue,
-				(atomic_read(&cache->migrate_io_count) == 0));
+				 (atomic_read(&cache->migrate_io_count) == 0));
 
 	if (atomic_read(&cache->migrate_fail_count)) {
 		DMERR("migrate failed. %u writebacks failed. redo.",
@@ -1134,8 +1133,9 @@ static void migrate_proc(struct work_struct *work)
 
 static void wait_for_migration(struct lc_cache *cache, size_t id)
 {
-	cache->reserving_segment_id = id;
 	struct segment_header *seg = get_segment_header_by_id(cache, id);
+
+	cache->reserving_segment_id = id;
 	wait_for_completion(&seg->migrate_done);
 	cache->reserving_segment_id = 0;
 }
@@ -1411,10 +1411,12 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	sector_t devsize = dm_devsize(dev);
 
 	/*
-	 * Disk format:
+	 * disk format:
 	 * superblock(512B/1024KB) [segment(1024KB)]+
-	 * segment = segment_header(4KB) metablock(4KB)*NR_CACHES_INSEG
 	 * We reserve the first segment (1MB) as the superblock.
+	 *
+	 * segment:
+	 * segment_header(4KB) metablock(4KB)*NR_CACHES_INSEG
 	 */
 	return devsize / (1 << LC_SEGMENTSIZE_ORDER) - 1;
 }
@@ -1544,32 +1546,10 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 static void queue_current_buffer(struct lc_cache *cache)
 {
 	/*
-	 * Why does the code operate '+1'?
-	 *
-	 * We must consider overwriting
-	 * not only the segment metadata on the cache
-	 * but also the in-memory segment metadata.
-	 * Overwriting either will crash the cache.
-	 *
-	 * There are several choices to solve this problem.
-	 * For simplicity,
-	 * I have chose design that
-	 * cleaning up the in-memory segment first
-	 * in precedense of next global id touching it.
-	 *
-	 * For these reason,
-	 * you must prepare cache device
-	 * with at least two segments that
-	 * is 3MB in size, including superblock.
-	 *
-	 * If we had only one segment,
-	 * a superblock and a segment,
-	 * following steps will reproduce the problem.
-	 * 1. Flushing segments[0] on cache device.
-	 * 2. Select in-memory segments[0] for the next segment.
-	 * 3. Update the segments[0] along with buffer writes.
-	 * 4. Let's migrate the segments[0] on cache device!
-	 * 5. The in-memory segments[0] is not correct orz
+	 * Before we get the next segment
+	 * We must wait until the segment is all clean.
+	 * A clean segment desn't have
+	 * log to flush and dirties to migrate.
 	 */
 	size_t next_id = cache->current_seg->global_id + 1;
 
@@ -1724,7 +1704,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			/*
 			 * Dirtiness of a live cache
 			 *
-			 * We keep dirtiness of a cache only increase
+			 * We can assume dirtiness of a cache only increase
 			 * when it is on the buffer, we call this cache is live.
 			 * This eases the locking because
 			 * we don't worry the dirtiness of
@@ -1752,11 +1732,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			 * fluctuate the dirtiness,
 			 * stable caches which is not on the buffer
 			 * but on the cache device
-			 * may fall the dirtiness by other processes
-			 * than the migrate daemon.
+			 * may decrease the dirtiness by other processes
+			 * other than the migrate daemon.
 			 * This works fine
 			 * because migrating the same cache twice
-			 * doesn't abandon the cache concistency.
+			 * doesn't destroy the cache concistency.
 			 */
 
 			migrate_mb(cache, seg, mb, dirty_bits, true);
@@ -1791,8 +1771,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
 
 			/*
-			 * First clean up the previous cache.
-			 * Migrate the cache if needed.
+			 * First clean up the previous cache
+			 * and migrate the cache if needed.
 			 */
 			bool needs_cleanup_prev_cache =
 				!bio_fullsize || !(dirty_bits == 255);
@@ -2118,13 +2098,13 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	/*
 	 * /sys/module/dm_lc/devices/$id/$atribute
-	 *                              /dev // -> Note
+	 *                              /dev # -> Note
 	 *                              /device
 	 */
 
 	/*
 	 * Note:
-	 * reference to the mapped_device
+	 * Reference to the mapped_device
 	 * is used to show device name (major:minor).
 	 * major:minor is used in admin scripts
 	 * to get the sysfs node of a lc_device.

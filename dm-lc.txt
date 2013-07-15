@@ -7,7 +7,7 @@ It batches random writes into a big sequential write.
 1. Setup
 ========
 dm-lc is composed of two target_type instances named lc and lc-mgr.
-lc is responsible for creating virtual volumes and controlling ios and 
+lc is responsible for creating logical volumes and controlling ios and
 lc-mgr is reponsible for managing
 formatting/initializing/destructing cache devices on the other hand.
 Operating dm-lc through these native interfaces are not recommended.
@@ -17,67 +17,86 @@ To easily get started with dm-lc, nice userland tools are provided in
 where you are also accesible to portable dm-lc kernel code
 that supports since 3.2 kernel until before dm-lc staged upstream, 3.x.
 please git clone it.
-	
+
 To install the tools, move under Admin directory and run
 	python setup.py install
-and now you are dm-lc admin.
+and now you have a lisence for dm-lc admin.
 
 2. Example scripts
 ==================
-Let's create a virtual volume named myLV
+Let's create a logical volume named myLV
 backed by /dev/myVg/myBacking
 and use /dev/myCache as a cache device.
 
 myLV -- (backing store) /dev/myVg/myBacking
      -- (cache device)  /dev/myCache
 
-Step 1
-------
-Format myCache and
-resume myCache
+Note that backing store is restricted to
+a logical device that is created by LVM
+for technical reasons.
 
-Resuming builds in-memory structures like hashtables
-reading from the metadata on myCache.
-If the cache device was formatted before,
-lc-format-cache can be omitted
-in such a case like server reboot.
+1. Format myCache
+Format the medata blocks on a device.
+Note that this erases all the existing data.
 
 	lc-format-cache /dev/myCache
-	lc-resume 3 /dev/myCache
 
-Step 2
-------
-Create myLV and
-attach to myCache
+2. Create myLV
+Create a logical volume just backed by a existing volume.
+We give device id 5 to the volume in this example.
+
+As of now, this operation create a logical volume
+with different name from the backing store.
+But some users don't want to change the name
+because the backing store is in use
+and want to apply dm-lc on the fly.
+This can be technically realizable
+but I haven't implemented it at this time
+because it is too tricky to be portable.
 
 	lc-create myLV 5 /dev/myVg/myBacking
+
+3. Resume myCache
+Resuming cache device builds in-memory structures
+such as a hashtable scanned from the metadata on the device.
+We give cache id 3 to the device in this example.
+
+Note that you MUST create all the LVs as the destinations
+of the dirty caches on the cache device for technical reasons.
+Otherwise, it leads to kernel crash. Be careful.
+
+	lc-resume 3 /dev/myCache
+
+4. Attach myCache to myLV
+To start caching writes to the myLV, you must attach myCache to myLV.
+This can be done on the fly.
+
 	lc-attach 5 3
 
-Step 3
-------
-Start userland daemon
-
+5. Start userland daemon
 dm-lc provides daemon program
 that autonomously control the module behavior
 such as write-back from myCache to myBacking
-which dm-lc calls "migration".
+which dm-lc calls "Migration".
 
 	lc-daemon start
 
-Step 4
-------
-Terminate myLV
-
+6. Terminate myLV
 Safely terminating myLV already attached to myCache
 is easy to mistake and that's why dm-lc provides these admin tools.
 myLV can not detach from myCache
 until all the dirty caches on myCache
-are migrated to myBacking 
+are migrated to myBacking
 
 	lc-detach 5
+	lc-remove 5
+
+7. Terminate myCache
+After terminate all the LVs that is attached
+to myCache. myCache can be terminated.
+
 	lc-daemon stop
 	lc-free-cache 3
-	lc-remove 5
 
 3. Sysfs
 ========
@@ -110,8 +129,8 @@ The sysfs tree is located under /sys/module/dm_lc.
 
 4. Technical Issues
 ===================
-There are not a few technical issues 
-that distinguishes dm-lc from other similar cache softwares.
+There are not a few technical issues
+that distinguishes dm-lc from other cache softwares.
 
 4.1 RAM buffer and immediate completion
 dm-lc allocated RAM buffers of 64MB in total by default.
@@ -129,7 +148,7 @@ any data will not be lost after machine failure.
 
 4.3 Asynchronous log flushing
 dm-lc has a background worker called flush daemon.
-Flushing segment log starts from simplly queueing the flush task.
+Flushing segment log starts from simply queueing the flush task.
 Flush daemon in background asynchronously checks if the queue has some tasks
 and actually executes the tasks if exists.
 The fact that the upper layer doesn't block in queueing the task
@@ -141,23 +160,24 @@ and 1.5GB/s theoritically with a fast enough cache like PCI-e SSDs.
 4.4 Asynchronous and automated migration
 Some time after a log segment is flushed to cache device
 it will be migrated to backing store.
-Migrate daemon is also a background worker 
+Migrate daemon is also a background worker
 that periodically check if log segments to migrate exist.
 
 Restlessly migrating highly loads backing store
-so migration is better to execute when the backing store is in low load.
+so migration is better to execute when the backing store is in lazy time.
 lc-daemon in userland surveils the load of backing store
 and turns migration on and off according to the load.
 
 4.5 Lazy handling of REQ_FUA and REQ_FLUSH bios
-Some applications such as XFS and databases often submit SYNC write that
+Some applications such as NFS, journal filesystems
+and databases often submit SYNC write that
 leads to bios flagged with REQ_FUA or REQ_FLUSH.
 Handling these irregular bios immediately and thus synchronously
 desparately deteriorates the whole throughput.
 To address this issue, dm-lc handles these bios lazily or in deferred manner.
-Completion related to these bios will not be done until 
+Completion related to these bios will not be done until
 they are written persistently to the cache device
 so this storategy doesn't break the semantics.
-In worst case, a bio with some of these flags
+In the worst case senario, a bio with some of these flags
 is completed in deadline period that is described
 in barrier_deadline_ms in sysfs.

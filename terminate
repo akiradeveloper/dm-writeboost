@@ -5,14 +5,14 @@
 echo lc-detach ...
 lc-detach 5
 
+echo lc-remove ...
+lc-remove 5
+
 echo lc-daemon stop ...
 lc-daemon stop
 
 echo lc-free-cache ...
 lc-free-cache 3
-
-echo lc-remove ...
-lc-remove 5
 
 cd Driver
 make uninstall

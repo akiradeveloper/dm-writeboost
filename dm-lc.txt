@@ -154,7 +154,7 @@ and actually executes the tasks if exists.
 The fact that the upper layer doesn't block in queueing the task
 maximizes the write throughput
 that is 259MB/s random writes with cache device of 266MB/s sequential write
-which is only 4% loss
+which is only 3% loss
 and 1.5GB/s theoritically with a fast enough cache like PCI-e SSDs.
 
 4.4 Asynchronous and automated migration

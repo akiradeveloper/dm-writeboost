@@ -46,16 +46,31 @@ And the results are,
 
 ![fio benchmark](images/fio.png "fio benchmark")
 
-|Type|Throughput (MB/sec)|
-|--|--|
-|(A) HDD(rand)|0.883|
-|(B) SSD(rand)|202|
-|(C) SSD(seq)|266|
-|(D) HDD+SSD(rand) seg=1M|259|
-|(E) HDD+SSD(rand) seg=32K|184|
-|(F) HDD+MaxSSD(rand)|1579|
+<table>
+ <tr>
+  <th>Type</th><th>Throughput (MB/sec)</th>
+ </tt>
+ <tr>
+  <td>(A) HDD(rand)</td><td>0.883</td>
+ </tr>
+ <tr>
+  <td>(B) SSD(rand)</td><td>202</td>
+ </tr>
+ <tr>
+  <td>(C) SSD(seq)</td><td>266</td>
+ </tr>
+ <tr>
+  <td>(D) HDD+SSD(rand) seg=1M</td><td>259</td>
+ </tr>
+ <tr>
+  <td>(E) HDD+SSD(rand) seg=32K</td><td>184</td>
+ </tr>
+ <tr>
+  <td>(F) HDD+MaxSSD(rand)</td><td>1579</td>
+ </tr>
+</table>
 
-Comments,
+Discussion,
 
 - (A) This is a typical result of 2.5 inch HDD. It is very slow.
 RAID is a technique to parallelize number of devices for
@@ -87,14 +102,15 @@ performance is likely to get worse by these sorts of bios.
 Segment size is set to 32KB which is enough small and
 the throughput decreases to 184 MB/sec from 259 MB/sec
 with 1MB segment size. I think this is not bad for real application
-however still needs some improvements is for sure.
+however still needs some improvements is for sure.  
 - (F) In my environment, the SSD is not so fast.
 There existing PCI-e SSD devices that performs
 more than 1 GB/sec write throughput like ioDrive.
 Because the relation between RAM buffer and the SSD device
 in dm-lc is like stream processing,
 we can assume the theoritical maximum throughput
-with a fast enough cache device in imagination.
+with a fast enough cache device in imagination which
+we call MaxSSD.
 The result is 1579 MB/s that is unimaginably fast.
 I hope someone examine this result in reality using
 PCI-e SSD. I am personally doing this research and

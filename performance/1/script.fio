@@ -4,7 +4,7 @@ randrepeat=1
 ioengine=libaio
 bs=4k
 ba=4k
-size=2G
+size=16GB
 direct=1
 gtod_reduce=1
 norandommap

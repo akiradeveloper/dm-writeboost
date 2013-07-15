@@ -1,28 +1,76 @@
 I propose a new DM target, dm-lc.
 
-"lc" means Log-sturctured Caching and as the name replies
+"lc" means Log-sturctured Caching and as the name implies
 dm-lc is a caching software with only write-back mode.
 It batches random writes into a big sequential write to
 the cache device.
 
-Since dm-lc only focuses on write-back cache,
-the implementation is simple and thus less buggy.
-I think write-back cache software should be
-small and simple to be less buggy
-because write-back cache may destroy the storage.
-Stacking above the write-through/write-around mode of
-existing caching software is a choice for usage.
-
-Also, writing back from cache device to backing store
-is sophisticated. It autonomously turn on and off
-according to the load of backing storage.
-
-For more detail, please read dm-lc.txt
-that is now copy/paste on this mail below.
-
 It is now under development as a
 portable kernel module in my Github repo
 https://github.com/akiradeveloper/dm-lc
+
+Features:
+
+(1) Simplicity
+Since dm-lc only focuses on write-back caching,
+the implementation is simpler, 3k LOC, than existing ones
+such as dm-cache, bcache and enhanceIO
+and thus less buggy. This is the point.
+I think write-back cache software should be small and simple
+because write-back cache may destroy the storage
+in worst case scenario.
+
+Stacking above the write-through/write-around mode of
+existing caching software is a choice of usage.
+dm-lc can co-exists with existing cache softwares.
+
+(2) Superb Performance
+Because the code is simple,
+dm-lc performs better than existing ones
+in random write throughput.
+The benchmark is done using fio tool.
+It only loses 4% throughtput compared to
+cache device's sequential write throughput.
+The detail is, 259MB/sec random writes by HDD+SSD
+against 266MB/sec sequential write on SSD.
+
+Plus, dm-lc is capable of 1.5GB/sec random write
+throughput with a fast enough cache.
+This means the code is short and the locking effective.
+
+For more detail, please read
+https://github.com/akiradeveloper/dm-lc/tree/develop/performance
+
+(3) Durability for server crash
+Servers sometimes crash but any data
+on the storage should not be gone.
+Some existing softwares have
+cache metadata on memory in runtime
+and lose them all in server crash.
+dm-lc, as it write in log-structured manner
+which means it writes metadata and data together
+on the cache device, does't lose any data in such failures.
+
+To answer to the expectation from upper layer,
+dm-lc can handle REQ_FUA/REQ_FLUSH flags correctly
+but not loses performance badly by lazy execution technique.
+
+(4) Autonomous migration
+The algorithm of migration or writing back
+is key factor in write-back cache.
+dm-lc have an userland daemon to
+autonomusly turn on and off migration
+according to the load of backing store.
+
+For more detail, please read dm-lc.txt
+that is now copy and paste on this mail below.
+
+How to Taste?:
+Clone the repository and follow the
+"Quick Start" guideline.
+It is almost automated and just 5 minutes work.
+Benchmarkings and testings are prepared
+in scripts and you can try them.
 
 About Upstreaming:
 Now, I think it's time to go upstreaming.
@@ -61,7 +109,7 @@ http://research.microsoft.com/apps/pubs/default.aspx?id=115352
 
 Belows are the 3k lines of kernel code (dm-lc.c) and document (dm-lc.txt).
 The kernel code went through the checkpatch.pl and
-only warning for version switch is remained at this time.
+only 17 warnings for version switch is remained at this time.
 
 (dm-lc.c)
 
@@ -3117,6 +3165,6 @@ To address this issue, dm-lc handles these bios lazily or in deferred manner.
 Completion related to these bios will not be done until
 they are written persistently to the cache device
 so this storategy doesn't break the semantics.
-In the worst case senario, a bio with some of these flags
+In the worst case scenario, a bio with some of these flags
 is completed in deadline period that is described
 in barrier_deadline_ms in sysfs.

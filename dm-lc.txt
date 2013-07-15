@@ -178,6 +178,6 @@ To address this issue, dm-lc handles these bios lazily or in deferred manner.
 Completion related to these bios will not be done until
 they are written persistently to the cache device
 so this storategy doesn't break the semantics.
-In the worst case senario, a bio with some of these flags
+In the worst case scenario, a bio with some of these flags
 is completed in deadline period that is described
 in barrier_deadline_ms in sysfs.

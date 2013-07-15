@@ -8,7 +8,7 @@ all measured on my computer with commodity components.
 
 Features are as follows,  
 
-- CPU: Intel i7-3770  
+- CPU: Intel core i7-3770  
 - RAM: 32GB  
 - SSD: Samsung 840 Pro (256GB)  
 - HDD: Seagate 

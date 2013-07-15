@@ -29,14 +29,14 @@ Because the code is simple,
 dm-lc performs better than existing ones
 in random write throughput.
 The benchmark is done using fio tool.
-It only loses 4% throughtput compared to
+It only loses 3% throughtput compared to
 cache device's sequential write throughput.
 The detail is, 259MB/sec random writes by HDD+SSD
 against 266MB/sec sequential write on SSD.
 
 Plus, dm-lc is capable of 1.5GB/sec random write
 throughput with a fast enough cache.
-This means the code is short and the locking effective.
+This means the code path is short and the locking is effective.
 
 For more detail, please read
 https://github.com/akiradeveloper/dm-lc/tree/develop/performance

@@ -89,7 +89,7 @@ is the size of segment. segment is the size for each log buffer.
 The bigger the buffer is, the throughput is likely to be higher
 because of these reason one, it decreases the overhead to create log
 and two, writes granurality onto SSD cache device is bigger.
-The result 259 MB/sec only loses 4% throughput
+The result 259 MB/sec only loses 3% throughput
 compared to the sequetial throughput of the cache device 266 MB/sec 
 which is shown (D). This result shows that 
 the CPU overhead is very small because the implementation

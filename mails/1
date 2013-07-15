@@ -58,7 +58,7 @@ but not loses performance badly by lazy execution technique.
 (4) Autonomous migration
 The algorithm of migration or writing back
 is key factor in write-back cache.
-dm-lc have an userland daemon to
+dm-lc have a userland daemon to
 autonomusly turn on and off migration
 according to the load of backing store.
 

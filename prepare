@@ -1,10 +1,10 @@
 #!/bin/sh
 
-. ./config
-
 cd Driver
 make install
 cd -
+
+. ./config
 
 cd Admin
 python setup.py install

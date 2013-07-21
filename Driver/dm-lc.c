@@ -18,16 +18,28 @@
 #include <linux/timer.h>
 
 /*
- * Comments are described
- * in the case the segment size order is 11
- * which means the segment size is the maxium, 1MB.
+ * Comments are written
+ * on the segment size order is 11
+ * which means the segment size is 1MB.
  */
 
 /*
  * (1 << x) sector.
  * 4 <= x <= 11
+ * dm-lc supports segment size up to 1MB.
  */
 #define LC_SEGMENTSIZE_ORDER 11
+
+/*
+ * By default,
+ * we allocate 64 * 1MB RAM buffers statically.
+ */
+#define NR_WB_POOL 64
+
+/*
+ * The first 4KB (1<<3 sectors) in segment
+ * is for metadata.
+ */
 #define NR_CACHES_INSEG ((1 << (LC_SEGMENTSIZE_ORDER - 3)) - 1)
 
 static void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno)
@@ -39,7 +51,7 @@ retry_alloc:
 	p = kmalloc(size, flags);
 	if (!p) {
 		count++;
-		DMERR("L.%d: fail allocation(count:%d)", lineno, count);
+		DMERR("L.%d: failed allocation(count:%d)", lineno, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;
 	}
@@ -153,17 +165,17 @@ static int dm_safe_io_internal(
 	dev_t dev = region->bdev->bd_dev;
 	if (err || *err_bits) {
 		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)",
-				lineno, err, *err_bits);
+		      lineno, err, *err_bits);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)",
-				io_req->bi_rw, region->sector,
-				MAJOR(dev), MINOR(dev));
+		      io_req->bi_rw, region->sector,
+		      MAJOR(dev), MINOR(dev));
 	}
 
 	return err;
 }
 #define dm_safe_io(io_req, region, num_regions, thread) \
 	dm_safe_io_internal((io_req), (region), (num_regions), \
-			(thread), __LINE__)
+			    (thread), __LINE__)
 
 static void dm_safe_io_retry_internal(
 		struct dm_io_request *io_req,
@@ -178,7 +190,7 @@ static void dm_safe_io_retry_internal(
 retry_io:
 	err_bits = 0;
 	err = dm_safe_io_internal(io_req, region, num_regions, &err_bits,
-			thread, lineno);
+				  thread, lineno);
 
 	dev_t dev = region->bdev->bd_dev;
 	if (err || err_bits) {
@@ -190,9 +202,9 @@ retry_io:
 	}
 
 	if (count) {
-		DMERR("L.%d: io has just turned fail to OK.", lineno);
+		DMERR("L.%d: io has just turned to OK.", lineno);
 		DMERR("rw(%d), sector(%lu), dev(%u:%u)",
-			io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+		      io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
 }
 #define dm_safe_io_retry(io_req, region, num_regions, thread) \
@@ -245,7 +257,7 @@ struct lc_device *lc_devices[LC_NR_SLOTS];
  * dm-lc can supoort a cache device
  * with size less than 4KB * (1 << 32)
  * that is 16TB.
- * Needless to say, this is enough.
+ * Needless to say, this is enough in most cases.
  */
 typedef u32 cache_nr;
 
@@ -253,16 +265,11 @@ typedef u32 cache_nr;
  * Accounts for a 4KB cache line
  * which consists of eight sectors
  * that is managed by dirty bit for each.
- *
- * This allows partial writes
- * that frees VFS layer from
- * operating read-modify-write to
- * commit full 4KB page to block layer.
  */
 struct metablock {
 	sector_t sector;
 
-	cache_nr idx; /* const. 4B. */
+	cache_nr idx; /* const */
 
 	struct hlist_node ht_list;
 
@@ -270,12 +277,13 @@ struct metablock {
 	 * 8 bit flag for dirtiness
 	 * for each sector in cache line.
 	 *
-	 * Now we recover only dirty caches
+	 * In the current implementation,
+	 * we recover only dirty caches
 	 * in crash recovery.
 	 *
 	 * Adding recover flag
 	 * to recover clean caches
-	 * complicate the code.
+	 * badly complicates the code.
 	 */
 	u8 dirty_bits;
 
@@ -296,6 +304,9 @@ static void dec_nr_dirty_caches(device_id id)
 	atomic64_dec(&o->nr_dirty_caches);
 }
 
+/*
+ * on-disk metablock
+ */
 struct metablock_device {
 	sector_t sector;
 	device_id device_id;
@@ -305,18 +316,6 @@ struct metablock_device {
 	u32 lap;
 } __packed;
 
-/*
- * We preallocate 64 * 1MB writebuffers and use them cyclically.
- * Dynamic allocation using kmalloc results in get_free_page path
- * that may incur page reclaim which slowdown the system.
- * This is why we statically preallocate these buffers.
- *
- * The number 64, though hueristically determined,
- * is usually enough for any workload
- * if having cache device with sufficient
- * sequential write throughput, say 100MB/s.
- */
-#define NR_WB_POOL 64
 struct writebuffer {
 	void *data;
 	struct completion done;
@@ -327,8 +326,8 @@ struct segment_header {
 	struct metablock mb_array[NR_CACHES_INSEG];
 
 	/*
-	 * id is not circulated but uniformly increases.
-	 * id = 0 is used to tell that the segment is invalid
+	 * id uniformly increases.
+	 * id 0 is used to tell that the segment is invalid
 	 * and valid id starts from 1.
 	 */
 	size_t global_id;
@@ -363,13 +362,16 @@ static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
 	return r;
 }
 
-/* At most 4KB in total. */
+/*
+ * on-disk segment header.
+ * At most 4KB in total.
+ */
 struct segment_header_device {
-	/* --- at most512 byte for atomicity. ---*/
+	/* --- at most512 byte for atomicity. --- */
 	size_t global_id;
 	u8 length;
 	u32 lap; /* initially 0. 1 for the first lap. */
-	/* -----------------------*/
+	/* -------------------------------------- */
 	/* This array must locate at the tail */
 	struct metablock_device mbarr[NR_CACHES_INSEG];
 } __packed;
@@ -402,15 +404,15 @@ struct lc_cache {
 	struct arr *segment_header_array;
 
 	/*
-	 * Chained hashtable.
+	 * Chained hashtable
 	 */
 	struct arr *htable;
 	size_t htsize;
 	struct ht_head *null_head;
 
-	cache_nr cursor; /* Index that has done write */
+	cache_nr cursor; /* Index that has written */
 	struct segment_header *current_seg;
-	struct writebuffer *current_wb; /* Preallocated buffer. 1024KB */
+	struct writebuffer *current_wb;
 	struct writebuffer *wb_pool;
 
 	size_t last_migrated_segment_id;
@@ -435,7 +437,7 @@ struct lc_cache {
 	struct work_struct migrate_work;
 
 	/*
-	 * For migration I/O
+	 * For migration
 	 */
 	wait_queue_head_t migrate_wait_queue;
 	atomic_t migrate_fail_count;
@@ -445,7 +447,7 @@ struct lc_cache {
 	void *migrate_buffer;
 
 	/*
-	 * For deferred flush/FUA handling.
+	 * For deferred barrier handling.
 	 */
 	struct timer_list barrier_deadline_timer;
 	struct bio_list barrier_ios;
@@ -525,8 +527,7 @@ static void ht_empty_init(struct lc_cache *cache)
 
 	/*
 	 * Our hashtable has one special bucket called null head.
-	 * A metablock is linked to the null head
-	 * if it is not counted in hashtable search.
+	 * Orphan metablocks are linked to the null head.
 	 */
 	cache->null_head = arr_at(cache->htable, cache->htsize);
 
@@ -911,9 +912,9 @@ static void migrate_mb(
 	}
 }
 
-static void migrate_endio(unsigned long error, void *__context)
+static void migrate_endio(unsigned long error, void *context)
 {
-	struct lc_cache *cache = __context;
+	struct lc_cache *cache = context;
 
 	if (error)
 		atomic_inc(&cache->migrate_fail_count);
@@ -951,6 +952,31 @@ migrate_write:
 	for (i = 0; i < LC_NR_SLOTS; i++)
 		*(cache->migrate_dests + i) = false;
 
+	/*
+	 * Migrating each cache block at a time
+	 * performs very bad.
+	 * dm-lc migrates dirty data to
+	 * backing store in segment granurality.
+	 * The migration is atomic;
+	 * if any of the blocks in the segment
+	 * fails in the migration and the
+	 * whole migration of the segment
+	 * is granted as failure.
+	 */
+
+	/*
+	 * We take snapshot of the dirtiness in the segment.
+	 * The dirtiness of flushed segment
+	 * may uniformly decrease at any moment
+	 * and migrating dirty data more than once
+	 * doesn't craze the consistency.
+	 * In other word,
+	 * the snapshot segment
+	 * is dirtier than itself of any future moment
+	 * and we will migrate the possible dirtiest
+	 * state of the segment which won't lose
+	 * any dirty data that was acknowledged.
+	 */
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
 		*(cache->dirtiness_snapshot + i) =
@@ -987,8 +1013,8 @@ migrate_write:
 		if (!dirty_bits)
 			continue;
 
-		unsigned long diff = ((1 + i) << 3) << SECTOR_SHIFT;
-		void *base = cache->migrate_buffer + diff;
+		unsigned long offset = ((1 + i) << 3) << SECTOR_SHIFT;
+		void *base = cache->migrate_buffer + offset;
 
 		void *addr;
 		if (dirty_bits == 255) {
@@ -1038,7 +1064,7 @@ migrate_write:
 
 	if (atomic_read(&cache->migrate_fail_count)) {
 		DMERR("migrate failed. %u writebacks failed. redo.",
-				atomic_read(&cache->migrate_fail_count));
+		      atomic_read(&cache->migrate_fail_count));
 		goto migrate_write;
 	}
 
@@ -1268,7 +1294,6 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	return true;
 }
 
-
 static void recover_cache(struct lc_cache *cache)
 {
 	struct superblock_device sup;
@@ -1336,11 +1361,9 @@ static void recover_cache(struct lc_cache *cache)
 		read_segment_header_device(header, cache, j);
 
 		/*
-		 * global_id must uniformly increase from 1.
-		 * Since last_flush_id is 0 at first,
-		 * if global_id is 0,
-		 * we consider this and the subsequents
-		 * are all invalid.
+		 * Valid global_id is greater 0.
+		 * We encounter header with global_id 0 and
+		 * we consider this and the subsequents are all invalid.
 		 */
 		if (header->global_id <= last_flushed_id)
 			break;
@@ -1412,11 +1435,11 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 
 	/*
 	 * disk format:
-	 * superblock(512B/1024KB) [segment(1024KB)]+
+	 * superblock(1MB) [segment(1MB)]+
 	 * We reserve the first segment (1MB) as the superblock.
 	 *
-	 * segment:
-	 * segment_header(4KB) metablock(4KB)*NR_CACHES_INSEG
+	 * segment(1MB):
+	 * segment_header_device(4KB) metablock_device(4KB)*NR_CACHES_INSEG
 	 */
 	return devsize / (1 << LC_SEGMENTSIZE_ORDER) - 1;
 }
@@ -1519,7 +1542,7 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 			continue;
 
 		void *src = cache->current_wb->data +
-			((offset + i) << SECTOR_SHIFT);
+			    ((offset + i) << SECTOR_SHIFT);
 		memcpy(buf, src, 1 << SECTOR_SHIFT);
 
 		struct dm_io_request io_req = {
@@ -1547,8 +1570,8 @@ static void queue_current_buffer(struct lc_cache *cache)
 {
 	/*
 	 * Before we get the next segment
-	 * We must wait until the segment is all clean.
-	 * A clean segment desn't have
+	 * we must wait until the segment is all clean.
+	 * A clean segment doesn't have
 	 * log to flush and dirties to migrate.
 	 */
 	size_t next_id = cache->current_seg->global_id + 1;
@@ -1616,7 +1639,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
 		, union map_info *map_context
 #endif
-		)
+		 )
 {
 	struct lc_device *lc = ti->private;
 	struct dm_dev *orig = lc->device;
@@ -1627,11 +1650,15 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 	}
 
 	/*
-	 * We only discard the backing store.
-	 * 1. 3.4 kernel doesn't support split_discard_requests.
-	 *    Hence, it is close to impossible to discard blocks on cache.
-	 * 2. Discarding the blocks on cache is meaningless.
-	 *    Because they will be overwritten eventually.
+	 * We only discard only the backing store because
+	 * blocks on cache device are unlikely to be discarded.
+	 *
+	 * Discarding blocks is likely to be operated
+	 * long after writing;
+	 * the block is likely to be migrated before.
+	 * Moreover,
+	 * we discard the segment at the end of migration
+	 * and that's enough for discarding blocks.
 	 */
 	if (bio->bi_rw & REQ_DISCARD) {
 		bio_remap(bio, orig, bio->bi_sector);
@@ -1702,7 +1729,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 				migrate_buffered_mb(cache, mb, dirty_bits);
 
 			/*
-			 * Dirtiness of a live cache
+			 * Dirtiness of a live cache:
 			 *
 			 * We can assume dirtiness of a cache only increase
 			 * when it is on the buffer, we call this cache is live.
@@ -1726,17 +1753,17 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		} else {
 
 			/*
-			 * Dirtiness of a stable cache
+			 * Dirtiness of a stable cache:
 			 *
-			 * Unlike the live caches doesn't
+			 * Unlike the live caches that don't
 			 * fluctuate the dirtiness,
-			 * stable caches which is not on the buffer
+			 * stable caches which are not on the buffer
 			 * but on the cache device
 			 * may decrease the dirtiness by other processes
 			 * other than the migrate daemon.
 			 * This works fine
 			 * because migrating the same cache twice
-			 * doesn't destroy the cache concistency.
+			 * doesn't craze the cache concistency.
 			 */
 
 			migrate_mb(cache, seg, mb, dirty_bits, true);
@@ -1767,7 +1794,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			update_mb_idx = mb->idx;
 			goto write_on_buffer;
 		} else {
-
 			u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
 
 			/*
@@ -1885,9 +1911,9 @@ write_on_buffer:
 
 static int lc_end_io(struct dm_target *ti, struct bio *bio, int error
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-		, union map_info *map_context
+		   , union map_info *map_context
 #endif
-		)
+		    )
 {
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context =
@@ -2050,7 +2076,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	struct lc_device *lc = kzalloc(sizeof(*lc), GFP_KERNEL);
 
 	/*
-	 * EMC's book says
+	 * EMC's textbook on storage system says
 	 * storage should keep its disk util less than 70%.
 	 */
 	lc->migrate_threshold = 70;
@@ -2143,18 +2169,18 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 		struct kobject *dev_kobj = get_bdev_kobject(lc->device->bdev);
 		r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
 
-		/* kobject_uevent(&lc->kobj, KOBJ_ADD); */
+		kobject_uevent(&lc->kobj, KOBJ_ADD);
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "remove_sysfs")) {
+		kobject_uevent(&lc->kobj, KOBJ_REMOVE);
+
 		sysfs_remove_link(&lc->kobj, "device");
 		kobject_del(&lc->kobj);
 		kobject_put(&lc->kobj);
 
 		lc_devices[lc->id] = NULL;
-
-		/* kobject_uevent(&lc->kobj, KOBJ_REMOVE); */
 		return 0;
 	}
 
@@ -2239,9 +2265,9 @@ static struct target_type lc_target = {
 
 static int lc_mgr_map(struct dm_target *ti, struct bio *bio
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
-		, union map_info *map_context
+		    , union map_info *map_context
 #endif
-		)
+		     )
 {
 	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
@@ -2564,8 +2590,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		struct lc_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 
 		struct dm_dev *dev;
-		if (dm_get_device(ti, argv[1],
-				  dm_table_get_mode(ti->table), &dev))
+		if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+				  &dev))
 			return -EINVAL;
 
 		cache->id = cache_id_ptr;
@@ -2658,6 +2684,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		struct kobject *dev_kobj =
 			get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
+		kobject_uevent(&cache->kobj, KOBJ_ADD);
 
 		return 0;
 	}
@@ -2688,6 +2715,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		kill_arr(cache->htable);
 		kill_arr(cache->segment_header_array);
 
+		kobject_uevent(&cache->kobj, KOBJ_REMOVE);
 		sysfs_remove_link(&cache->kobj, "device");
 		kobject_del(&cache->kobj);
 		kobject_put(&cache->kobj);

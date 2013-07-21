@@ -13,11 +13,3 @@ all:
 
 clean:
 	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) clean
-	
-install:
-	insmod dm-lc.ko
-	dmsetup create lc-mgr --table "0 1 lc-mgr"
-
-uninstall:
-	dmsetup remove lc-mgr
-	rmmod dm-lc

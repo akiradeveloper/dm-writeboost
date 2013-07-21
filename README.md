@@ -24,14 +24,22 @@ which then performs high throughput and low latency. See also the DCD paper [1].
 You are provided with nice scripts for quick starting.  
 Assuming you have expanded dm-lc under /home/akira,
 
+(1) [common] Configure device paths for backing store and cache device.  
 	$ cd /home/akira/dm-lc
-	$ vi config # configure device paths etc.
-	$ source build
-	# cd /home/akira/dm-lc
-	# source prepare
+	$ vi config
 
-And you are ready for `/dev/mapper/perflv` powered by dm-lc.  
-Try testing and performance and see what is happening.
+(2) If the kernel doesn't have dm-lc merged,  
+please build the module first.  
+Driver/dm-lc.ko is now ready.
+	$ source build
+
+(3) [common] Load dm-lc into the kernel.  
+
+(4) [common] Run prepare script  
+	# cd /home/akira/dm-lc
+	# source prepare  
+and you are now ready for `/dev/mapper/perflv` powered by dm-lc.  
+Try testing and performance and see what is happening.  
 
 ## Contributing to dm-lc
 Any type of contribution is all welcome.  

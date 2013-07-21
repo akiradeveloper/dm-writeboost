@@ -16,7 +16,6 @@ setup(
 		'bin/lc-format-cache',
 		'bin/lc-resume-cache',
 		'bin/lc-free-cache',
-		'bin/lc-admin',
 		'bin/lc-daemon',
 	],
 	install_requires = [

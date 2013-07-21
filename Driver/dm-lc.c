@@ -2169,18 +2169,18 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 		struct kobject *dev_kobj = get_bdev_kobject(lc->device->bdev);
 		r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
 
-		/* kobject_uevent(&lc->kobj, KOBJ_ADD); */
+		kobject_uevent(&lc->kobj, KOBJ_ADD);
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "remove_sysfs")) {
+		kobject_uevent(&lc->kobj, KOBJ_REMOVE);
+
 		sysfs_remove_link(&lc->kobj, "device");
 		kobject_del(&lc->kobj);
 		kobject_put(&lc->kobj);
 
 		lc_devices[lc->id] = NULL;
-
-		/* kobject_uevent(&lc->kobj, KOBJ_REMOVE); */
 		return 0;
 	}
 
@@ -2684,6 +2684,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		struct kobject *dev_kobj =
 			get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
+		kobject_uevent(&cache->kobj, KOBJ_ADD);
 
 		return 0;
 	}
@@ -2714,6 +2715,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		kill_arr(cache->htable);
 		kill_arr(cache->segment_header_array);
 
+		kobject_uevent(&cache->kobj, KOBJ_REMOVE);
 		sysfs_remove_link(&cache->kobj, "device");
 		kobject_del(&cache->kobj);
 		kobject_put(&cache->kobj);

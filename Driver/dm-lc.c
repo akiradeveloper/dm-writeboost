@@ -1349,11 +1349,11 @@ static void recover_cache(struct lc_cache *cache)
 	/*
 	 * Example:
 	 * There are only 5 segments.
-	 * The segments we will consider is of id k+2 and k+3.
+	 * The segments we will consider are of id k+2 and k+3
+	 * because they are dirty but not migrated.
 	 *
-	 * id: [   k+3   ][    k+4   ][     k     ][   k+1    ][   K+2   ]
-	 *       flushed    init_seg    last         migrated    flushed
-	 *                              _migrated
+	 * id: [     k+3    ][  k+4   ][   k    ][     k+1     ][  K+2  ]
+	 *      last_flushed  init_seg  migrated  last_migrated  flushed
 	 */
 	size_t j;
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {

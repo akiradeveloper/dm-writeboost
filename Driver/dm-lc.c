@@ -444,6 +444,8 @@ struct lc_cache {
 	atomic_t migrate_io_count;
 	u8 dirtiness_snapshot[NR_CACHES_INSEG];
 	bool migrate_dests[LC_NR_SLOTS];
+	size_t nr_max_batched_migration;
+	size_t nr_cur_batched_migration;
 	void *migrate_buffer;
 
 	/*
@@ -2335,6 +2337,28 @@ static struct cache_sysfs_entry commit_super_block_interval_entry = {
 	.store = commit_super_block_interval_store,
 };
 
+static ssize_t nr_max_batched_migration_show(struct lc_cache *cache,
+					     char *page)
+{
+	return var_show(cache->nr_max_batched_migration, page);
+}
+
+static ssize_t nr_max_batched_migration_store(struct lc_cache *cache,
+					      char *page, size_t count)
+{
+	unsigned long x;
+	ssize_t r = var_store(&x, page, count);
+	cache->nr_max_batched_migration = x;
+	return r;
+}
+
+static struct cache_sysfs_entry nr_max_batched_migration_entry = {
+	.attr = { .name = "nr_max_batched_migration",
+		  .mode = S_IRUGO | S_IWUSR },
+	.show = nr_max_batched_migration_show,
+	.store = nr_max_batched_migration_store,
+};
+
 static ssize_t allow_migrate_show(struct lc_cache *cache, char *page)
 {
 	return var_show(cache->allow_migrate, (page));
@@ -2511,6 +2535,7 @@ static struct cache_sysfs_entry barrier_deadline_ms_entry = {
 
 static struct attribute *cache_default_attrs[] = {
 	&commit_super_block_interval_entry.attr,
+	&nr_max_batched_migration_entry.attr,
 	&allow_migrate_entry.attr,
 	&commit_super_block_entry.attr,
 	&flush_current_buffer_entry.attr,
@@ -2644,6 +2669,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		init_waitqueue_head(&cache->migrate_wait_queue);
 		atomic_set(&cache->migrate_fail_count, 0);
 		atomic_set(&cache->migrate_io_count, 0);
+		cache->nr_max_batched_migration = 1;
+		cache->nr_cur_batched_migration = 1;
 		cache->migrate_buffer = kmalloc(
 				1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
 				GFP_KERNEL);

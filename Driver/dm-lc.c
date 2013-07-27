@@ -931,22 +931,31 @@ static void migrate_endio(unsigned long error, void *context)
 		wake_up_interruptible(&cache->migrate_wait_queue);
 }
 
-static void migrate_linked_segments(struct lc_cache *cache,
-				    struct segment_header * seg)
+static void migrate_linked_segments(struct lc_cache *cache)
 {
-	struct dm_io_request io_req_r = {
-		.client = lc_io_client,
-		.bi_rw = READ,
-		.notify.fn = NULL,
-		.mem.type = DM_IO_VMA,
-		.mem.ptr.vma = cache->migrate_buffer,
-	};
-	struct dm_io_region region_r = {
-		.bdev = cache->device->bdev,
-		.sector = seg->start_sector + (1 << 3),
-		.count = seg->length << 3,
-	};
-	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
+	struct segment_header *seg;
+	size_t k;
+
+	k = 0;
+	list_for_each_entry(seg, &cache->migrate_list, migrate_list){
+		void *p = cache->migrate_buffer +
+			  k * (NR_CACHES_INSEG << 12);
+		struct dm_io_request io_req_r = {
+			.client = lc_io_client,
+			.bi_rw = READ,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_VMA,
+			.mem.ptr.vma = p,
+		};
+		struct dm_io_region region_r = {
+			.bdev = cache->device->bdev,
+			.sector = seg->start_sector + (1 << 3),
+			.count = seg->length << 3,
+		};
+		dm_safe_io_retry(&io_req_r, &region_r, 1, false);
+		k++;
+	}
+	seg = list_first_entry(&cache->migrate_list, struct segment_header, migrate_list);
 
 migrate_write:
 	;
@@ -1176,7 +1185,7 @@ static void migrate_proc(struct work_struct *work)
 			list_add_tail(&seg->migrate_list, &cache->migrate_list);
 		}
 
-		migrate_linked_segments(cache, seg);
+		migrate_linked_segments(cache);
 
 		/*
 		 * (Locking)

@@ -30,7 +30,7 @@ After flushing logs, there are many dirty segments on the cache device
 that will be migrated to the backing store.
 
 Migrating number of segments simultaneously
-can produce many writes to the backing store 
+can produce many writes to the backing store
 which are likely to be merged in I/O scheduler than
 migrating them one by one.
 

@@ -352,6 +352,24 @@ struct segment_header {
 #define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
 #define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
 
+static void cleanup_mb_if_dirty(struct segment_header *seg,
+				struct metablock *mb)
+{
+	unsigned long flags;
+
+	bool b = false;
+	lockseg(seg, flags);
+	if (mb->dirty_bits) {
+		mb->dirty_bits = 0;
+		b = true;
+	}
+	unlockseg(seg, flags);
+
+	if (b)
+		dec_nr_dirty_caches(mb->device_id);
+
+}
+
 static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
 				   struct metablock *mb)
 {
@@ -1060,22 +1078,10 @@ static void memorize_dirty_state(struct lc_cache *cache,
 
 static void cleanup_segment(struct lc_cache *cache, struct segment_header *seg)
 {
-	unsigned long flags;
 	u8 i;
 	for (i = 0; i < seg->length; i++) {
-		/* FIXME use snapshot. state may have changed. */
 		struct metablock *mb = seg->mb_array + i;
-
-		bool b = false;
-		lockseg(seg, flags);
-		if (mb->dirty_bits) {
-			mb->dirty_bits = 0;
-			b = true;
-		}
-		unlockseg(seg, flags);
-
-		if (b)
-			dec_nr_dirty_caches(mb->device_id);
+		cleanup_mb_if_dirty(seg, mb);
 	}
 }
 
@@ -1756,8 +1762,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	unsigned long flags;
-
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context =
 		dm_per_bio_data(bio, ti->per_bio_data_size);
@@ -1850,17 +1854,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			 */
 
 			migrate_mb(cache, seg, mb, dirty_bits, true);
-
-			bool b = false;
-			lockseg(seg, flags);
-			if (mb->dirty_bits) {
-				mb->dirty_bits = 0;
-				b = true;
-			}
-			unlockseg(seg, flags);
-
-			if (b)
-				dec_nr_dirty_caches(mb->device_id);
+			cleanup_mb_if_dirty(seg, mb);
 
 			atomic_dec(&seg->nr_inflight_ios);
 			bio_remap(bio, orig, bio->bi_sector);
@@ -1895,16 +1889,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			 * Fullsize dirty cache
 			 * can be discarded without migration.
 			 */
-			bool b = false;
-			lockseg(seg, flags);
-			if (mb->dirty_bits) {
-				mb->dirty_bits = 0;
-				b = true;
-			}
-			unlockseg(seg, flags);
 
-			if (b)
-				dec_nr_dirty_caches(mb->device_id);
+			cleanup_mb_if_dirty(seg, mb);
 
 			ht_del(cache, mb);
 
@@ -1950,6 +1936,7 @@ write_on_buffer:
 	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;
 	sector_t s = (idx_inseg + 1) << 3;
 
+	unsigned long flags;
 	bool b = false;
 	lockseg(seg, flags);
 	if (!mb->dirty_bits) {

@@ -1,0 +1,44 @@
+Hi, DM Guys.
+Let me talk about the recent updates on dm-lc,
+a kernel module which I announced you in the previous post.
+
+Again, the code is currently managed in my Github repo.
+https://github.com/akiradeveloper/dm-lc
+See Quick Start in README which will guide you
+to see what happens using dm-lc.
+
+
+There are two major updates I want to mention:
+
+(1) Introduction Slide
+dm-lc has now 3k LOC that is not a minites work to understand.
+
+To help you understand dm-lc in terms of
+  (a) The overall architecure
+  (b) The major features that dm-lc provides
+
+I wrote an introduction slide which is available in URL below:
+https://github.com/akiradeveloper/dm-lc/blob/develop/what-is-dm-lc.pdf
+
+That's a nice slide with lot of figures
+which I want you guys to read at first.
+
+
+(2) [New Feature] Improving migration performance by "Batched Migration"
+dm-lc's logging unit is called "segment".
+After flushing logs, there are many dirty segments on the cache device
+that will be migrated to the backing store.
+
+Migrating number of segments simultaneously
+can produce many writes to the backing store 
+which are likely to be merged in I/O scheduler than
+migrating them one by one.
+
+This feature is explained in above slide.
+I hope you to read that.
+
+Thank you for reading.
+Any comments about dm-lc is welcome.
+
+Regards,
+Akira

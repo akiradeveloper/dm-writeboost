@@ -51,7 +51,8 @@ retry_alloc:
 	p = kmalloc(size, flags);
 	if (!p) {
 		count++;
-		DMERR("L.%d: failed allocation(count:%d)", lineno, count);
+		DMERR("L.%d: failed allocation(size:%lu, count:%d)",
+		      lineno, size, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;
 	}
@@ -442,10 +443,11 @@ struct lc_cache {
 	wait_queue_head_t migrate_wait_queue;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
-	u8 dirtiness_snapshot[NR_CACHES_INSEG];
 	bool migrate_dests[LC_NR_SLOTS];
 	size_t nr_max_batched_migration;
 	size_t nr_cur_batched_migration;
+	struct hlist_head batch_list;
+	u8* dirtiness_snapshot;
 	void *migrate_buffer;
 
 	/*
@@ -925,20 +927,20 @@ static void migrate_endio(unsigned long error, void *context)
 		wake_up_interruptible(&cache->migrate_wait_queue);
 }
 
-static void migrate_whole_segment(struct lc_cache *cache,
-				  struct segment_header *seg)
+static void migrate_linked_segments(struct lc_cache *cache,
+				    struct segment_header * seg)
 {
 	struct dm_io_request io_req_r = {
 		.client = lc_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = cache->migrate_buffer,
+		.mem.type = DM_IO_VMA,
+		.mem.ptr.vma = cache->migrate_buffer,
 	};
 	struct dm_io_region region_r = {
 		.bdev = cache->device->bdev,
-		.sector = seg->start_sector,
-		.count = (seg->length + 1) << 3,
+		.sector = seg->start_sector + (1 << 3),
+		.count = seg->length << 3,
 	};
 	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
 
@@ -1015,7 +1017,7 @@ migrate_write:
 		if (!dirty_bits)
 			continue;
 
-		unsigned long offset = ((1 + i) << 3) << SECTOR_SHIFT;
+		unsigned long offset = i << 12;
 		void *base = cache->migrate_buffer + offset;
 
 		void *addr;
@@ -1026,8 +1028,8 @@ migrate_write:
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
 				.notify.context = cache,
-				.mem.type = DM_IO_KMEM,
-				.mem.ptr.addr = addr,
+				.mem.type = DM_IO_VMA,
+				.mem.ptr.vma = addr,
 			};
 			struct dm_io_region region_w = {
 				.bdev = lc->device->bdev,
@@ -1047,8 +1049,8 @@ migrate_write:
 					.bi_rw = WRITE,
 					.notify.fn = migrate_endio,
 					.notify.context = cache,
-					.mem.type = DM_IO_KMEM,
-					.mem.ptr.addr = addr,
+					.mem.type = DM_IO_VMA,
+					.mem.ptr.vma = addr,
 				};
 				struct dm_io_region region_w = {
 					.bdev = lc->device->bdev,
@@ -1143,11 +1145,29 @@ static void migrate_proc(struct work_struct *work)
 			continue;
 		}
 
+		if (cache->nr_cur_batched_migration !=
+		    cache->nr_max_batched_migration){
+			vfree(cache->migrate_buffer);
+			kfree(cache->dirtiness_snapshot);
+			cache->nr_cur_batched_migration =
+				cache->nr_max_batched_migration;
+			cache->migrate_buffer =
+				vmalloc(cache->nr_cur_batched_migration *
+					(NR_CACHES_INSEG << 12));
+			cache->dirtiness_snapshot =
+				kmalloc_retry(cache->nr_cur_batched_migration *
+					NR_CACHES_INSEG,
+					GFP_NOIO);
+
+			BUG_ON(!cache->migrate_buffer);
+			BUG_ON(!cache->dirtiness_snapshot);
+		}
+
 		struct segment_header *seg =
 			get_segment_header_by_id(cache,
 				cache->last_migrated_segment_id + 1);
 
-		migrate_whole_segment(cache, seg);
+		migrate_linked_segments(cache, seg);
 
 		/*
 		 * (Locking)
@@ -2344,10 +2364,13 @@ static ssize_t nr_max_batched_migration_show(struct lc_cache *cache,
 }
 
 static ssize_t nr_max_batched_migration_store(struct lc_cache *cache,
-					      char *page, size_t count)
+					      const char *page, size_t count)
 {
 	unsigned long x;
 	ssize_t r = var_store(&x, page, count);
+	if (x < 1)
+		return -EIO;
+
 	cache->nr_max_batched_migration = x;
 	return r;
 }
@@ -2671,8 +2694,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		atomic_set(&cache->migrate_io_count, 0);
 		cache->nr_max_batched_migration = 1;
 		cache->nr_cur_batched_migration = 1;
-		cache->migrate_buffer = kmalloc(
-				1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
+		cache->migrate_buffer = vmalloc(
+				NR_CACHES_INSEG << 12);
+		cache->dirtiness_snapshot = kmalloc(
+				NR_CACHES_INSEG,
 				GFP_KERNEL);
 
 		setup_timer(&cache->barrier_deadline_timer,
@@ -2727,9 +2752,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		cancel_work_sync(&cache->barrier_deadline_work);
 
-		kfree(cache->migrate_buffer);
 		cancel_work_sync(&cache->migrate_work);
 		destroy_workqueue(cache->migrate_wq);
+		vfree(cache->migrate_buffer);
+		kfree(cache->dirtiness_snapshot);
 
 		size_t i;
 		struct writebuffer *wb;

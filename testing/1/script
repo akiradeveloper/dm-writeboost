@@ -15,6 +15,7 @@ dmsetup message lc-mgr 0 clear_stat
 ./configure
 
 make -j 8
+echo 3 > /proc/sys/vm/drop_caches
 make test
 
 fuser -muv /mnt/perflv

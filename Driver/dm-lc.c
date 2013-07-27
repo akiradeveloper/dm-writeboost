@@ -338,6 +338,8 @@ struct segment_header {
 	cache_nr start_idx; /* const */
 	sector_t start_sector; /* const */
 
+	struct list_head migrate_list;
+
 	struct completion flush_done;
 
 	struct completion migrate_done;
@@ -446,8 +448,8 @@ struct lc_cache {
 	bool migrate_dests[LC_NR_SLOTS];
 	size_t nr_max_batched_migration;
 	size_t nr_cur_batched_migration;
-	struct hlist_head batch_list;
-	u8* dirtiness_snapshot;
+	struct list_head migrate_list;
+	u8 *dirtiness_snapshot;
 	void *migrate_buffer;
 
 	/*
@@ -622,6 +624,8 @@ static void init_segment_header_array(struct lc_cache *cache)
 		atomic_set(&seg->nr_inflight_ios, 0);
 
 		spin_lock_init(&seg->lock);
+
+		INIT_LIST_HEAD(&seg->migrate_list);
 
 		init_completion(&seg->flush_done);
 		complete_all(&seg->flush_done);
@@ -1156,26 +1160,37 @@ static void migrate_proc(struct work_struct *work)
 					(NR_CACHES_INSEG << 12));
 			cache->dirtiness_snapshot =
 				kmalloc_retry(cache->nr_cur_batched_migration *
-					NR_CACHES_INSEG,
-					GFP_NOIO);
+					      NR_CACHES_INSEG,
+					      GFP_NOIO);
 
 			BUG_ON(!cache->migrate_buffer);
 			BUG_ON(!cache->dirtiness_snapshot);
 		}
 
-		struct segment_header *seg =
-			get_segment_header_by_id(cache,
-				cache->last_migrated_segment_id + 1);
+		size_t nr_mig = 1;
+
+		struct segment_header *seg;
+		size_t i;
+		for (i = 1; i <= nr_mig; i++) {
+			seg = get_segment_header_by_id(cache, cache->last_migrated_segment_id + i);
+			list_add_tail(&seg->migrate_list, &cache->migrate_list);
+		}
 
 		migrate_linked_segments(cache, seg);
 
 		/*
 		 * (Locking)
-		 * Only this line alter last_migrate_segment_id in runtime.
+		 * Only line of code changes
+		 * last_migrate_segment_id in runtime.
 		 */
-		cache->last_migrated_segment_id++;
+		cache->last_migrated_segment_id += nr_mig;
 
-		complete_all(&seg->migrate_done);
+		/* complete_all(&seg->migrate_done); */
+		struct segment_header *tmp;
+		list_for_each_entry_safe(seg, tmp, &cache->migrate_list, migrate_list){
+			complete_all(&seg->migrate_done);
+			list_del(&seg->migrate_list);
+		}
 	}
 }
 
@@ -2694,11 +2709,13 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		atomic_set(&cache->migrate_io_count, 0);
 		cache->nr_max_batched_migration = 1;
 		cache->nr_cur_batched_migration = 1;
+
 		cache->migrate_buffer = vmalloc(
 				NR_CACHES_INSEG << 12);
 		cache->dirtiness_snapshot = kmalloc(
 				NR_CACHES_INSEG,
 				GFP_KERNEL);
+		INIT_LIST_HEAD(&cache->migrate_list);
 
 		setup_timer(&cache->barrier_deadline_timer,
 			    barrier_deadline_proc, (unsigned long) cache);

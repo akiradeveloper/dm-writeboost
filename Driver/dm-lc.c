@@ -931,107 +931,24 @@ static void migrate_endio(unsigned long error, void *context)
 		wake_up_interruptible(&cache->migrate_wait_queue);
 }
 
-static void migrate_linked_segments(struct lc_cache *cache)
+static void submit_migrate_io(struct lc_cache *cache,
+			      struct segment_header *seg, size_t k)
 {
-	struct segment_header *seg;
-	size_t k;
-
-	k = 0;
-	list_for_each_entry(seg, &cache->migrate_list, migrate_list){
-		void *p = cache->migrate_buffer +
-			  k * (NR_CACHES_INSEG << 12);
-		struct dm_io_request io_req_r = {
-			.client = lc_io_client,
-			.bi_rw = READ,
-			.notify.fn = NULL,
-			.mem.type = DM_IO_VMA,
-			.mem.ptr.vma = p,
-		};
-		struct dm_io_region region_r = {
-			.bdev = cache->device->bdev,
-			.sector = seg->start_sector + (1 << 3),
-			.count = seg->length << 3,
-		};
-		dm_safe_io_retry(&io_req_r, &region_r, 1, false);
-		k++;
-	}
-	seg = list_first_entry(&cache->migrate_list, struct segment_header, migrate_list);
-
-migrate_write:
-	;
-	unsigned long flags;
-	struct metablock *mb;
 	u8 i, j;
-
-	atomic_set(&cache->migrate_io_count, 0);
-	atomic_set(&cache->migrate_fail_count, 0);
-
-	for (i = 0; i < LC_NR_SLOTS; i++)
-		*(cache->migrate_dests + i) = false;
-
-	/*
-	 * Migrating each cache block at a time
-	 * performs very bad.
-	 * dm-lc migrates dirty data to
-	 * backing store in segment granurality.
-	 * The migration is atomic;
-	 * if any of the blocks in the segment
-	 * fails in the migration and the
-	 * whole migration of the segment
-	 * is granted as failure.
-	 */
-
-	/*
-	 * We take snapshot of the dirtiness in the segment.
-	 * The dirtiness of flushed segment
-	 * may uniformly decrease at any moment
-	 * and migrating dirty data more than once
-	 * doesn't craze the consistency.
-	 * In other word,
-	 * the snapshot segment
-	 * is dirtier than itself of any future moment
-	 * and we will migrate the possible dirtiest
-	 * state of the segment which won't lose
-	 * any dirty data that was acknowledged.
-	 */
-	for (i = 0; i < seg->length; i++) {
-		mb = seg->mb_array + i;
-		*(cache->dirtiness_snapshot + i) =
-			atomic_read_mb_dirtiness(seg, mb);
-	}
+	size_t a = NR_CACHES_INSEG * k;
+	void *p = cache->migrate_buffer + (NR_CACHES_INSEG << 12) * k;
 
 	for (i = 0; i < seg->length; i++) {
-		mb = seg->mb_array + i;
+		struct metablock *mb = seg->mb_array + i;
 
-		u8 dirty_bits = *(cache->dirtiness_snapshot + i);
-
-		if (!dirty_bits)
-			continue;
-
-		*(cache->migrate_dests + mb->device_id) = true;
-
-		if (dirty_bits == 255) {
-			atomic_inc(&cache->migrate_io_count);
-		} else {
-			for (j = 0; j < 8; j++) {
-				if (dirty_bits & (1 << j))
-					atomic_inc(&cache->migrate_io_count);
-			}
-		}
-	}
-
-	struct lc_device *lc;
-	for (i = 0; i < seg->length; i++) {
-		mb = seg->mb_array + i;
-
-		lc = lc_devices[mb->device_id];
-		u8 dirty_bits = *(cache->dirtiness_snapshot + i);
+		struct lc_device *lc = lc_devices[mb->device_id];
+		u8 dirty_bits = *(cache->dirtiness_snapshot + (a + i));
 
 		if (!dirty_bits)
 			continue;
 
 		unsigned long offset = i << 12;
-		void *base = cache->migrate_buffer + offset;
+		void *base = p + offset;
 
 		void *addr;
 		if (dirty_bits == 255) {
@@ -1075,20 +992,79 @@ migrate_write:
 			}
 		}
 	}
+}
 
-	wait_event_interruptible(cache->migrate_wait_queue,
-				 (atomic_read(&cache->migrate_io_count) == 0));
+static void memorize_dirty_state(struct lc_cache *cache,
+				 struct segment_header *seg, size_t k,
+				 size_t *migrate_io_count)
+{
+	u8 i, j;
+	size_t a = NR_CACHES_INSEG * k;
+	void *p = cache->migrate_buffer + (NR_CACHES_INSEG << 12) * k;
 
-	if (atomic_read(&cache->migrate_fail_count)) {
-		DMERR("migrate failed. %u writebacks failed. redo.",
-		      atomic_read(&cache->migrate_fail_count));
-		goto migrate_write;
+	struct dm_io_request io_req_r = {
+		.client = lc_io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_VMA,
+		.mem.ptr.vma = p,
+	};
+	struct dm_io_region region_r = {
+		.bdev = cache->device->bdev,
+		.sector = seg->start_sector + (1 << 3),
+		.count = seg->length << 3,
+	};
+	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
+
+	/* FIXME doc inconsis */
+	/*
+	 * We take snapshot of the dirtiness in the segment.
+	 * The dirtiness of flushed segment
+	 * may uniformly decrease at any moment
+	 * and migrating dirty data more than once
+	 * doesn't craze the consistency.
+	 * In other word,
+	 * the snapshot segment
+	 * is dirtier than itself of any future moment
+	 * and we will migrate the possible dirtiest
+	 * state of the segment which won't lose
+	 * any dirty data that was acknowledged.
+	 */
+	struct metablock *mb;
+	for (i = 0; i < seg->length; i++) {
+		mb = seg->mb_array + i;
+		*(cache->dirtiness_snapshot + (a + i)) =
+			atomic_read_mb_dirtiness(seg, mb);
 	}
-
-	BUG_ON(atomic_read(&cache->migrate_io_count));
 
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
+
+		u8 dirty_bits = *(cache->dirtiness_snapshot + (a + i));
+
+		if (!dirty_bits)
+			continue;
+
+		*(cache->migrate_dests + mb->device_id) = true;
+
+		if (dirty_bits == 255) {
+			(*migrate_io_count)++;
+		} else {
+			for (j = 0; j < 8; j++) {
+				if (dirty_bits & (1 << j))
+					(*migrate_io_count)++;
+			}
+		}
+	}
+}
+
+static void cleanup_segment(struct lc_cache *cache, struct segment_header *seg)
+{
+	unsigned long flags;
+	u8 i;
+	for (i = 0; i < seg->length; i++) {
+		/* FIXME use snapshot. state may have changed. */
+		struct metablock *mb = seg->mb_array + i;
 
 		bool b = false;
 		lockseg(seg, flags);
@@ -1101,13 +1077,68 @@ migrate_write:
 		if (b)
 			dec_nr_dirty_caches(mb->device_id);
 	}
+}
+
+static void migrate_linked_segments(struct lc_cache *cache)
+{
+	struct segment_header *seg;
+	u8 i;
+	size_t k;
+
+	/* FIXME doc inconsis */
+	/*
+	 * Migrating each cache block at a time
+	 * performs very bad.
+	 * dm-lc migrates dirty data to
+	 * backing store in segment granurality.
+	 * The migration is atomic;
+	 * if any of the blocks in the segment
+	 * fails in the migration and the
+	 * whole migration of the segment
+	 * is granted as failure.
+	 */
+
+	for (i = 0; i < LC_NR_SLOTS; i++)
+		*(cache->migrate_dests + i) = false;
+
+	size_t migrate_io_count = 0;
+	k = 0;
+	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
+		memorize_dirty_state(cache, seg, k, &migrate_io_count);
+		k++;
+	}
+
+migrate_write:
+	atomic_set(&cache->migrate_io_count, migrate_io_count);
+	atomic_set(&cache->migrate_fail_count, 0);
+
+	k = 0;
+	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
+		submit_migrate_io(cache, seg, k);
+		k++;
+	}
+
+	wait_event_interruptible(cache->migrate_wait_queue,
+				 (atomic_read(&cache->migrate_io_count) == 0));
+
+	if (atomic_read(&cache->migrate_fail_count)) {
+		DMERR("migrate failed. %u writebacks failed. redo.",
+		      atomic_read(&cache->migrate_fail_count));
+		goto migrate_write;
+	}
+
+	BUG_ON(atomic_read(&cache->migrate_io_count));
+
+	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
+		cleanup_segment(cache, seg);
+	}
 
 	for (i = 1; i < LC_NR_SLOTS; i++) {
 		bool b = *(cache->migrate_dests + i);
 		if (!b)
 			continue;
 
-		lc = lc_devices[i];
+		struct lc_device *lc = lc_devices[i];
 		blkdev_issue_flush(lc->device->bdev, GFP_NOIO, NULL);
 	}
 
@@ -1121,11 +1152,13 @@ migrate_write:
 	 * and discarding the metablock may lead to
 	 * integrity collapsion.
 	 */
-	blkdev_issue_discard(
-		cache->device->bdev,
-		seg->start_sector + (1 << 3),
-		seg->length << 3,
-		GFP_NOIO, 0);
+	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
+		blkdev_issue_discard(
+			cache->device->bdev,
+			seg->start_sector + (1 << 3),
+			seg->length << 3,
+			GFP_NOIO, 0);
+	}
 }
 
 static void migrate_proc(struct work_struct *work)
@@ -1153,7 +1186,11 @@ static void migrate_proc(struct work_struct *work)
 			(cache->last_migrated_segment_id <
 			 cache->last_flushed_segment_id);
 
-		if (!need_migrate) {
+		size_t nr_mig_candidates =
+			cache->last_flushed_segment_id -
+			cache->last_migrated_segment_id;
+
+		if (!nr_mig_candidates) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -1176,12 +1213,16 @@ static void migrate_proc(struct work_struct *work)
 			BUG_ON(!cache->dirtiness_snapshot);
 		}
 
+		/* size_t nr_mig = min(nr_mig_candidates, */
+				    /* cache->nr_cur_batched_migration); */
 		size_t nr_mig = 1;
 
 		struct segment_header *seg;
 		size_t i;
 		for (i = 1; i <= nr_mig; i++) {
-			seg = get_segment_header_by_id(cache, cache->last_migrated_segment_id + i);
+			seg = get_segment_header_by_id(
+					cache,
+					cache->last_migrated_segment_id + i);
 			list_add_tail(&seg->migrate_list, &cache->migrate_list);
 		}
 
@@ -1196,7 +1237,8 @@ static void migrate_proc(struct work_struct *work)
 
 		/* complete_all(&seg->migrate_done); */
 		struct segment_header *tmp;
-		list_for_each_entry_safe(seg, tmp, &cache->migrate_list, migrate_list){
+		list_for_each_entry_safe(seg, tmp, &cache->migrate_list,
+					 migrate_list) {
 			complete_all(&seg->migrate_done);
 			list_del(&seg->migrate_list);
 		}

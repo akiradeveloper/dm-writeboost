@@ -1182,10 +1182,6 @@ static void migrate_proc(struct work_struct *work)
 			continue;
 		}
 
-		bool need_migrate =
-			(cache->last_migrated_segment_id <
-			 cache->last_flushed_segment_id);
-
 		size_t nr_mig_candidates =
 			cache->last_flushed_segment_id -
 			cache->last_migrated_segment_id;
@@ -1213,9 +1209,8 @@ static void migrate_proc(struct work_struct *work)
 			BUG_ON(!cache->dirtiness_snapshot);
 		}
 
-		/* size_t nr_mig = min(nr_mig_candidates, */
-				    /* cache->nr_cur_batched_migration); */
-		size_t nr_mig = 1;
+		size_t nr_mig = min(nr_mig_candidates,
+				    cache->nr_cur_batched_migration);
 
 		struct segment_header *seg;
 		size_t i;

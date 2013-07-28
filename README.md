@@ -36,6 +36,15 @@ Driver/dm-lc.ko is now ready.
 	$ source build
 
 (3) [common] Load dm-lc into the kernel.  
+How to Load dm-lc module depends on your environment.
+
+If you are using kernel with dm-lc merged,
+modprobe the module or
+embed the module to the kernel if you like.
+
+If you will use the portable module
+developed in this repo,
+insmod the .ko file generated in Driver directory.
 
 (4) [common] Run prepare script  
 
@@ -49,7 +58,7 @@ Try testing and performance and see what is happening.
 Any type of contribution is all welcome.  
 Not even by code, by documents or by issue reporting is granted as a form of contribution.   
 
-To contribute by code or documents, pull-requests style seems to be a nice one.  
+To contribute by code or documents, pull-requests style seems to be a nice idea.  
 To make pull-requests,  
 
 1. Fork it.   

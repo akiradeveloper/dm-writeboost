@@ -36,12 +36,10 @@ Driver/dm-lc.ko is now ready.
 	$ source build
 
 (3) [common] Load dm-lc into the kernel.  
-How to Load dm-lc module depends on your environment.
-
+How to Load dm-lc module depends on your environment.  
 If you are using kernel with dm-lc merged,
 modprobe the module or
-embed the module to the kernel if you like.
-
+embed the module to the kernel if you like.  
 If you will use the portable module
 developed in this repo,
 insmod the .ko file generated in Driver directory.

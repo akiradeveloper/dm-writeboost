@@ -344,6 +344,13 @@ struct segment_header {
 
 	struct list_head migrate_list;
 
+	/*
+	 * persistent is true
+	 * if the segment is acked
+	 * as persistently written.
+	 */
+	bool persistent;
+
 	struct completion flush_done;
 
 	struct completion migrate_done;
@@ -467,7 +474,7 @@ struct lc_cache {
 	wait_queue_head_t migrate_wait_queue;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
-	bool migrate_dests[LC_NR_SLOTS];
+	bool persistent_dests[LC_NR_SLOTS];
 	size_t nr_max_batched_migration;
 	size_t nr_cur_batched_migration;
 	struct list_head migrate_list;
@@ -643,6 +650,22 @@ static void init_segment_header_array(struct lc_cache *cache)
 
 		seg->length = 0;
 
+		/*
+		 * persistent is true by default.
+		 * Why not false?
+		 *
+		 * We have no way to know
+		 * whether or not the segment revived
+		 * from cache device was acked persistently.
+		 * We turn this flag to the safe side.
+		 *
+		 * Holding persistent flag on disk
+		 * is not thought to be a good way
+		 * to get less dependant on the
+		 * possibly untrustable on-disk metadata.
+		 */
+		seg->persistent = true;
+
 		atomic_set(&seg->nr_inflight_ios, 0);
 
 		spin_lock_init(&seg->lock);
@@ -765,13 +788,25 @@ static void flush_proc(struct work_struct *work)
 		};
 		dm_safe_io_retry(&io_req, &region, 1, false);
 
+		/*
+		 * Up to this point,
+		 * the log segment is on the cache device,
+		 * at least on the disk cache.
+		 * Migrate daemon may migrate the segment.
+		 */
+
+		bool with_barrier = !bio_list_empty(&ctx->barrier_ios);
+
+		seg->persistent = false;
+		if (with_barrier)
+			seg->persistent = true;
 		cache->last_flushed_segment_id = seg->global_id;
 
 		complete_all(&seg->flush_done);
 
 		complete_all(&ctx->wb->done);
 
-		if (!bio_list_empty(&ctx->barrier_ios)) {
+		if (with_barrier) {
 			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 			struct bio *bio;
 			while ((bio = bio_list_pop(&ctx->barrier_ios)))
@@ -1061,7 +1096,8 @@ static void memorize_dirty_state(struct lc_cache *cache,
 		if (!dirty_bits)
 			continue;
 
-		*(cache->migrate_dests + mb->device_id) = true;
+		if (seg->persistent)
+			*(cache->persistent_dests + mb->device_id) = true;
 
 		if (dirty_bits == 255) {
 			(*migrate_io_count)++;
@@ -1090,7 +1126,7 @@ static void migrate_linked_segments(struct lc_cache *cache)
 	size_t k;
 
 	for (i = 0; i < LC_NR_SLOTS; i++)
-		*(cache->migrate_dests + i) = false;
+		*(cache->persistent_dests + i) = false;
 
 	size_t migrate_io_count = 0;
 	k = 0;
@@ -1125,7 +1161,7 @@ migrate_write:
 	}
 
 	for (i = 1; i < LC_NR_SLOTS; i++) {
-		bool b = *(cache->migrate_dests + i);
+		bool b = *(cache->persistent_dests + i);
 		if (!b)
 			continue;
 
@@ -2729,7 +2765,6 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		atomic_set(&cache->migrate_io_count, 0);
 		cache->nr_max_batched_migration = 1;
 		cache->nr_cur_batched_migration = 1;
-
 		cache->migrate_buffer = vmalloc(
 				NR_CACHES_INSEG << 12);
 		cache->dirtiness_snapshot = kmalloc(

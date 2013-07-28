@@ -15,7 +15,7 @@ which then performs high throughput and low latency. See also the DCD paper [1].
 * Kernel versions since 3.2 are widely supported.  
 * Capable of performing 375kiops(1.5GB/sec) random writes with a fast enough cache.  
 * Concurrency not discussed in DCD paper is implemented.  
-* Auxiliary daemon automatically controls the behavior of the kernel module. Migration is automated.  
+* Auxiliary daemon autonomously controls the behavior of the kernel module.
 
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)

@@ -13,20 +13,17 @@
 #include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
+#include <linux/timer.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
-#include <linux/timer.h>
-
-/*
- * Comments are written
- * on the segment size order is 11
- * which means the segment size is 1MB.
- */
 
 /*
  * (1 << x) sector.
  * 4 <= x <= 11
  * dm-lc supports segment size up to 1MB.
+ *
+ * All the comments are if
+ * the segment size is the maximum 1MB.
  */
 #define LC_SEGMENTSIZE_ORDER 11
 
@@ -258,19 +255,18 @@ struct lc_device *lc_devices[LC_NR_SLOTS];
  * dm-lc can supoort a cache device
  * with size less than 4KB * (1 << 32)
  * that is 16TB.
- * Needless to say, this is enough in most cases.
  */
 typedef u32 cache_nr;
 
 /*
  * Accounts for a 4KB cache line
- * which consists of eight sectors
+ * which consists of 8 sectors
  * that is managed by dirty bit for each.
  */
 struct metablock {
 	sector_t sector;
 
-	cache_nr idx; /* const */
+	cache_nr idx; /* Const */
 
 	struct hlist_node ht_list;
 
@@ -285,6 +281,8 @@ struct metablock {
 	 * Adding recover flag
 	 * to recover clean caches
 	 * badly complicates the code.
+	 * All in all, nearly meaningless
+	 * because caches are likely to be dirty.
 	 */
 	u8 dirty_bits;
 
@@ -306,7 +304,7 @@ static void dec_nr_dirty_caches(device_id id)
 }
 
 /*
- * on-disk metablock
+ * On-disk metablock
  */
 struct metablock_device {
 	sector_t sector;
@@ -322,21 +320,27 @@ struct writebuffer {
 	struct completion done;
 };
 
-#define SZ_MAX (~(size_t)0) /* renamed backport */
+#define SZ_MAX (~(size_t)0) /* Renamed backport */
 struct segment_header {
 	struct metablock mb_array[NR_CACHES_INSEG];
 
 	/*
-	 * id uniformly increases.
-	 * id 0 is used to tell that the segment is invalid
-	 * and valid id starts from 1.
+	 * ID uniformly increases.
+	 * ID 0 is used to tell that the segment is invalid
+	 * and valid id >= 1.
 	 */
 	size_t global_id;
 
-	u8 length; /* Log length. <= NR_CACHES_INSEG */
+	/*
+	 * Segment can be flushed half-done.
+	 * length is the number of
+	 * metablocks that must be counted in
+	 * in resuming.
+	 */
+	u8 length;
 
-	cache_nr start_idx; /* const */
-	sector_t start_sector; /* const */
+	cache_nr start_idx; /* Const */
+	sector_t start_sector; /* Const */
 
 	struct list_head migrate_list;
 
@@ -384,14 +388,14 @@ static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
 }
 
 /*
- * on-disk segment header.
+ * On-disk segment header.
  * At most 4KB in total.
  */
 struct segment_header_device {
-	/* --- at most512 byte for atomicity. --- */
+	/* --- At most512 byte for atomicity. --- */
 	size_t global_id;
 	u8 length;
-	u32 lap; /* initially 0. 1 for the first lap. */
+	u32 lap; /* Initially 0. 1 for the first lap. */
 	/* -------------------------------------- */
 	/* This array must locate at the tail */
 	struct metablock_device mbarr[NR_CACHES_INSEG];
@@ -420,8 +424,8 @@ struct lc_cache {
 	cache_id id;
 	struct dm_dev *device;
 	struct mutex io_lock;
-	cache_nr nr_caches; /* const */
-	size_t nr_segments; /* const */
+	cache_nr nr_caches; /* Const */
+	size_t nr_segments; /* Const */
 	struct arr *segment_header_array;
 
 	/*
@@ -471,7 +475,7 @@ struct lc_cache {
 	void *migrate_buffer;
 
 	/*
-	 * For deferred barrier handling.
+	 * For deferred ack for barriers.
 	 */
 	struct timer_list barrier_deadline_timer;
 	struct bio_list barrier_ios;
@@ -1034,19 +1038,13 @@ static void memorize_dirty_state(struct lc_cache *cache,
 	};
 	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
 
-	/* FIXME doc inconsis */
 	/*
-	 * We take snapshot of the dirtiness in the segment.
-	 * The dirtiness of flushed segment
-	 * may uniformly decrease at any moment
-	 * and migrating dirty data more than once
-	 * doesn't craze the consistency.
-	 * In other word,
-	 * the snapshot segment
-	 * is dirtier than itself of any future moment
+	 * We take snapshot of the dirtiness in the segments.
+	 * The snapshot segments
+	 * are dirtier than themselves of any future moment
 	 * and we will migrate the possible dirtiest
-	 * state of the segment which won't lose
-	 * any dirty data that was acknowledged.
+	 * state of the segments
+	 * which won't lose any dirty data that was acknowledged.
 	 */
 	struct metablock *mb;
 	for (i = 0; i < seg->length; i++) {
@@ -1090,19 +1088,6 @@ static void migrate_linked_segments(struct lc_cache *cache)
 	struct segment_header *seg;
 	u8 i;
 	size_t k;
-
-	/* FIXME doc inconsis */
-	/*
-	 * Migrating each cache block at a time
-	 * performs very bad.
-	 * dm-lc migrates dirty data to
-	 * backing store in segment granurality.
-	 * The migration is atomic;
-	 * if any of the blocks in the segment
-	 * fails in the migration and the
-	 * whole migration of the segment
-	 * is granted as failure.
-	 */
 
 	for (i = 0; i < LC_NR_SLOTS; i++)
 		*(cache->migrate_dests + i) = false;
@@ -1151,12 +1136,14 @@ migrate_write:
 	/*
 	 * Discarding the migrated regions
 	 * can avoid unnecessary wear amplifier in the future.
+	 *
 	 * But note that we should not discard
 	 * the metablock region because
-	 * it varies across flash devices whether to ensure
+	 * whether or not to ensure
 	 * the discarded block returns certain value
-	 * and discarding the metablock may lead to
-	 * integrity collapsion.
+	 * is depends on venders
+	 * and unexpected metablock data
+	 * will craze the cache.
 	 */
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
 		blkdev_issue_discard(
@@ -1215,6 +1202,11 @@ static void migrate_proc(struct work_struct *work)
 			BUG_ON(!cache->dirtiness_snapshot);
 		}
 
+		/*
+		 * Batched Migration:
+		 * We will migrate at most nr_max_batched_migration
+		 * segments at a time.
+		 */
 		size_t nr_mig = min(nr_mig_candidates,
 				    cache->nr_cur_batched_migration);
 
@@ -1236,7 +1228,6 @@ static void migrate_proc(struct work_struct *work)
 		 */
 		cache->last_migrated_segment_id += nr_mig;
 
-		/* complete_all(&seg->migrate_done); */
 		struct segment_header *tmp;
 		list_for_each_entry_safe(seg, tmp, &cache->migrate_list,
 					 migrate_list) {
@@ -1398,7 +1389,7 @@ static void recover_cache(struct lc_cache *cache)
 	 * Finding the oldest, non-zero id and its index.
 	 */
 
-	size_t max_id = SZ_MAX; /* This global_id is forbidden. */
+	size_t max_id = SZ_MAX;
 	size_t oldest_id = max_id;
 	size_t oldest_idx = 0;
 	for (i = 0; i < nr_segments; i++) {
@@ -1431,7 +1422,7 @@ static void recover_cache(struct lc_cache *cache)
 
 	/*
 	 * What we have to do in the next loop is to
-	 * reincarnate the segments that are
+	 * revive the segments that are
 	 * flushed but yet not migrated.
 	 */
 
@@ -1450,9 +1441,10 @@ static void recover_cache(struct lc_cache *cache)
 		read_segment_header_device(header, cache, j);
 
 		/*
-		 * Valid global_id is greater 0.
-		 * We encounter header with global_id 0 and
-		 * we consider this and the subsequents are all invalid.
+		 * Valid global_id > 0.
+		 * We encounter header with global_id = 0 and
+		 * we can consider
+		 * this and the followings are all invalid.
 		 */
 		if (header->global_id <= last_flushed_id)
 			break;
@@ -1474,10 +1466,6 @@ static void recover_cache(struct lc_cache *cache)
 		if (header->global_id <= sup.last_migrated_segment_id)
 			continue;
 
-		/*
-		 * Only those to be migrated are counted in.
-		 * These segments will not be available until migrated.
-		 */
 		update_by_segment_header_device(cache, header);
 	}
 
@@ -1505,7 +1493,6 @@ setup_init_segment:
 	/*
 	 * cursor is set to the first element of the segment.
 	 * This means that we will not use the element.
-	 * I believe this is the simplest implementation.
 	 */
 	cache->cursor = seg->start_idx;
 	seg->length = 1;
@@ -1523,7 +1510,7 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	sector_t devsize = dm_devsize(dev);
 
 	/*
-	 * disk format:
+	 * Disk format:
 	 * superblock(1MB) [segment(1MB)]+
 	 * We reserve the first segment (1MB) as the superblock.
 	 *
@@ -1788,8 +1775,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if (mb) {
-		seg = ((void *) mb) - ((mb->idx % NR_CACHES_INSEG) *
-				       sizeof(struct metablock));
+		seg = ((void *) mb) - (mb->idx % NR_CACHES_INSEG) *
+				      sizeof(struct metablock);
 		atomic_inc(&seg->nr_inflight_ios);
 	}
 
@@ -1847,7 +1834,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			 * stable caches which are not on the buffer
 			 * but on the cache device
 			 * may decrease the dirtiness by other processes
-			 * other than the migrate daemon.
+			 * than the migrate daemon.
 			 * This works fine
 			 * because migrating the same cache twice
 			 * doesn't craze the cache concistency.
@@ -2755,7 +2742,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		bio_list_init(&cache->barrier_ios);
 
 		/*
-		 * deadline is 3 ms by default.
+		 * Deadline is 3 ms by default.
 		 * 2.5 us to process on bio
 		 * and 3 ms is enough long to process 255 bios.
 		 * If the buffer doesn't get full within 3 ms,

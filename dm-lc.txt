@@ -7,23 +7,22 @@ It batches random writes into a big sequential write.
 1. Setup
 ========
 dm-lc is composed of two target_type instances named lc and lc-mgr.
-lc is responsible for creating logical volumes and controlling ios and
-lc-mgr is reponsible for managing
-formatting/initializing/destructing cache devices on the other hand.
-Operating dm-lc through these native interfaces are not recommended.
+
+- lc target is responsible for creating logical volumes and controlling ios
+- lc-mgr target is reponsible for managing
+  formatting/initializing/destructing cache devices on the other hand.
+  But, operating dm-lc through these native interfaces are not recommended.
 
 To easily get started with dm-lc, nice userland tools are provided in
 	https://github.com/akiradeveloper/dm-lc
-where you are also accesible to portable dm-lc kernel code
-that supports since 3.2 kernel until before dm-lc staged upstream, 3.x.
-please git clone it.
+Please git clone it.
 
 To install the tools, move under Admin directory and run
 	python setup.py install
 and now you have a lisence for dm-lc admin.
 
-2. Example scripts
-==================
+2. Admin example
+================
 Let's create a logical volume named myLV
 backed by /dev/myVg/myBacking
 and use /dev/myCache as a cache device.
@@ -31,44 +30,46 @@ and use /dev/myCache as a cache device.
 myLV -- (backing store) /dev/myVg/myBacking
      -- (cache device)  /dev/myCache
 
-Note that backing store is restricted to
-a logical device that is created by LVM
-for technical reasons.
+Note that backing store is limited to
+a logical device that is created by LVM.
 
 1. Format myCache
-Format the medata blocks on a device.
-Note that this erases all the existing data.
+Format the metadata blocks on a device.
+Be careful,
+this operation erases all the existing data on the cache device.
 
 	lc-format-cache /dev/myCache
 
 2. Create myLV
-Create a logical volume just backed by a existing volume.
-We give device id 5 to the volume in this example.
+Create a logical volume simply backed by a existing volume.
+We give device ID 5 to the volume in this example.
 
 As of now, this operation create a logical volume
 with different name from the backing store.
 But some users don't want to change the name
-because the backing store is in use
+because the backing store is in operation
 and want to apply dm-lc on the fly.
 This can be technically realizable
 but I haven't implemented it at this time
-because it is too tricky to be portable.
+because it is too tricky.
 
 	lc-create myLV 5 /dev/myVg/myBacking
 
 3. Resume myCache
 Resuming cache device builds in-memory structures
 such as a hashtable scanned from the metadata on the device.
-We give cache id 3 to the device in this example.
+We give cache ID 3 to the device in this example.
 
-Note that you MUST create all the LVs as the destinations
-of the dirty caches on the cache device for technical reasons.
-Otherwise, it leads to kernel crash. Be careful.
+Be careful,
+you MUST create all the LVs as the destinations
+of the dirty caches on the cache device.
+Otherwise, the kernel crashes.
 
 	lc-resume 3 /dev/myCache
 
 4. Attach myCache to myLV
-To start caching writes to the myLV, you must attach myCache to myLV.
+To start caching writes submitted to the myLV,
+you must attach myCache to myLV.
 This can be done on the fly.
 
 	lc-attach 5 3
@@ -125,6 +126,7 @@ The sysfs tree is located under /sys/module/dm_lc.
 |       |-- force_migrate
 |       |-- last_flushed_segment_id
 |       |-- last_migrated_segment_id
+|       |-- nr_max_batched_migration
 |       `-- update_interval
 
 4. Technical Issues
@@ -142,14 +144,14 @@ that is usually in few microseconds that is unimaginably fast.
 After RAM buffer gets full or some deadline comes
 dm-lc creates segment log that gathers RAM buffer and its metadata.
 Metadata have information such as connection between
-address in cache device and the counterpart in backing store.
-As the segment log finally is written to persistent cache device,
+address in the cache device and the counterpart in the backing store.
+As the segment log is finally written to persistent cache device,
 any data will not be lost after machine failure.
 
 4.3 Asynchronous log flushing
 dm-lc has a background worker called flush daemon.
 Flushing segment log starts from simply queueing the flush task.
-Flush daemon in background asynchronously checks if the queue has some tasks
+Flush daemon in background periodically checks if the queue has some tasks
 and actually executes the tasks if exists.
 The fact that the upper layer doesn't block in queueing the task
 maximizes the write throughput
@@ -157,27 +159,28 @@ that is 259MB/s random writes with cache device of 266MB/s sequential write
 which is only 3% loss
 and 1.5GB/s theoritically with a fast enough cache like PCI-e SSDs.
 
-4.4 Asynchronous and automated migration
-Some time after a log segment is flushed to cache device
-it will be migrated to backing store.
-Migrate daemon is also a background worker
-that periodically check if log segments to migrate exist.
-
-Restlessly migrating highly loads backing store
-so migration is better to execute when the backing store is in lazy time.
-lc-daemon in userland surveils the load of backing store
-and turns migration on and off according to the load.
-
-4.5 Lazy handling of REQ_FUA and REQ_FLUSH bios
+4.4 Deferred ack for REQ_FUA and REQ_FLUSH bios
 Some applications such as NFS, journal filesystems
 and databases often submit SYNC write that
 leads to bios flagged with REQ_FUA or REQ_FLUSH.
 Handling these irregular bios immediately and thus synchronously
 desparately deteriorates the whole throughput.
-To address this issue, dm-lc handles these bios lazily or in deferred manner.
+To address this issue, dm-lc handles acks
+for these bios lazily or in deferred manner.
 Completion related to these bios will not be done until
 they are written persistently to the cache device
-so this storategy doesn't break the semantics.
+so this storategy doesn't betray the semantics.
 In the worst case scenario, a bio with some of these flags
-is completed in deadline period that is described
+is completed in deadline period that is configurable
 in barrier_deadline_ms in sysfs.
+
+4.5 Asynchronous and autonomous migration
+Some time after a log segment is flushed to the cache device
+it will be migrated to the backing store.
+Migrate daemon is also a background worker
+that periodically checks if log segments to migrate exist.
+
+Restlessly migrating highly loads backing store
+so migration is better to execute when the backing store is in lazy time.
+lc-daemon in userland surveils the load of the backing store
+and autonomously turns migration on and off according to the load.

@@ -2963,6 +2963,8 @@ static int __init lc_module_init(void)
 
 	safe_io_wq = alloc_workqueue("safeiowq",
 				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+	if (!safe_io_wq)
+		return -ENOMEM;
 
 	lc_io_client = dm_io_client_create();
 

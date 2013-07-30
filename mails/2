@@ -47,7 +47,7 @@ Any comments about dm-lc is welcome.
 Regards,
 Akira
 
-### Code (dm-lc.c)
+### Code (dm-lc.c) 
 /*
  * dm-lc.c : Log-structured Caching for Linux.
  * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>

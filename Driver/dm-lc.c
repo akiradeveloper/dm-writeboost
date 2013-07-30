@@ -80,12 +80,13 @@ static size_t nr_parts(struct arr *arr)
 
 static struct arr *make_arr(size_t elemsize, size_t nr_elems)
 {
+	size_t i;
+
 	struct arr *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	arr->elemsize = elemsize;
 	arr->nr_elems = nr_elems;
 	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
 
-	size_t i;
 	for (i = 0; i < nr_parts(arr); i++) {
 		struct part *part = arr->parts + i;
 		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
@@ -142,6 +143,9 @@ static int dm_safe_io_internal(
 		unsigned long *err_bits, bool thread, int lineno)
 {
 	int err;
+
+	dev_t dev;
+
 	if (thread) {
 		struct safe_io io = {
 			.io_req = io_req,
@@ -160,7 +164,7 @@ static int dm_safe_io_internal(
 		err = dm_io(io_req, num_regions, region, err_bits);
 	}
 
-	dev_t dev = region->bdev->bd_dev;
+	dev = region->bdev->bd_dev;
 	if (err || *err_bits) {
 		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)",
 		      lineno, err, *err_bits);
@@ -183,6 +187,8 @@ static void dm_safe_io_retry_internal(
 	int err;
 	unsigned long err_bits;
 
+	dev_t dev;
+
 	int count = 0;
 
 retry_io:
@@ -190,7 +196,7 @@ retry_io:
 	err = dm_safe_io_internal(io_req, region, num_regions, &err_bits,
 				  thread, lineno);
 
-	dev_t dev = region->bdev->bd_dev;
+	dev = region->bdev->bd_dev;
 	if (err || err_bits) {
 		count++;
 		DMERR("failed io count(%d)", count);
@@ -494,6 +500,8 @@ struct lc_cache {
 static void inc_stat(struct lc_cache *cache,
 		     int rw, bool found, bool on_buffer, bool fullsize)
 {
+	atomic64_t *v;
+
 	int i = 0;
 	if (rw)
 		i |= (1 << STAT_WRITE);
@@ -504,7 +512,7 @@ static void inc_stat(struct lc_cache *cache,
 	if (fullsize)
 		i |= (1 << STAT_FULLSIZE);
 
-	atomic64_t *v = &cache->stat[i];
+	v = &cache->stat[i];
 	atomic64_inc(v);
 }
 
@@ -540,14 +548,18 @@ static void mb_array_empty_init(struct lc_cache *cache)
 
 static void ht_empty_init(struct lc_cache *cache)
 {
-	cache->htsize = cache->nr_caches;
+	cache_nr idx;
+	size_t i;
 
-	size_t nr_heads = (cache->htsize + 1);
-	struct arr *arr = make_arr(sizeof(struct ht_head), nr_heads);
+	size_t nr_heads;
+	struct arr *arr;
+
+	cache->htsize = cache->nr_caches;
+	nr_heads = cache->htsize + 1;
+	arr = make_arr(sizeof(struct ht_head), nr_heads);
 
 	cache->htable = arr;
 
-	size_t i;
 	for (i = 0; i < nr_heads; i++) {
 		struct ht_head *hd = arr_at(arr, i);
 		INIT_HLIST_HEAD(&hd->ht_list);
@@ -559,7 +571,6 @@ static void ht_empty_init(struct lc_cache *cache)
 	 */
 	cache->null_head = arr_at(cache->htable, cache->htsize);
 
-	cache_nr idx;
 	for (idx = 0; idx < cache->nr_caches; idx++) {
 		struct metablock *mb = mb_at(cache, idx);
 		hlist_add_head(&mb->ht_list, &cache->null_head->ht_list);
@@ -578,9 +589,11 @@ static bool mb_hit(struct metablock *mb, struct lookup_key *key)
 
 static void ht_del(struct lc_cache *cache, struct metablock *mb)
 {
+	struct ht_head *null_head;
+
 	hlist_del(&mb->ht_list);
 
-	struct ht_head *null_head = cache->null_head;
+	null_head = cache->null_head;
 	hlist_add_head(&mb->ht_list, &null_head->ht_list);
 }
 
@@ -627,12 +640,12 @@ static void discard_caches_inseg(struct lc_cache *cache,
 
 static void init_segment_header_array(struct lc_cache *cache)
 {
-	size_t nr_segments = cache->nr_segments;
+	size_t segment_idx;
 
+	size_t nr_segments = cache->nr_segments;
 	cache->segment_header_array =
 		make_arr(sizeof(struct segment_header), nr_segments);
 
-	size_t segment_idx;
 	for (segment_idx = 0; segment_idx < nr_segments; segment_idx++) {
 		struct segment_header *seg =
 			arr_at(cache->segment_header_array, segment_idx);
@@ -681,8 +694,9 @@ static sector_t calc_mb_start_sector(struct segment_header *seg,
 
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {
-	u8 count = 0;
 	u8 i;
+
+	u8 count = 0;
 	struct metablock *mb;
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
@@ -696,15 +710,18 @@ static void prepare_segment_header_device(
 		struct segment_header_device *dest,
 		struct lc_cache *cache, struct segment_header *src)
 {
+	cache_nr i;
+
+	u8 left, right;
+
 	dest->global_id = src->global_id;
 	dest->length = src->length;
 	dest->lap = calc_segment_lap(cache, src->global_id);
 
-	u8 left = src->length - 1;
-	u8 right = (cache->cursor) % NR_CACHES_INSEG;
+	left = src->length - 1;
+	right = (cache->cursor) % NR_CACHES_INSEG;
 	BUG_ON(left != right);
 
-	cache_nr i;
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
 		struct metablock_device *mbdev = &dest->mbarr[i];
@@ -725,10 +742,16 @@ struct flush_context {
 static void flush_proc(struct work_struct *work)
 {
 	unsigned long flags;
+
 	struct lc_cache *cache =
 		container_of(work, struct lc_cache, flush_work);
 
 	while (true) {
+		struct flush_context *ctx;
+		struct segment_header *seg;
+		struct dm_io_request io_req;
+		struct dm_io_region region;
+
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while (list_empty(&cache->flush_queue)) {
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
@@ -743,26 +766,22 @@ static void flush_proc(struct work_struct *work)
 		}
 
 		/* Pop the first entry */
-		struct flush_context *ctx;
 		ctx = list_first_entry(
 			&cache->flush_queue, struct flush_context, flush_queue);
 		list_del(&ctx->flush_queue);
 		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 
-		struct segment_header *seg = ctx->seg;
+		seg = ctx->seg;
 
-		struct dm_io_request io_req = {
-			.client = lc_io_client,
-			.bi_rw = WRITE,
-			.notify.fn = NULL,
-			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = ctx->wb->data,
-		};
-		struct dm_io_region region = {
-			.bdev = cache->device->bdev,
-			.sector = seg->start_sector,
-			.count = (seg->length + 1) << 3,
-		};
+		io_req.client = lc_io_client;
+		io_req.bi_rw = WRITE;
+		io_req.notify.fn = NULL;
+		io_req.mem.type = DM_IO_KMEM;
+		io_req.mem.ptr.addr = ctx->wb->data;
+
+		region.bdev = cache->device->bdev;
+		region.sector = seg->start_sector;
+		region.count = (seg->length + 1) << 3;
 		dm_safe_io_retry(&io_req, &region, 1, false);
 
 		cache->last_flushed_segment_id = seg->global_id;
@@ -885,6 +904,7 @@ static void migrate_mb(
 		};
 		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 
+		{
 		struct dm_io_request io_req_w = {
 			.client = lc_io_client,
 			.bi_rw = WRITE_FUA,
@@ -898,6 +918,7 @@ static void migrate_mb(
 			.count = (1 << 3),
 		};
 		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
+		}
 
 		kfree(buf);
 	} else {
@@ -908,6 +929,7 @@ static void migrate_mb(
 			if (!bit_on)
 				continue;
 
+			{
 			struct dm_io_request io_req_r = {
 				.client = lc_io_client,
 				.bi_rw = READ,
@@ -937,6 +959,7 @@ static void migrate_mb(
 				.count = 1,
 			};
 			dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
+			}
 		}
 		kfree(buf);
 	}

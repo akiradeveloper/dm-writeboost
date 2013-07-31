@@ -2671,6 +2671,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	if (!strcasecmp(cmd, "resume_cache")) {
 		struct lc_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
+		if (!cache)
+			return -ENOMEM;
 
 		struct dm_dev *dev;
 		if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),

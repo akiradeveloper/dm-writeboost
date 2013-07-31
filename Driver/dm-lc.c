@@ -2924,14 +2924,7 @@ static struct target_type lc_mgr_target = {
 
 static int __init lc_module_init(void)
 {
-	int r;
-
-	safe_io_wq = alloc_workqueue("safeiowq",
-				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
-	if (!safe_io_wq)
-		return -ENOMEM;
-
-	lc_io_client = dm_io_client_create();
+	int r = -ENOMEM;
 
 	r = dm_register_target(&lc_target);
 	if (r < 0) {
@@ -2942,7 +2935,36 @@ static int __init lc_module_init(void)
 	r = dm_register_target(&lc_mgr_target);
 	if (r < 0) {
 		DMERR("register lc-mgr failed %d", r);
-		return r;
+		goto bad_register_mgr_target;
+	}
+
+	/*
+	 * /sys/module/dm_lc/devices
+	 *                  /caches
+	 */
+
+	struct module *mod = THIS_MODULE;
+	struct kobject *lc_kobj = &(mod->mkobj.kobj);
+
+	devices_kobj = kobject_create_and_add("devices", lc_kobj);
+	if (!devices_kobj)
+		goto bad_kobj_devices;
+
+	caches_kobj = kobject_create_and_add("caches", lc_kobj);
+	if (!caches_kobj)
+		goto bad_kobj_caches;
+
+	safe_io_wq = alloc_workqueue("safeiowq",
+				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+	if (!safe_io_wq) {
+		DMERR("failed to create workqueue safeiowq");
+		goto bad_wq;
+	}
+
+	lc_io_client = dm_io_client_create();
+	if (IS_ERR(lc_io_client)) {
+		r = PTR_ERR(lc_io_client);
+		goto bad_io_client;
 	}
 
 	cache_id_ptr = 0;
@@ -2954,17 +2976,20 @@ static int __init lc_module_init(void)
 	for (i = 0; i < LC_NR_SLOTS; i++)
 		lc_caches[i] = NULL;
 
-	/*
-	 * /sys/module/dm_lc/devices
-	 *                  /caches
-	 */
-
-	struct module *mod = THIS_MODULE;
-	struct kobject *lc_kobj = &(mod->mkobj.kobj);
-	devices_kobj = kobject_create_and_add("devices", lc_kobj);
-	caches_kobj = kobject_create_and_add("caches", lc_kobj);
-
 	return 0;
+
+bad_io_client:
+	destroy_workqueue(safe_io_wq);
+bad_wq:
+	kobject_put(caches_kobj);
+bad_kobj_caches:
+	kobject_put(devices_kobj);
+bad_kobj_devices:
+	dm_unregister_target(&lc_mgr_target);
+bad_register_mgr_target:
+	dm_unregister_target(&lc_target);
+
+	return ERR_PTR(r);
 }
 
 static void __exit lc_module_exit(void)

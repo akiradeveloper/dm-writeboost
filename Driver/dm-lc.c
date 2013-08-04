@@ -143,7 +143,6 @@ static int dm_safe_io_internal(
 		unsigned long *err_bits, bool thread, int lineno)
 {
 	int err;
-
 	dev_t dev;
 
 	if (thread) {
@@ -186,7 +185,6 @@ static void dm_safe_io_retry_internal(
 {
 	int err;
 	unsigned long err_bits;
-
 	dev_t dev;
 
 	int count = 0;
@@ -550,7 +548,6 @@ static void ht_empty_init(struct lc_cache *cache)
 {
 	cache_nr idx;
 	size_t i;
-
 	size_t nr_heads;
 	struct arr *arr;
 
@@ -773,15 +770,20 @@ static void flush_proc(struct work_struct *work)
 
 		seg = ctx->seg;
 
-		io_req.client = lc_io_client;
-		io_req.bi_rw = WRITE;
-		io_req.notify.fn = NULL;
-		io_req.mem.type = DM_IO_KMEM;
-		io_req.mem.ptr.addr = ctx->wb->data;
+		io_req = (struct dm_io_request) {
+			.client = lc_io_client,
+			.bi_rw = WRITE,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = ctx->wb->data,
+		};
 
-		region.bdev = cache->device->bdev;
-		region.sector = seg->start_sector;
-		region.count = (seg->length + 1) << 3;
+		region = (struct dm_io_region) {
+			.bdev = cache->device->bdev,
+			.sector = seg->start_sector,
+			.count = (seg->length + 1) << 3,
+		};
+
 		dm_safe_io_retry(&io_req, &region, 1, false);
 
 		cache->last_flushed_segment_id = seg->global_id;
@@ -791,8 +793,8 @@ static void flush_proc(struct work_struct *work)
 		complete_all(&ctx->wb->done);
 
 		if (!bio_list_empty(&ctx->barrier_ios)) {
-			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 			struct bio *bio;
+			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 			while ((bio = bio_list_pop(&ctx->barrier_ios)))
 				bio_endio(bio, 0);
 
@@ -814,8 +816,15 @@ static void queue_flushing(struct lc_cache *cache)
 {
 	unsigned long flags;
 	struct segment_header *current_seg = cache->current_seg;
+	struct flush_context *ctx;
+	bool empty;
+	struct segment_header *new_seg;
+	size_t next_id;
+	struct writebuffer *next_wb;
 
 	size_t n1 = 0;
+	size_t n2 = 0;
+
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
 		n1++;
 		if (n1 == 100)
@@ -830,7 +839,7 @@ static void queue_flushing(struct lc_cache *cache)
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
 
-	struct flush_context *ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
+	ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
 	INIT_LIST_HEAD(&ctx->flush_queue);
 	ctx->seg = current_seg;
 	ctx->wb = cache->current_wb;
@@ -840,18 +849,16 @@ static void queue_flushing(struct lc_cache *cache)
 	bio_list_init(&cache->barrier_ios);
 
 	spin_lock_irqsave(&cache->flush_queue_lock, flags);
-	bool empty = list_empty(&cache->flush_queue);
+	empty = list_empty(&cache->flush_queue);
 	list_add_tail(&ctx->flush_queue, &cache->flush_queue);
 	spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 	if (empty)
 		wake_up_interruptible(&cache->flush_wait_queue);
 
-	size_t next_id = current_seg->global_id + 1;
-	struct segment_header *new_seg =
-		get_segment_header_by_id(cache, next_id);
+	next_id = current_seg->global_id + 1;
+	new_seg = get_segment_header_by_id(cache, next_id);
 	new_seg->global_id = next_id;
 
-	size_t n2 = 0;
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
 		n2++;
 		if (n2 == 100)
@@ -860,8 +867,7 @@ static void queue_flushing(struct lc_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
-	u8 nr_new = count_dirty_caches_remained(new_seg);
-	BUG_ON(nr_new);
+	BUG_ON(count_dirty_caches_remained(new_seg));
 
 	discard_caches_inseg(cache, new_seg);
 
@@ -869,7 +875,7 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 	new_seg->length = 0;
 
-	struct writebuffer *next_wb = cache->wb_pool + (next_id % NR_WB_POOL);
+	next_wb = cache->wb_pool + (next_id % NR_WB_POOL);
 	wait_for_completion(&next_wb->done);
 	INIT_COMPLETION(next_wb->done);
 
@@ -889,36 +895,37 @@ static void migrate_mb(
 
 	if (dirty_bits == 255) {
 		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
+		struct dm_io_request io_req_r, io_req_w;
+		struct dm_io_region region_r, region_w;
 
-		struct dm_io_request io_req_r = {
+		io_req_r = (struct dm_io_request) {
 			.client = lc_io_client,
 			.bi_rw = READ,
 			.notify.fn = NULL,
 			.mem.type = DM_IO_KMEM,
 			.mem.ptr.addr = buf,
 		};
-		struct dm_io_region region_r = {
+		region_r = (struct dm_io_region) {
 			.bdev = cache->device->bdev,
 			.sector = calc_mb_start_sector(seg, mb->idx),
 			.count = (1 << 3),
 		};
+
 		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 
-		{
-		struct dm_io_request io_req_w = {
+		io_req_w = (struct dm_io_request) {
 			.client = lc_io_client,
 			.bi_rw = WRITE_FUA,
 			.notify.fn = NULL,
 			.mem.type = DM_IO_KMEM,
 			.mem.ptr.addr = buf,
 		};
-		struct dm_io_region region_w = {
+		region_w = (struct dm_io_region) {
 			.bdev = lc->device->bdev,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
 		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
-		}
 
 		kfree(buf);
 	} else {
@@ -926,11 +933,14 @@ static void migrate_mb(
 		size_t i;
 		for (i = 0; i < 8; i++) {
 			bool bit_on = dirty_bits & (1 << i);
+			struct dm_io_request io_req_r, io_req_w;
+			struct dm_io_region region_r, region_w;
+			sector_t src;
+
 			if (!bit_on)
 				continue;
 
-			{
-			struct dm_io_request io_req_r = {
+			io_req_r = (struct dm_io_request) {
 				.client = lc_io_client,
 				.bi_rw = READ,
 				.notify.fn = NULL,
@@ -938,28 +948,27 @@ static void migrate_mb(
 				.mem.ptr.addr = buf,
 			};
 			/* A tmp variable just to avoid 80 cols rule */
-			sector_t src = calc_mb_start_sector(seg, mb->idx) + i;
-			struct dm_io_region region_r = {
+			src = calc_mb_start_sector(seg, mb->idx) + i;
+			region_r = (struct dm_io_region) {
 				.bdev = cache->device->bdev,
 				.sector = src,
 				.count = 1,
 			};
 			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
 
-			struct dm_io_request io_req_w = {
+			io_req_w = (struct dm_io_request) {
 				.client = lc_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = NULL,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = buf,
 			};
-			struct dm_io_region region_w = {
+			region_w = (struct dm_io_region) {
 				.bdev = lc->device->bdev,
 				.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
 			dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
-			}
 		}
 		kfree(buf);
 	}
@@ -989,16 +998,21 @@ static void submit_migrate_io(struct lc_cache *cache,
 		struct lc_device *lc = lc_devices[mb->device_id];
 		u8 dirty_bits = *(cache->dirtiness_snapshot + (a + i));
 
+		unsigned long offset;
+		void *base, *addr;
+
+		struct dm_io_request io_req_w;
+		struct dm_io_region region_w;
+
 		if (!dirty_bits)
 			continue;
 
-		unsigned long offset = i << 12;
-		void *base = p + offset;
+		offset = i << 12;
+		base = p + offset;
 
-		void *addr;
 		if (dirty_bits == 255) {
 			addr = base;
-			struct dm_io_request io_req_w = {
+			io_req_w = (struct dm_io_request) {
 				.client = lc_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
@@ -1006,7 +1020,7 @@ static void submit_migrate_io(struct lc_cache *cache,
 				.mem.type = DM_IO_VMA,
 				.mem.ptr.vma = addr,
 			};
-			struct dm_io_region region_w = {
+			region_w = (struct dm_io_region) {
 				.bdev = lc->device->bdev,
 				.sector = mb->sector,
 				.count = (1 << 3),
@@ -1019,7 +1033,7 @@ static void submit_migrate_io(struct lc_cache *cache,
 					continue;
 
 				addr = base + (j << SECTOR_SHIFT);
-				struct dm_io_request io_req_w = {
+				io_req_w = (struct dm_io_request) {
 					.client = lc_io_client,
 					.bi_rw = WRITE,
 					.notify.fn = migrate_endio,
@@ -1027,7 +1041,7 @@ static void submit_migrate_io(struct lc_cache *cache,
 					.mem.type = DM_IO_VMA,
 					.mem.ptr.vma = addr,
 				};
-				struct dm_io_region region_w = {
+				region_w = (struct dm_io_region) {
 					.bdev = lc->device->bdev,
 					.sector = mb->sector + j,
 					.count = 1,
@@ -1046,6 +1060,7 @@ static void memorize_dirty_state(struct lc_cache *cache,
 	u8 i, j;
 	size_t a = NR_CACHES_INSEG * k;
 	void *p = cache->migrate_buffer + (NR_CACHES_INSEG << 12) * k;
+	struct metablock *mb;
 
 	struct dm_io_request io_req_r = {
 		.client = lc_io_client,
@@ -1069,7 +1084,6 @@ static void memorize_dirty_state(struct lc_cache *cache,
 	 * state of the segments
 	 * which won't lose any dirty data that was acknowledged.
 	 */
-	struct metablock *mb;
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
 		*(cache->dirtiness_snapshot + (a + i)) =
@@ -1077,9 +1091,11 @@ static void memorize_dirty_state(struct lc_cache *cache,
 	}
 
 	for (i = 0; i < seg->length; i++) {
+		u8 dirty_bits;
+
 		mb = seg->mb_array + i;
 
-		u8 dirty_bits = *(cache->dirtiness_snapshot + (a + i));
+		dirty_bits = *(cache->dirtiness_snapshot + (a + i));
 
 		if (!dirty_bits)
 			continue;
@@ -1111,11 +1127,11 @@ static void migrate_linked_segments(struct lc_cache *cache)
 	struct segment_header *seg;
 	u8 i;
 	size_t k;
+	size_t migrate_io_count = 0;
 
 	for (i = 0; i < LC_NR_SLOTS; i++)
 		*(cache->migrate_dests + i) = false;
 
-	size_t migrate_io_count = 0;
 	k = 0;
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
 		memorize_dirty_state(cache, seg, k, &migrate_io_count);
@@ -1148,11 +1164,12 @@ migrate_write:
 	}
 
 	for (i = 1; i < LC_NR_SLOTS; i++) {
+		struct lc_device *lc;
 		bool b = *(cache->migrate_dests + i);
 		if (!b)
 			continue;
 
-		struct lc_device *lc = lc_devices[i];
+		lc = lc_devices[i];
 		blkdev_issue_flush(lc->device->bdev, GFP_NOIO, NULL);
 	}
 
@@ -1183,6 +1200,11 @@ static void migrate_proc(struct work_struct *work)
 		container_of(work, struct lc_cache, migrate_work);
 
 	while (true) {
+		bool allow_migrate;
+		size_t nr_mig_candidates, nr_mig;
+		struct segment_header *seg, *tmp;
+		size_t i;
+
 		if (cache->on_terminate)
 			return;
 
@@ -1190,7 +1212,7 @@ static void migrate_proc(struct work_struct *work)
 		 * reserving_id > 0 means
 		 * that migration is immediate.
 		 */
-		bool allow_migrate =
+		allow_migrate =
 			cache->reserving_segment_id || cache->allow_migrate;
 
 		if (!allow_migrate) {
@@ -1198,7 +1220,7 @@ static void migrate_proc(struct work_struct *work)
 			continue;
 		}
 
-		size_t nr_mig_candidates =
+		nr_mig_candidates =
 			cache->last_flushed_segment_id -
 			cache->last_migrated_segment_id;
 
@@ -1230,11 +1252,9 @@ static void migrate_proc(struct work_struct *work)
 		 * We will migrate at most nr_max_batched_migration
 		 * segments at a time.
 		 */
-		size_t nr_mig = min(nr_mig_candidates,
+		nr_mig = min(nr_mig_candidates,
 				    cache->nr_cur_batched_migration);
 
-		struct segment_header *seg;
-		size_t i;
 		for (i = 1; i <= nr_mig; i++) {
 			seg = get_segment_header_by_id(
 					cache,
@@ -1251,7 +1271,6 @@ static void migrate_proc(struct work_struct *work)
 		 */
 		cache->last_migrated_segment_id += nr_mig;
 
-		struct segment_header *tmp;
 		list_for_each_entry_safe(seg, tmp, &cache->migrate_list,
 					 migrate_list) {
 			complete_all(&seg->migrate_done);
@@ -1276,20 +1295,23 @@ struct superblock_device {
 static void commit_super_block(struct lc_cache *cache)
 {
 	struct superblock_device o;
+	void *buf;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
 
 	o.last_migrated_segment_id = cache->last_migrated_segment_id;
 
-	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	memcpy(buf, &o, sizeof(o));
 
-	struct dm_io_request io_req = {
+	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	struct dm_io_region region = {
+	region = (struct dm_io_region) {
 		.bdev = cache->device->bdev,
 		.sector = 0,
 		.count = 1,
@@ -1349,14 +1371,19 @@ static void read_segment_header_device(
 static void update_by_segment_header_device(struct lc_cache *cache,
 					    struct segment_header_device *src)
 {
+	cache_nr i;
 	struct segment_header *seg =
 		get_segment_header_by_id(cache, src->global_id);
 	seg->length = src->length;
 
 	INIT_COMPLETION(seg->migrate_done);
 
-	cache_nr i;
 	for (i = 0 ; i < src->length; i++) {
+		struct lookup_key key;
+		struct ht_head *head;
+		struct metablock *found;
+		cache_nr k;
+
 		struct metablock *mb = seg->mb_array + i;
 
 		struct metablock_device *mbdev = &src->mbarr[i];
@@ -1370,15 +1397,15 @@ static void update_by_segment_header_device(struct lc_cache *cache,
 
 		inc_nr_dirty_caches(mb->device_id);
 
-		struct lookup_key key = {
+		key = (struct lookup_key) {
 			.device_id = mb->device_id,
 			.sector = mb->sector,
 		};
 
-		cache_nr k = ht_hash(cache, &key);
-		struct ht_head *head = arr_at(cache->htable, k);
+		k = ht_hash(cache, &key);
+		head = arr_at(cache->htable, k);
 
-		struct metablock *found = ht_lookup(cache, head, &key);
+		found = ht_lookup(cache, head, &key);
 		if (found)
 			ht_del(cache, found);
 		ht_register(cache, head, &key, mb);
@@ -1399,22 +1426,27 @@ static bool checkup_atomicity(struct segment_header_device *header)
 
 static void recover_cache(struct lc_cache *cache)
 {
+	size_t i, j;
+	size_t nr_segments;
+	struct segment_header_device *header;
+	size_t max_id, oldest_id, last_flushed_id, init_segment_id;
+	size_t oldest_idx;
+	struct segment_header *seg;
+
 	struct superblock_device sup;
 	read_superblock_device(&sup, cache);
 
-	size_t i;
-	size_t nr_segments = cache->nr_segments;
+	nr_segments = cache->nr_segments;
 
-	struct segment_header_device *header =
-		kmalloc(sizeof(*header), GFP_KERNEL);
+	header = kmalloc(sizeof(*header), GFP_KERNEL);
 
 	/*
 	 * Finding the oldest, non-zero id and its index.
 	 */
 
-	size_t max_id = SZ_MAX;
-	size_t oldest_id = max_id;
-	size_t oldest_idx = 0;
+	max_id = SZ_MAX;
+	oldest_id = max_id;
+	oldest_idx = 0;
 	for (i = 0; i < nr_segments; i++) {
 		read_segment_header_device(header, cache, i);
 
@@ -1427,14 +1459,14 @@ static void recover_cache(struct lc_cache *cache)
 		}
 	}
 
-	size_t last_flushed_id = 0;
+	last_flushed_id = 0;
 
 	/*
 	 * This is an invariant.
 	 * We always start from the segment
 	 * that is right after the last_flush_id.
 	 */
-	size_t init_segment_id = last_flushed_id + 1;
+	init_segment_id = last_flushed_id + 1;
 
 	/*
 	 * If no segment was flushed
@@ -1458,7 +1490,6 @@ static void recover_cache(struct lc_cache *cache)
 	 * id: [     k+3    ][  k+4   ][   k    ][     k+1     ][  K+2  ]
 	 *      last_flushed  init_seg  migrated  last_migrated  flushed
 	 */
-	size_t j;
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
 		j = i % nr_segments;
 		read_segment_header_device(header, cache, j);
@@ -1495,8 +1526,7 @@ static void recover_cache(struct lc_cache *cache)
 setup_init_segment:
 	kfree(header);
 
-	struct segment_header *seg =
-		get_segment_header_by_id(cache, init_segment_id);
+	seg = get_segment_header_by_id(cache, init_segment_id);
 	seg->global_id = init_segment_id;
 	atomic_set(&seg->nr_inflight_ios, 0);
 
@@ -1555,18 +1585,22 @@ static void format_segmd_endio(unsigned long error, void *__context)
 
 static void format_cache_device(struct dm_dev *dev)
 {
+	size_t i;
+	struct format_segmd_context context;
 	size_t nr_segments = calc_nr_segments(dev);
 	void *buf;
+	struct dm_io_request io_req_sup;
+	struct dm_io_region region_sup;
 
 	buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
-	struct dm_io_request io_req_sup = {
+	io_req_sup = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	struct dm_io_region region_sup = {
+	region_sup = (struct dm_io_region) {
 		.bdev = dev->bdev,
 		.sector = 0,
 		.count = 1,
@@ -1574,10 +1608,8 @@ static void format_cache_device(struct dm_dev *dev)
 	dm_safe_io_retry(&io_req_sup, &region_sup, 1, false);
 	kfree(buf);
 
-	struct format_segmd_context context;
 	atomic64_set(&context.count, nr_segments);
 
-	size_t i;
 	buf = kzalloc(1 << 12, GFP_KERNEL);
 	for (i = 0; i < nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
@@ -1636,15 +1668,21 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 	u8 i;
 	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
 	for (i = 0; i < 8; i++) {
+		struct lc_device *lc;
+		void *src;
+		sector_t dest;
+		struct dm_io_request io_req;
+		struct dm_io_region region;
+
 		bool bit_on = dirty_bits & (1 << i);
 		if (!bit_on)
 			continue;
 
-		void *src = cache->current_wb->data +
+		src = cache->current_wb->data +
 			    ((offset + i) << SECTOR_SHIFT);
 		memcpy(buf, src, 1 << SECTOR_SHIFT);
 
-		struct dm_io_request io_req = {
+		io_req = (struct dm_io_request) {
 			.client = lc_io_client,
 			.bi_rw = WRITE_FUA,
 			.notify.fn = NULL,
@@ -1652,9 +1690,9 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 			.mem.ptr.addr = buf,
 		};
 
-		struct lc_device *lc = lc_devices[mb->device_id];
-		sector_t dest = mb->sector + 1 * i;
-		struct dm_io_region region = {
+		lc = lc_devices[mb->device_id];
+		dest = mb->sector + 1 * i;
+		region = (struct dm_io_region) {
 			.bdev = lc->device->bdev,
 			.sector = dest,
 			.count = 1,
@@ -1687,8 +1725,9 @@ static void queue_current_buffer(struct lc_cache *cache)
 
 static void flush_current_buffer_sync(struct lc_cache *cache)
 {
+	struct segment_header *old_seg;
 	mutex_lock(&cache->io_lock);
-	struct segment_header *old_seg = cache->current_seg;
+	old_seg = cache->current_seg;
 
 	queue_current_buffer(cache);
 	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
@@ -1740,6 +1779,29 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 #endif
 		 )
 {
+	struct lc_cache *cache;
+	struct segment_header *seg;
+	struct metablock *mb;
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+	struct per_bio_data *map_context;
+#endif
+	sector_t bio_count;
+	sector_t bio_offset;
+	bool bio_fullsize, found, on_buffer;
+	int rw;
+	struct lookup_key key;
+	cache_nr k;
+	struct ht_head *head;
+
+	cache_nr update_mb_idx, idx_inseg;
+	bool refresh_segment;
+	struct metablock *new_mb;
+	sector_t s;
+	bool b;
+	unsigned long flags;
+	size_t start;
+	void *data;
+
 	struct lc_device *lc = ti->private;
 	struct dm_dev *orig = lc->device;
 
@@ -1764,7 +1826,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		return DM_MAPIO_REMAPPED;
 	}
 
-	struct lc_cache *cache = lc->cache;
+	cache = lc->cache;
 
 	if (bio->bi_rw & REQ_FLUSH) {
 		BUG_ON(bio->bi_size);
@@ -1773,27 +1835,23 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 	}
 
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
-	struct per_bio_data *map_context =
-		dm_per_bio_data(bio, ti->per_bio_data_size);
+	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
 #endif
 	map_context->ptr = NULL;
 
-	sector_t bio_count = bio->bi_size >> SECTOR_SHIFT;
-	bool bio_fullsize = (bio_count == (1 << 3));
-	sector_t bio_offset = bio->bi_sector % (1 << 3);
+	bio_count = bio->bi_size >> SECTOR_SHIFT;
+	bio_fullsize = (bio_count == (1 << 3));
+	bio_offset = bio->bi_sector % (1 << 3);
 
-	int rw = bio_data_dir(bio);
+	rw = bio_data_dir(bio);
 
-	struct lookup_key key = {
+	key = (struct lookup_key) {
 		.sector = calc_cache_alignment(cache, bio->bi_sector),
 		.device_id = lc->id,
 	};
 
-	cache_nr k = ht_hash(cache, &key);
-	struct ht_head *head = arr_at(cache->htable, k);
-
-	struct segment_header *seg;
-	struct metablock *mb;
+	k = ht_hash(cache, &key);
+	head = arr_at(cache->htable, k);
 
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
@@ -1803,14 +1861,16 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		atomic_inc(&seg->nr_inflight_ios);
 	}
 
-	bool found = (mb != NULL);
-	bool on_buffer = false;
+	found = (mb != NULL);
+	on_buffer = false;
 	if (found)
 		on_buffer = is_on_buffer(cache, mb->idx);
 
 	inc_stat(cache, rw, found, on_buffer, bio_fullsize);
 
 	if (!rw) {
+		u8 dirty_bits;
+
 		mutex_unlock(&cache->io_lock);
 
 		if (!found) {
@@ -1818,7 +1878,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 			return DM_MAPIO_REMAPPED;
 		}
 
-		u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+		dirty_bits = atomic_read_mb_dirtiness(seg, mb);
 
 		if (unlikely(on_buffer)) {
 
@@ -1872,7 +1932,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		return DM_MAPIO_REMAPPED;
 	}
 
-	cache_nr update_mb_idx;
 	if (found) {
 
 		if (unlikely(on_buffer)) {
@@ -1918,7 +1977,7 @@ write_not_found:
 	 * We must flush the current segment and
 	 * get the new one.
 	 */
-	bool refresh_segment = !((cache->cursor + 1) % NR_CACHES_INSEG);
+	refresh_segment = !((cache->cursor + 1) % NR_CACHES_INSEG);
 
 	if (refresh_segment)
 		queue_current_buffer(cache);
@@ -1933,8 +1992,7 @@ write_not_found:
 	seg = cache->current_seg;
 	atomic_inc(&seg->nr_inflight_ios);
 
-	struct metablock *new_mb =
-		seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
+	new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
 	mutex_unlock(&cache->io_lock);
@@ -1943,11 +2001,10 @@ write_not_found:
 
 write_on_buffer:
 	;
-	cache_nr idx_inseg = update_mb_idx % NR_CACHES_INSEG;
-	sector_t s = (idx_inseg + 1) << 3;
+	idx_inseg = update_mb_idx % NR_CACHES_INSEG;
+	s = (idx_inseg + 1) << 3;
 
-	unsigned long flags;
-	bool b = false;
+	b = false;
 	lockseg(seg, flags);
 	if (!mb->dirty_bits) {
 		seg->length++;
@@ -1958,9 +2015,9 @@ write_on_buffer:
 	if (likely(bio_fullsize)) {
 		mb->dirty_bits = 255;
 	} else {
-		s += bio_offset;
 		u8 i;
 		u8 acc_bits = 0;
+		s += bio_offset;
 		for (i = bio_offset; i < (bio_offset+bio_count); i++)
 			acc_bits += (1 << i);
 
@@ -1974,8 +2031,8 @@ write_on_buffer:
 	if (b)
 		inc_nr_dirty_caches(mb->device_id);
 
-	size_t start = s << SECTOR_SHIFT;
-	void *data = bio_data(bio);
+	start = s << SECTOR_SHIFT;
+	data = bio_data(bio);
 
 	memcpy(cache->current_wb->data + start, data, bio->bi_size);
 	atomic_dec(&seg->nr_inflight_ios);
@@ -1995,6 +2052,7 @@ static int lc_end_io(struct dm_target *ti, struct bio *bio, int error
 #endif
 		    )
 {
+	struct segment_header *seg;
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context =
 		dm_per_bio_data(bio, ti->per_bio_data_size);
@@ -2002,12 +2060,11 @@ static int lc_end_io(struct dm_target *ti, struct bio *bio, int error
 	if (!map_context->ptr)
 		return 0;
 
-	struct segment_header *seg = map_context->ptr;
+	seg = map_context->ptr;
 	atomic_dec(&seg->nr_inflight_ios);
 
 	return 0;
 }
-
 
 static ssize_t var_show(unsigned long var, char *page)
 {
@@ -2045,11 +2102,12 @@ static ssize_t device_attr_show(struct kobject *kobj, struct attribute *attr,
 static ssize_t device_attr_store(struct kobject *kobj, struct attribute *attr,
 				 const char *page, size_t len)
 {
+	struct lc_device *device;
 	struct device_sysfs_entry *entry = to_device(attr);
 	if (!entry->store)
 		return -EIO;
 
-	struct lc_device *device = container_of(kobj, struct lc_device, kobj);
+	device = container_of(kobj, struct lc_device, kobj);
 	return entry->store(device, page, len);
 }
 
@@ -2143,6 +2201,10 @@ static struct kobj_type device_ktype = {
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
+	struct lc_device *lc;
+	unsigned device_id, cache_id;
+	struct dm_dev *dev;
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	int r;
 	r = dm_set_target_max_io_len(ti, (1 << 3));
@@ -2153,7 +2215,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->split_io = (1 << 3);
 #endif
 
-	struct lc_device *lc = kzalloc(sizeof(*lc), GFP_KERNEL);
+	lc = kzalloc(sizeof(*lc), GFP_KERNEL);
 
 	/*
 	 * EMC's textbook on storage system says
@@ -2165,20 +2227,17 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	atomic64_inc(&lc->nr_dirty_caches);
 	atomic64_dec(&lc->nr_dirty_caches);
 
-	unsigned device_id;
 	if (sscanf(argv[0], "%u", &device_id) != 1)
 		return -EINVAL;
 
 	lc->id = device_id;
 
-	struct dm_dev *dev;
 	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev))
 		return -EINVAL;
 
 	lc->device = dev;
 
 	lc->cache = NULL;
-	unsigned cache_id;
 	if (sscanf(argv[2], "%u", &cache_id) != 1)
 		return -EINVAL;
 
@@ -2244,9 +2303,10 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 	char *cmd = argv[0];
 
 	if (!strcasecmp(cmd, "add_sysfs")) {
+		struct kobject *dev_kobj;
 		r = kobject_init_and_add(&lc->kobj, &device_ktype,
 					 devices_kobj, "%u", lc->id);
-		struct kobject *dev_kobj = get_bdev_kobject(lc->device->bdev);
+		dev_kobj = get_bdev_kobject(lc->device->bdev);
 		r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
 
 		kobject_uevent(&lc->kobj, KOBJ_ADD);
@@ -2385,11 +2445,12 @@ static ssize_t cache_attr_show(struct kobject *kobj,
 static ssize_t cache_attr_store(struct kobject *kobj, struct attribute *attr,
 		const char *page, size_t len)
 {
+	struct lc_cache *cache;
 	struct cache_sysfs_entry *entry = to_cache(attr);
 	if (!entry->store)
 		return -EIO;
 
-	struct lc_cache *cache = container_of(kobj, struct lc_cache, kobj);
+	cache = container_of(kobj, struct lc_cache, kobj);
 	return entry->store(cache, page, len);
 }
 
@@ -2693,11 +2754,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 * <path>
 	 */
 	if (!strcasecmp(cmd, "resume_cache")) {
+		struct dm_dev *dev;
+		struct writebuffer *wb;
+		int i;
+		int r;
+		struct kobject *dev_kobj;
+
 		struct lc_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 		if (!cache)
 			return -ENOMEM;
 
-		struct dm_dev *dev;
 		if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
 				  &dev))
 			return -EINVAL;
@@ -2711,8 +2777,6 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		cache->wb_pool = kmalloc(
 			sizeof(struct writebuffer) * NR_WB_POOL, GFP_KERNEL);
-		struct writebuffer *wb;
-		int i;
 		for (i = 0; i < NR_WB_POOL; i++) {
 			wb = cache->wb_pool + i;
 			init_completion(&wb->done);
@@ -2787,16 +2851,13 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		 *                             /device -> /sys/block/$name
 		 */
 
-		int r;
-
 		cache->update_interval = 1;
 		cache->commit_super_block_interval = 0;
 		cache->flush_current_buffer_interval = 0;
 		r = kobject_init_and_add(&cache->kobj, &cache_ktype,
 					 caches_kobj, "%u", cache->id);
 
-		struct kobject *dev_kobj =
-			get_bdev_kobject(cache->device->bdev);
+		dev_kobj = get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
 		kobject_uevent(&cache->kobj, KOBJ_ADD);
 
@@ -2804,6 +2865,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	if (!strcasecmp(cmd, "free_cache")) {
+		size_t i;
+		struct writebuffer *wb;
 		cache_id id = cache_id_ptr;
 		struct lc_cache *cache = lc_caches[id];
 
@@ -2819,8 +2882,6 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		vfree(cache->migrate_buffer);
 		kfree(cache->dirtiness_snapshot);
 
-		size_t i;
-		struct writebuffer *wb;
 		for (i = 0; i < NR_WB_POOL; i++) {
 			wb = cache->wb_pool + i;
 			kfree(wb->data);
@@ -2867,6 +2928,9 @@ lc_mgr_status(
 #endif
 		char *result, unsigned int maxlen)
 {
+	int i;
+	struct lc_cache *cache;
+
 	unsigned int sz = 0;
 
 	switch (type) {
@@ -2890,7 +2954,7 @@ lc_mgr_status(
 			break;
 		}
 
-		struct lc_cache *cache = lc_caches[cache_id_ptr];
+		cache = lc_caches[cache_id_ptr];
 		if (!cache)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
 			return -EINVAL;
@@ -2911,12 +2975,12 @@ lc_mgr_status(
 		DMEMIT("cursor: %u\n", cache->cursor);
 		DMEMIT("\n");
 		DMEMIT("write? hit? on_buffer? fullsize?\n");
-		int i;
 		for (i = 0; i < STATLEN; i++) {
+			atomic64_t *v;
 			if (i == (STATLEN-1))
 				break;
 
-			atomic64_t *v = &cache->stat[i];
+			v = &cache->stat[i];
 			DMEMIT("%d %d %d %d %lu",
 				i & (1 << STAT_WRITE)      ? 1 : 0,
 				i & (1 << STAT_HIT)        ? 1 : 0,
@@ -2949,6 +3013,10 @@ static struct target_type lc_mgr_target = {
 
 static int __init lc_module_init(void)
 {
+	size_t i;
+	struct module *mod;
+	struct kobject *lc_kobj;
+
 	int r = -ENOMEM;
 
 	r = dm_register_target(&lc_target);
@@ -2968,8 +3036,8 @@ static int __init lc_module_init(void)
 	 *                  /caches
 	 */
 
-	struct module *mod = THIS_MODULE;
-	struct kobject *lc_kobj = &(mod->mkobj.kobj);
+	mod = THIS_MODULE;
+	lc_kobj = &(mod->mkobj.kobj);
 
 	devices_kobj = kobject_create_and_add("devices", lc_kobj);
 	if (!devices_kobj)
@@ -2994,7 +3062,6 @@ static int __init lc_module_init(void)
 
 	cache_id_ptr = 0;
 
-	size_t i;
 	for (i = 0; i < LC_NR_SLOTS; i++)
 		lc_devices[i] = NULL;
 

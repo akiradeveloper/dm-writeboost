@@ -2992,7 +2992,7 @@ static int __init lc_module_init(void)
 	size_t i;
 	struct module *mod;
 	struct kobject *lc_kobj;
-	int r = -ENOMEM;
+	int r;
 
 	r = dm_register_target(&lc_target);
 	if (r < 0) {
@@ -3013,6 +3013,8 @@ static int __init lc_module_init(void)
 
 	mod = THIS_MODULE;
 	lc_kobj = &(mod->mkobj.kobj);
+
+	r = -ENOMEM;
 
 	devices_kobj = kobject_create_and_add("devices", lc_kobj);
 	if (!devices_kobj)
@@ -3056,7 +3058,7 @@ bad_kobj_devices:
 bad_register_mgr_target:
 	dm_unregister_target(&lc_target);
 
-	return ERR_PTR(r);
+	return r;
 }
 
 static void __exit lc_module_exit(void)

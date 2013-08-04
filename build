@@ -1,14 +1,8 @@
 #!/bin/sh
 
 cd Driver
-COMPILE_LOG=../compile.log
-ERROR_LOG=../error.log
 make clean
-make 2> $COMPILE_LOG 
-echo -n > $ERROR_LOG
-grep error $COMPILE_LOG >> $ERROR_LOG
-python filter-log.py $COMPILE_LOG >> $ERROR_LOG
-echo "" >> $ERROR_LOG
+make 2> ../compile.log
 cd -
 
 echo change to root. su -

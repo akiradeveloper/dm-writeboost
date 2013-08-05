@@ -1367,7 +1367,7 @@ static void read_segment_header_device(
 		.sector = calc_segment_header_start(segment_idx),
 		.count = (1 << 3),
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true);
+	dm_safe_io_retry(&io_req, &region, 1, false);
 	memcpy(dest, buf, sizeof(*dest));
 	kfree(buf);
 }

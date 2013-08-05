@@ -174,9 +174,10 @@ static int dm_safe_io_internal(
 
 	return err;
 }
+unsigned long err_bits_ignored;
 #define dm_safe_io(io_req, region, num_regions, thread) \
 	dm_safe_io_internal((io_req), (region), (num_regions), \
-			    (thread), __LINE__)
+			    &err_bits_ignored, (thread), __LINE__)
 
 static void dm_safe_io_retry_internal(
 		struct dm_io_request *io_req,
@@ -1575,15 +1576,18 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 
 struct format_segmd_context {
 	atomic64_t count;
+	int err;
 };
 
 static void format_segmd_endio(unsigned long error, void *__context)
 {
 	struct format_segmd_context *context = __context;
+	if (error)
+		context->err = 1;
 	atomic64_dec(&context->count);
 }
 
-static void format_cache_device(struct dm_dev *dev)
+static int __must_check format_cache_device(struct dm_dev *dev)
 {
 	size_t i, nr_segments = calc_nr_segments(dev);
 	struct format_segmd_context context;
@@ -1591,7 +1595,12 @@ static void format_cache_device(struct dm_dev *dev)
 	struct dm_io_region region_sup;
 	void *buf;
 
+	int r = 0;
+
 	buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
 	io_req_sup = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = WRITE_FUA,
@@ -1604,12 +1613,19 @@ static void format_cache_device(struct dm_dev *dev)
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req_sup, &region_sup, 1, false);
+	r = dm_safe_io(&io_req_sup, &region_sup, 1, false);
 	kfree(buf);
 
+	if (r)
+		return r;
+
 	atomic64_set(&context.count, nr_segments);
+	context.err = 0;
 
 	buf = kzalloc(1 << 12, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
 	for (i = 0; i < nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
 			.client = lc_io_client,
@@ -1624,14 +1640,24 @@ static void format_cache_device(struct dm_dev *dev)
 			.sector = calc_segment_header_start(i),
 			.count = (1 << 3),
 		};
-		dm_safe_io_retry(&io_req_seg, &region_seg, 1, false);
+		r = dm_safe_io(&io_req_seg, &region_seg, 1, false);
+		if (r)
+			break;
 	}
 	kfree(buf);
+
+	if (r)
+		return r;
 
 	while (atomic64_read(&context.count))
 		schedule_timeout_interruptible(msecs_to_jiffies(100));
 
-	blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
+	if (context.err) {
+		DMERR("formatting some segment header failed");
+		return -EIO;
+	}
+
+	return blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
 }
 
 static bool is_on_buffer(struct lc_cache *cache, cache_nr mb_idx)
@@ -2737,15 +2763,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 * @path path to the cache device
 	 */
 	if (!strcasecmp(cmd, "format_cache_device")) {
+		int r;
 		struct dm_dev *dev;
 		if (dm_get_device(ti, argv[1],
 				  dm_table_get_mode(ti->table), &dev))
 			return -EINVAL;
 
-		format_cache_device(dev);
+		r = format_cache_device(dev);
 
 		dm_put_device(ti, dev);
-		return 0;
+		return r;
 	}
 
 	/*

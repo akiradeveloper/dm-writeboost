@@ -3063,11 +3063,11 @@ bad_register_mgr_target:
 
 static void __exit lc_module_exit(void)
 {
-	destroy_workqueue(safe_io_wq);
 	dm_io_client_destroy(lc_io_client);
+	destroy_workqueue(safe_io_wq);
 
-	kobject_put(devices_kobj);
 	kobject_put(caches_kobj);
+	kobject_put(devices_kobj);
 
 	dm_unregister_target(&lc_mgr_target);
 	dm_unregister_target(&lc_target);

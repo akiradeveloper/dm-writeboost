@@ -544,7 +544,7 @@ static void mb_array_empty_init(struct lc_cache *cache)
 	}
 }
 
-static void ht_empty_init(struct lc_cache *cache)
+static int __must_check ht_empty_init(struct lc_cache *cache)
 {
 	cache_nr idx;
 	size_t i;
@@ -554,6 +554,10 @@ static void ht_empty_init(struct lc_cache *cache)
 	cache->htsize = cache->nr_caches;
 	nr_heads = cache->htsize + 1;
 	arr = make_arr(sizeof(struct ht_head), nr_heads);
+	if (!arr) {
+		DMERR("failed to alloc htable heads");
+		return -ENOMEM;
+	}
 
 	cache->htable = arr;
 
@@ -572,6 +576,8 @@ static void ht_empty_init(struct lc_cache *cache)
 		struct metablock *mb = mb_at(cache, idx);
 		hlist_add_head(&mb->ht_list, &cache->null_head->ht_list);
 	}
+
+	return 0;
 }
 
 static cache_nr ht_hash(struct lc_cache *cache, struct lookup_key *key)
@@ -634,13 +640,17 @@ static void discard_caches_inseg(struct lc_cache *cache,
 	}
 }
 
-static void init_segment_header_array(struct lc_cache *cache)
+static int __must_check init_segment_header_array(struct lc_cache *cache)
 {
 	size_t segment_idx;
 
 	size_t nr_segments = cache->nr_segments;
 	cache->segment_header_array =
 		make_arr(sizeof(struct segment_header), nr_segments);
+	if (!cache->segment_header_array) {
+		DMERR("failed to alloc segment header array");
+		return -ENOMEM;
+	}
 
 	for (segment_idx = 0; segment_idx < nr_segments; segment_idx++) {
 		struct segment_header *seg =
@@ -664,6 +674,8 @@ static void init_segment_header_array(struct lc_cache *cache)
 		init_completion(&seg->migrate_done);
 		complete_all(&seg->migrate_done);
 	}
+
+	return 0;
 }
 
 static struct segment_header *get_segment_header_by_id(struct lc_cache *cache,
@@ -2683,6 +2695,39 @@ static struct kobj_type cache_ktype = {
 	.release = cache_release,
 };
 
+static int __must_check init_wb_pool(struct lc_cache *cache)
+{
+	size_t i, j;
+	struct writebuffer *wb;
+
+	cache->wb_pool = kmalloc(
+		sizeof(struct writebuffer) * NR_WB_POOL, GFP_KERNEL);
+	if (!cache->wb_pool) {
+		DMERR("failed to alloc wb_pool");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < NR_WB_POOL; i++) {
+		wb = cache->wb_pool + i;
+		init_completion(&wb->done);
+		complete_all(&wb->done);
+
+		wb->data = kmalloc(
+			1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
+			GFP_KERNEL);
+		if (!wb->data) {
+			for (j = 0; j < i; j++) {
+				DMERR("failed to alloc wb_pool data");
+				kfree(wb->data);
+			}
+			kfree(cache->wb_pool);
+			return -ENOMEM;
+		}
+	}
+
+	return 0;
+}
+
 static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	char *cmd = argv[0];
@@ -2732,10 +2777,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	if (!strcasecmp(cmd, "resume_cache")) {
 		int r;
-		size_t i;
 		struct kobject *dev_kobj;
 		struct dm_dev *dev;
-		struct writebuffer *wb;
 
 		struct lc_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 		if (!cache)
@@ -2752,17 +2795,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		mutex_init(&cache->io_lock);
 
-		cache->wb_pool = kmalloc(
-			sizeof(struct writebuffer) * NR_WB_POOL, GFP_KERNEL);
-		for (i = 0; i < NR_WB_POOL; i++) {
-			wb = cache->wb_pool + i;
-			init_completion(&wb->done);
-			complete_all(&wb->done);
-
-			wb->data = kmalloc(
-				1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
-				GFP_KERNEL);
-		}
+		r = init_wb_pool(cache);
 
 		/*
 		 * Select arbitrary one
@@ -2770,9 +2803,9 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		 */
 		cache->current_wb = cache->wb_pool + 0;
 
-		init_segment_header_array(cache);
+		r = init_segment_header_array(cache);
 		mb_array_empty_init(cache);
-		ht_empty_init(cache);
+		r = ht_empty_init(cache);
 
 		cache->on_terminate = false;
 		cache->allow_migrate = false;

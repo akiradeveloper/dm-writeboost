@@ -2281,8 +2281,6 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc->migrate_threshold = 70;
 
 	atomic64_set(&lc->nr_dirty_caches, 0);
-	atomic64_inc(&lc->nr_dirty_caches);
-	atomic64_dec(&lc->nr_dirty_caches);
 
 	if (sscanf(argv[0], "%u", &device_id) != 1) {
 		r = -EINVAL;

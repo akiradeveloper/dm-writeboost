@@ -204,11 +204,9 @@ static void dm_safe_io_retry_internal(
 		struct dm_io_region *region, unsigned num_regions,
 		bool thread, int lineno)
 {
-	int err;
+	int err, count = 0;
 	unsigned long err_bits;
 	dev_t dev;
-
-	int count = 0;
 
 retry_io:
 	err_bits = 0;
@@ -663,9 +661,7 @@ static void discard_caches_inseg(struct lc_cache *cache,
 
 static int __must_check init_segment_header_array(struct lc_cache *cache)
 {
-	size_t segment_idx;
-
-	size_t nr_segments = cache->nr_segments;
+	size_t segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
 		make_arr(sizeof(struct segment_header), nr_segments);
 	if (!cache->segment_header_array) {
@@ -739,7 +735,6 @@ static void prepare_segment_header_device(
 		struct lc_cache *cache, struct segment_header *src)
 {
 	cache_nr i;
-
 	u8 left, right;
 
 	dest->global_id = src->global_id;

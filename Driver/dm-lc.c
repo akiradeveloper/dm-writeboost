@@ -80,18 +80,38 @@ static size_t nr_parts(struct arr *arr)
 
 static struct arr *make_arr(size_t elemsize, size_t nr_elems)
 {
-	size_t i;
+	size_t i, j;
+	struct part *part;
 
 	struct arr *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
+	if (!arr)
+		return NULL;
+
 	arr->elemsize = elemsize;
 	arr->nr_elems = nr_elems;
 	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
+	if (!arr->parts)
+		goto bad_alloc_parts;
 
 	for (i = 0; i < nr_parts(arr); i++) {
-		struct part *part = arr->parts + i;
+		part = arr->parts + i;
 		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
+		if (!part->memory) {
+			DMERR("failed to alloc memory in part");
+			for (j = 0; j < i; j++) {
+				part = arr->parts + j;
+				kfree(part->memory);
+			}
+			goto bad_alloc_parts_memory;
+		}
 	}
 	return arr;
+
+bad_alloc_parts_memory:
+	kfree(arr->parts);
+bad_alloc_parts:
+	kfree(arr);
+	return NULL;
 }
 
 static void kill_arr(struct arr *arr)
@@ -2800,8 +2820,9 @@ static int __must_check init_wb_pool(struct lc_cache *cache)
 			1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
 			GFP_KERNEL);
 		if (!wb->data) {
+			DMERR("failed to alloc wb_pool data");
 			for (j = 0; j < i; j++) {
-				DMERR("failed to alloc wb_pool data");
+				wb = cache->wb_pool + j;
 				kfree(wb->data);
 			}
 			kfree(cache->wb_pool);

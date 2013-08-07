@@ -2256,12 +2256,12 @@ static struct kobj_type device_ktype = {
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
+	int r = 0;
 	struct lc_device *lc;
 	unsigned device_id, cache_id;
 	struct dm_dev *dev;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
-	int r;
 	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if (r)
 		return r;
@@ -2271,6 +2271,8 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 #endif
 
 	lc = kzalloc(sizeof(*lc), GFP_KERNEL);
+	if (!lc)
+		return -ENOMEM;
 
 	/*
 	 * EMC's textbook on storage system says
@@ -2282,20 +2284,23 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	atomic64_inc(&lc->nr_dirty_caches);
 	atomic64_dec(&lc->nr_dirty_caches);
 
-	if (sscanf(argv[0], "%u", &device_id) != 1)
-		return -EINVAL;
-
+	if (sscanf(argv[0], "%u", &device_id) != 1) {
+		r = -EINVAL;
+		goto bad_device_id;
+	}
 	lc->id = device_id;
 
-	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev))
-		return -EINVAL;
-
+	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)) {
+		r = -EINVAL;
+		goto bad_get_device;
+	}
 	lc->device = dev;
 
 	lc->cache = NULL;
-	if (sscanf(argv[2], "%u", &cache_id) != 1)
-		return -EINVAL;
-
+	if (sscanf(argv[2], "%u", &cache_id) != 1) {
+		r = -EINVAL;
+		goto bad_cache_id;
+	}
 	if (cache_id)
 		lc->cache = lc_caches[cache_id];
 
@@ -2332,13 +2337,19 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc->md = dm_table_get_md(ti->table);
 
 	return 0;
+
+bad_cache_id:
+	dm_put_device(ti, lc->device);
+bad_get_device:
+bad_device_id:
+	kfree(lc);
+	return r;
 }
 
 static void lc_dtr(struct dm_target *ti)
 {
 	struct lc_device *lc = ti->private;
 	dm_put_device(ti, lc->device);
-
 	ti->private = NULL;
 	kfree(lc);
 }

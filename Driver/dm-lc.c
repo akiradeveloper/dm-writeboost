@@ -1325,25 +1325,36 @@ static void commit_super_block(struct lc_cache *cache)
 	kfree(buf);
 }
 
-static void read_superblock_device(struct superblock_device *dest,
-				   struct lc_cache *cache)
+static int __must_check read_superblock_device(struct superblock_device *dest,
+					       struct lc_cache *cache)
 {
+	int r = 0;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
-	struct dm_io_request io_req = {
+	if (!buf)
+		return -ENOMEM;
+
+	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	struct dm_io_region region = {
+	region = (struct dm_io_region) {
 		.bdev = cache->device->bdev,
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true);
+	r = dm_safe_io(&io_req, &region, 1, true);
+	if (r)
+		goto bad_io;
 	memcpy(dest, buf, sizeof(*dest));
+bad_io:
 	kfree(buf);
+	return r;
 }
 
 static sector_t calc_segment_header_start(size_t segment_idx)
@@ -1351,26 +1362,36 @@ static sector_t calc_segment_header_start(size_t segment_idx)
 	return (1 << LC_SEGMENTSIZE_ORDER) * (segment_idx + 1);
 }
 
-static void read_segment_header_device(
+static int __must_check read_segment_header_device(
 		struct segment_header_device *dest,
 		struct lc_cache *cache, size_t segment_idx)
 {
+	int r = 0;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
 	void *buf = kmalloc(1 << 12, GFP_KERNEL);
-	struct dm_io_request io_req = {
+	if (!buf)
+		return -ENOMEM;
+
+	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	struct dm_io_region region = {
+	region = (struct dm_io_region) {
 		.bdev = cache->device->bdev,
 		.sector = calc_segment_header_start(segment_idx),
 		.count = (1 << 3),
 	};
-	dm_safe_io_retry(&io_req, &region, 1, false);
+	r = dm_safe_io(&io_req, &region, 1, false);
+	if (r)
+		goto bad_io;
 	memcpy(dest, buf, sizeof(*dest));
+bad_io:
 	kfree(buf);
+	return r;
 }
 
 static void update_by_segment_header_device(struct lc_cache *cache,
@@ -1426,20 +1447,25 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	return true;
 }
 
-static void recover_cache(struct lc_cache *cache)
+static int __must_check recover_cache(struct lc_cache *cache)
 {
+	int r = 0;
 	struct segment_header_device *header;
 	struct segment_header *seg;
 	size_t i, j,
 	       max_id, oldest_id, last_flushed_id, init_segment_id,
-	       nr_segments, oldest_idx;
+	       oldest_idx, nr_segments = cache->nr_segments;
 
-	struct superblock_device sup;
-	read_superblock_device(&sup, cache);
-
-	nr_segments = cache->nr_segments;
+	struct superblock_device uninitialized_var(sup);
+	r = read_superblock_device(&sup, cache);
+	if (r) {
+		DMERR("failed to read superblock");
+		return r;
+	}
 
 	header = kmalloc(sizeof(*header), GFP_KERNEL);
+	if (!header)
+		return -ENOMEM;
 
 	/*
 	 * Finding the oldest, non-zero id and its index.
@@ -1449,7 +1475,11 @@ static void recover_cache(struct lc_cache *cache)
 	oldest_id = max_id;
 	oldest_idx = 0;
 	for (i = 0; i < nr_segments; i++) {
-		read_segment_header_device(header, cache, i);
+		r = read_segment_header_device(header, cache, i);
+		if (r) {
+			kfree(header);
+			return r;
+		}
 
 		if (header->global_id < 1)
 			continue;
@@ -1493,7 +1523,11 @@ static void recover_cache(struct lc_cache *cache)
 	 */
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
 		j = i % nr_segments;
-		read_segment_header_device(header, cache, j);
+		r = read_segment_header_device(header, cache, j);
+		if (r) {
+			kfree(header);
+			return r;
+		}
 
 		/*
 		 * Valid global_id > 0.
@@ -1552,6 +1586,8 @@ setup_init_segment:
 	seg->length = 1;
 
 	cache->current_seg = seg;
+
+	return 0;
 }
 
 static sector_t dm_devsize(struct dm_dev *dev)
@@ -1806,7 +1842,7 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 {
 	unsigned long flags;
 	struct lc_cache *cache;
-	struct segment_header *seg;
+	struct segment_header *uninitialized_var(seg);
 	struct metablock *mb, *new_mb;
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context;
@@ -2767,6 +2803,17 @@ static int __must_check init_wb_pool(struct lc_cache *cache)
 	return 0;
 }
 
+static void free_wb_pool(struct lc_cache *cache)
+{
+	struct writebuffer *wb;
+	size_t i;
+	for (i = 0; i < NR_WB_POOL; i++) {
+		wb = cache->wb_pool + i;
+		kfree(wb->data);
+	}
+	kfree(cache->wb_pool);
+}
+
 static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	char *cmd = argv[0];
@@ -2816,7 +2863,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 * <path>
 	 */
 	if (!strcasecmp(cmd, "resume_cache")) {
-		int r;
+		int r = 0;
 		struct kobject *dev_kobj;
 		struct dm_dev *dev;
 
@@ -2825,18 +2872,43 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			return -ENOMEM;
 
 		if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
-				  &dev))
-			return -EINVAL;
+				  &dev)) {
+			r = -EINVAL;
+			goto bad_get_device;
+		}
 
 		cache->id = cache_id_ptr;
 		cache->device = dev;
 		cache->nr_segments = calc_nr_segments(cache->device);
 		cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
-
+		cache->on_terminate = false;
+		cache->allow_migrate = false;
+		cache->force_migrate = false;
+		cache->reserving_segment_id = 0;
 		mutex_init(&cache->io_lock);
 
-		r = init_wb_pool(cache);
+		/*
+		 * /sys/module/dm_lc/caches/$id/$attribute
+		 *                             /device -> /sys/block/$name
+		 */
+		cache->update_interval = 1;
+		cache->commit_super_block_interval = 0;
+		cache->flush_current_buffer_interval = 0;
+		r = kobject_init_and_add(&cache->kobj, &cache_ktype,
+					 caches_kobj, "%u", cache->id);
+		if (r)
+			goto bad_kobj_add;
 
+		dev_kobj = get_bdev_kobject(cache->device->bdev);
+		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
+		if (r)
+			goto bad_device_lns;
+
+		kobject_uevent(&cache->kobj, KOBJ_ADD);
+
+		r = init_wb_pool(cache);
+		if (r)
+			goto bad_init_wb_pool;
 		/*
 		 * Select arbitrary one
 		 * as the initial writebuffer.
@@ -2844,42 +2916,41 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->current_wb = cache->wb_pool + 0;
 
 		r = init_segment_header_array(cache);
+		if (r)
+			goto bad_alloc_segment_header_array;
 		mb_array_empty_init(cache);
+
 		r = ht_empty_init(cache);
+		if (r)
+			goto bad_alloc_ht;
 
-		cache->on_terminate = false;
-		cache->allow_migrate = false;
-		cache->force_migrate = false;
-		cache->reserving_segment_id = 0;
+		cache->migrate_buffer = vmalloc(
+				NR_CACHES_INSEG << 12);
+		if (!cache->migrate_buffer)
+			goto bad_alloc_migrate_buffer;
 
-		cache->flush_wq = create_singlethread_workqueue("flushwq");
-		spin_lock_init(&cache->flush_queue_lock);
-		INIT_WORK(&cache->flush_work, flush_proc);
-		INIT_LIST_HEAD(&cache->flush_queue);
-		init_waitqueue_head(&cache->flush_wait_queue);
-		queue_work(cache->flush_wq, &cache->flush_work);
+		cache->dirtiness_snapshot = kmalloc(
+				NR_CACHES_INSEG,
+				GFP_KERNEL);
+		if (!cache->dirtiness_snapshot)
+			goto bad_alloc_dirtiness_snapshot;
 
 		cache->migrate_wq = create_singlethread_workqueue("migratewq");
-		INIT_WORK(&cache->migrate_work, migrate_proc);
-		queue_work(cache->migrate_wq, &cache->migrate_work);
+		if (!cache->migrate_wq)
+			goto bad_migratewq;
 
+		INIT_WORK(&cache->migrate_work, migrate_proc);
 		init_waitqueue_head(&cache->migrate_wait_queue);
+		INIT_LIST_HEAD(&cache->migrate_list);
 		atomic_set(&cache->migrate_fail_count, 0);
 		atomic_set(&cache->migrate_io_count, 0);
 		cache->nr_max_batched_migration = 1;
 		cache->nr_cur_batched_migration = 1;
-
-		cache->migrate_buffer = vmalloc(
-				NR_CACHES_INSEG << 12);
-		cache->dirtiness_snapshot = kmalloc(
-				NR_CACHES_INSEG,
-				GFP_KERNEL);
-		INIT_LIST_HEAD(&cache->migrate_list);
+		queue_work(cache->migrate_wq, &cache->migrate_work);
 
 		setup_timer(&cache->barrier_deadline_timer,
 			    barrier_deadline_proc, (unsigned long) cache);
 		bio_list_init(&cache->barrier_ios);
-
 		/*
 		 * Deadline is 3 ms by default.
 		 * 2.5 us to process on bio
@@ -2891,34 +2962,60 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->barrier_deadline_ms = 3;
 		INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
-		recover_cache(cache);
+		cache->flush_wq = create_singlethread_workqueue("flushwq");
+		if (!cache->flush_wq)
+			goto bad_flushwq;
+		spin_lock_init(&cache->flush_queue_lock);
+		INIT_WORK(&cache->flush_work, flush_proc);
+		INIT_LIST_HEAD(&cache->flush_queue);
+		init_waitqueue_head(&cache->flush_wait_queue);
+		queue_work(cache->flush_wq, &cache->flush_work);
+
+		r = recover_cache(cache);
+		if (r)
+			goto bad_recover;
+
 		lc_caches[cache->id] = cache;
 
 		clear_stat(cache);
 
-		/*
-		 * /sys/module/dm_lc/caches/$id/$attribute
-		 *                             /device -> /sys/block/$name
-		 */
-
-		cache->update_interval = 1;
-		cache->commit_super_block_interval = 0;
-		cache->flush_current_buffer_interval = 0;
-		r = kobject_init_and_add(&cache->kobj, &cache_ktype,
-					 caches_kobj, "%u", cache->id);
-
-		dev_kobj = get_bdev_kobject(cache->device->bdev);
-		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
-		kobject_uevent(&cache->kobj, KOBJ_ADD);
-
 		return 0;
+
+bad_recover:
+		cache->on_terminate = true;
+		cancel_work_sync(&cache->flush_work);
+		destroy_workqueue(cache->flush_wq);
+bad_flushwq:
+		cache->on_terminate = true;
+		cancel_work_sync(&cache->barrier_deadline_work);
+		cancel_work_sync(&cache->migrate_work);
+		destroy_workqueue(cache->migrate_wq);
+bad_migratewq:
+		kfree(cache->dirtiness_snapshot);
+bad_alloc_dirtiness_snapshot:
+		vfree(cache->migrate_buffer);
+bad_alloc_migrate_buffer:
+		kill_arr(cache->htable);
+bad_alloc_ht:
+		kill_arr(cache->segment_header_array);
+bad_alloc_segment_header_array:
+		free_wb_pool(cache);
+bad_init_wb_pool:
+		kobject_uevent(&cache->kobj, KOBJ_REMOVE);
+		sysfs_remove_link(&cache->kobj, "device");
+bad_device_lns:
+		kobject_del(&cache->kobj);
+		kobject_put(&cache->kobj);
+bad_kobj_add:
+		dm_put_device(ti, cache->device);
+bad_get_device:
+		kfree(cache);
+		lc_caches[cache_id_ptr] = NULL;
+		return r;
 	}
 
 	if (!strcasecmp(cmd, "free_cache")) {
-		size_t i;
-		struct writebuffer *wb;
-		cache_id id = cache_id_ptr;
-		struct lc_cache *cache = lc_caches[id];
+		struct lc_cache *cache = lc_caches[cache_id_ptr];
 
 		cache->on_terminate = true;
 
@@ -2929,17 +3026,13 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		cancel_work_sync(&cache->migrate_work);
 		destroy_workqueue(cache->migrate_wq);
-		vfree(cache->migrate_buffer);
 		kfree(cache->dirtiness_snapshot);
-
-		for (i = 0; i < NR_WB_POOL; i++) {
-			wb = cache->wb_pool + i;
-			kfree(wb->data);
-		}
-		kfree(cache->wb_pool);
+		vfree(cache->migrate_buffer);
 
 		kill_arr(cache->htable);
 		kill_arr(cache->segment_header_array);
+
+		free_wb_pool(cache);
 
 		kobject_uevent(&cache->kobj, KOBJ_REMOVE);
 		sysfs_remove_link(&cache->kobj, "device");
@@ -2949,7 +3042,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		dm_put_device(ti, cache->device);
 		kfree(cache);
 
-		lc_caches[id] = NULL;
+		lc_caches[cache_id_ptr] = NULL;
 
 		return 0;
 	}

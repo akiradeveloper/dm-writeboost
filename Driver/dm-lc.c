@@ -3111,17 +3111,14 @@ lc_mgr_status(
 		DMEMIT("current cache_id_ptr: %u\n", cache_id_ptr);
 
 		if (cache_id_ptr == 0) {
-			DMEMIT(
-			"sizeof(struct metablock): %lu\n",
+			DMEMIT("sizeof struct\n");
+			DMEMIT("metablock: %lu\n",
 			       sizeof(struct metablock));
-			DMEMIT(
-			"sizeof(struct metablock_device): %lu\n",
+			DMEMIT("metablock_device: %lu\n",
 			       sizeof(struct metablock_device));
-			DMEMIT(
-			"sizeof(struct segment_header): %lu\n",
+			DMEMIT("segment_header: %lu\n",
 			       sizeof(struct segment_header));
-			DMEMIT(
-			"sizeof(struct segment_header_device): %lu (<= 4096)",
+			DMEMIT("segment_header_device: %lu (<= 4096)",
 			       sizeof(struct segment_header_device));
 			break;
 		}

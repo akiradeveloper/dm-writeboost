@@ -1325,25 +1325,36 @@ static void commit_super_block(struct lc_cache *cache)
 	kfree(buf);
 }
 
-static void read_superblock_device(struct superblock_device *dest,
-				   struct lc_cache *cache)
+static int __must_check read_superblock_device(struct superblock_device *dest,
+					       struct lc_cache *cache)
 {
+	int r = 0;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
-	struct dm_io_request io_req = {
+	if (!buf)
+		return -ENOMEM;
+
+	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	struct dm_io_region region = {
+	region = (struct dm_io_region) {
 		.bdev = cache->device->bdev,
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true);
+	r = dm_safe_io(&io_req, &region, 1, true);
+	if (r)
+		goto bad_io;
 	memcpy(dest, buf, sizeof(*dest));
+bad_io:
 	kfree(buf);
+	return r;
 }
 
 static sector_t calc_segment_header_start(size_t segment_idx)
@@ -1351,26 +1362,36 @@ static sector_t calc_segment_header_start(size_t segment_idx)
 	return (1 << LC_SEGMENTSIZE_ORDER) * (segment_idx + 1);
 }
 
-static void read_segment_header_device(
+static int __must_check read_segment_header_device(
 		struct segment_header_device *dest,
 		struct lc_cache *cache, size_t segment_idx)
 {
+	int r = 0;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
 	void *buf = kmalloc(1 << 12, GFP_KERNEL);
-	struct dm_io_request io_req = {
+	if (!buf)
+		return -ENOMEM;
+
+	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	struct dm_io_region region = {
+	region = (struct dm_io_region) {
 		.bdev = cache->device->bdev,
 		.sector = calc_segment_header_start(segment_idx),
 		.count = (1 << 3),
 	};
-	dm_safe_io_retry(&io_req, &region, 1, false);
+	r = dm_safe_io(&io_req, &region, 1, false);
+	if (r)
+		goto bad_io;
 	memcpy(dest, buf, sizeof(*dest));
+bad_io:
 	kfree(buf);
+	return r;
 }
 
 static void update_by_segment_header_device(struct lc_cache *cache,
@@ -1426,20 +1447,25 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	return true;
 }
 
-static void recover_cache(struct lc_cache *cache)
+static int __must_check recover_cache(struct lc_cache *cache)
 {
+	int r = 0;
 	struct segment_header_device *header;
 	struct segment_header *seg;
 	size_t i, j,
 	       max_id, oldest_id, last_flushed_id, init_segment_id,
-	       nr_segments, oldest_idx;
+	       oldest_idx, nr_segments = cache->nr_segments;
 
-	struct superblock_device sup;
-	read_superblock_device(&sup, cache);
-
-	nr_segments = cache->nr_segments;
+	struct superblock_device uninitialized_var(sup);
+	r = read_superblock_device(&sup, cache);
+	if (r) {
+		DMERR("failed to read superblock");
+		return r;
+	}
 
 	header = kmalloc(sizeof(*header), GFP_KERNEL);
+	if (!header)
+		return -ENOMEM;
 
 	/*
 	 * Finding the oldest, non-zero id and its index.
@@ -1449,7 +1475,11 @@ static void recover_cache(struct lc_cache *cache)
 	oldest_id = max_id;
 	oldest_idx = 0;
 	for (i = 0; i < nr_segments; i++) {
-		read_segment_header_device(header, cache, i);
+		r = read_segment_header_device(header, cache, i);
+		if (r) {
+			kfree(header);
+			return r;
+		}
 
 		if (header->global_id < 1)
 			continue;
@@ -1493,7 +1523,11 @@ static void recover_cache(struct lc_cache *cache)
 	 */
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
 		j = i % nr_segments;
-		read_segment_header_device(header, cache, j);
+		r = read_segment_header_device(header, cache, j);
+		if (r) {
+			kfree(header);
+			return r;
+		}
 
 		/*
 		 * Valid global_id > 0.
@@ -1552,6 +1586,8 @@ setup_init_segment:
 	seg->length = 1;
 
 	cache->current_seg = seg;
+
+	return 0;
 }
 
 static sector_t dm_devsize(struct dm_dev *dev)
@@ -2891,7 +2927,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->barrier_deadline_ms = 3;
 		INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
-		recover_cache(cache);
+		r = recover_cache(cache);
 		lc_caches[cache->id] = cache;
 
 		clear_stat(cache);

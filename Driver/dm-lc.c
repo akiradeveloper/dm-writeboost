@@ -2318,12 +2318,25 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 	struct lc_device *lc = ti->private;
 	char *cmd = argv[0];
 
+	/*
+	 * We must separate
+	 * these add/remove sysfs code from .ctr
+	 * for a very complex reason.
+	 */
 	if (!strcasecmp(cmd, "add_sysfs")) {
 		struct kobject *dev_kobj;
 		r = kobject_init_and_add(&lc->kobj, &device_ktype,
 					 devices_kobj, "%u", lc->id);
+		if (r)
+			return r;
+
 		dev_kobj = get_bdev_kobject(lc->device->bdev);
 		r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
+		if (r) {
+			kobject_del(&lc->kobj);
+			kobject_put(&lc->kobj);
+			return r;
+		}
 
 		kobject_uevent(&lc->kobj, KOBJ_ADD);
 		return 0;

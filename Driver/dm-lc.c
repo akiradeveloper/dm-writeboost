@@ -477,6 +477,14 @@ struct lc_cache {
 	struct workqueue_struct *flush_wq;
 
 	/*
+	 * For deferred ack for barriers.
+	 */
+	struct timer_list barrier_deadline_timer;
+	struct bio_list barrier_ios;
+	unsigned long barrier_deadline_ms;
+	struct work_struct barrier_deadline_work;
+
+	/*
 	 * For Migration daemon
 	 */
 	bool allow_migrate;
@@ -496,14 +504,6 @@ struct lc_cache {
 	struct list_head migrate_list;
 	u8 *dirtiness_snapshot;
 	void *migrate_buffer;
-
-	/*
-	 * For deferred ack for barriers.
-	 */
-	struct timer_list barrier_deadline_timer;
-	struct bio_list barrier_ios;
-	unsigned long barrier_deadline_ms;
-	struct work_struct barrier_deadline_work;
 
 	bool on_terminate;
 

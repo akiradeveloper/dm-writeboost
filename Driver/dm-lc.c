@@ -17,6 +17,13 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+#define LCERR(f, args...)\
+	DMERR("err@%d " f, __LINE__, ## args)
+#define LCWARN(f, args...)\
+	DMWARN("warn@%d " f, __LINE__, ## args)
+#define LCINFO(f, args...)\
+	DMINFO("info@%d " f, __LINE__, ## args)
+
 /*
  * (1 << x) sector.
  * 4 <= x <= 11
@@ -48,14 +55,15 @@ retry_alloc:
 	p = kmalloc(size, flags);
 	if (!p) {
 		count++;
-		DMERR("L.%d: failed allocation(size:%lu, count:%d)",
-		      lineno, size, count);
+		LCWARN("L%d size:%lu, count:%d",
+		       lineno, size, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;
 	}
 	return p;
 }
-#define kmalloc_retry(size, flags) do_kmalloc_retry((size), (flags), __LINE__)
+#define kmalloc_retry(size, flags)\
+	do_kmalloc_retry((size), (flags), __LINE__)
 
 struct part {
 	void *memory;
@@ -84,20 +92,24 @@ static struct arr *make_arr(size_t elemsize, size_t nr_elems)
 	struct part *part;
 
 	struct arr *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
-	if (!arr)
+	if (!arr) {
+		LCERR();
 		return NULL;
+	}
 
 	arr->elemsize = elemsize;
 	arr->nr_elems = nr_elems;
 	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
-	if (!arr->parts)
+	if (!arr->parts) {
+		LCERR();
 		goto bad_alloc_parts;
+	}
 
 	for (i = 0; i < nr_parts(arr); i++) {
 		part = arr->parts + i;
 		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
 		if (!part->memory) {
-			DMERR("failed to alloc memory in part");
+			LCERR();
 			for (j = 0; j < i; j++) {
 				part = arr->parts + j;
 				kfree(part->memory);
@@ -185,9 +197,8 @@ static int dm_safe_io_internal(
 
 	dev = region->bdev->bd_dev;
 	if (err || *err_bits) {
-		DMERR("L.%d: io err occurs err(%d), err_bits(%lu)",
-		      lineno, err, *err_bits);
-		DMERR("rw(%d), sector(%lu), dev(%u:%u)",
+		LCERR("L%d err(%d, %lu), rw(%d), sector(%lu), dev(%u:%u)",
+		      lineno, err, *err_bits,
 		      io_req->bi_rw, region->sector,
 		      MAJOR(dev), MINOR(dev));
 	}
@@ -216,16 +227,16 @@ retry_io:
 	dev = region->bdev->bd_dev;
 	if (err || err_bits) {
 		count++;
-		DMERR("failed io count(%d)", count);
+		LCWARN("L%d count(%d)", lineno, count);
 
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		goto retry_io;
 	}
 
 	if (count) {
-		DMERR("L.%d: io has just turned to OK.", lineno);
-		DMERR("rw(%d), sector(%lu), dev(%u:%u)",
-		      io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+		LCINFO("L%d rw(%d), sector(%lu), dev(%u:%u)",
+		       lineno,
+		       io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
 	}
 }
 #define dm_safe_io_retry(io_req, region, num_regions, thread) \
@@ -574,7 +585,7 @@ static int __must_check ht_empty_init(struct lc_cache *cache)
 	nr_heads = cache->htsize + 1;
 	arr = make_arr(sizeof(struct ht_head), nr_heads);
 	if (!arr) {
-		DMERR("failed to alloc htable heads");
+		LCERR();
 		return -ENOMEM;
 	}
 
@@ -665,7 +676,7 @@ static int __must_check init_segment_header_array(struct lc_cache *cache)
 	cache->segment_header_array =
 		make_arr(sizeof(struct segment_header), nr_segments);
 	if (!cache->segment_header_array) {
-		DMERR("failed to alloc segment header array");
+		LCERR();
 		return -ENOMEM;
 	}
 
@@ -850,8 +861,7 @@ static void queue_flushing(struct lc_cache *cache)
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
 		n1++;
 		if (n1 == 100)
-			DMWARN(
-			"Too long to wait for current_seg ios to finish.");
+			LCWARN();
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
@@ -884,8 +894,7 @@ static void queue_flushing(struct lc_cache *cache)
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
 		n2++;
 		if (n2 == 100)
-			DMWARN(
-			"Too long to wait for new_seg ios to finish.");
+			LCWARN();
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
@@ -1173,8 +1182,8 @@ migrate_write:
 				 (atomic_read(&cache->migrate_io_count) == 0));
 
 	if (atomic_read(&cache->migrate_fail_count)) {
-		DMERR("migrate failed. %u writebacks failed. redo.",
-		      atomic_read(&cache->migrate_fail_count));
+		LCWARN("%u writebacks failed. retry.",
+		       atomic_read(&cache->migrate_fail_count));
 		goto migrate_write;
 	}
 
@@ -1348,8 +1357,10 @@ static int __must_check read_superblock_device(struct superblock_device *dest,
 	struct dm_io_region region;
 
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
-	if (!buf)
+	if (!buf) {
+		LCERR();
 		return -ENOMEM;
+	}
 
 	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
@@ -1364,8 +1375,10 @@ static int __must_check read_superblock_device(struct superblock_device *dest,
 		.count = 1,
 	};
 	r = dm_safe_io(&io_req, &region, 1, true);
-	if (r)
+	if (r) {
+		LCERR();
 		goto bad_io;
+	}
 	memcpy(dest, buf, sizeof(*dest));
 bad_io:
 	kfree(buf);
@@ -1385,8 +1398,10 @@ static int __must_check read_segment_header_device(
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 	void *buf = kmalloc(1 << 12, GFP_KERNEL);
-	if (!buf)
+	if (!buf) {
+		LCERR();
 		return -ENOMEM;
+	}
 
 	io_req = (struct dm_io_request) {
 		.client = lc_io_client,
@@ -1401,8 +1416,10 @@ static int __must_check read_segment_header_device(
 		.count = (1 << 3),
 	};
 	r = dm_safe_io(&io_req, &region, 1, false);
-	if (r)
+	if (r) {
+		LCERR();
 		goto bad_io;
+	}
 	memcpy(dest, buf, sizeof(*dest));
 bad_io:
 	kfree(buf);
@@ -1474,13 +1491,15 @@ static int __must_check recover_cache(struct lc_cache *cache)
 	struct superblock_device uninitialized_var(sup);
 	r = read_superblock_device(&sup, cache);
 	if (r) {
-		DMERR("failed to read superblock");
+		LCERR();
 		return r;
 	}
 
 	header = kmalloc(sizeof(*header), GFP_KERNEL);
-	if (!header)
+	if (!header) {
+		LCERR();
 		return -ENOMEM;
+	}
 
 	/*
 	 * Finding the oldest, non-zero id and its index.
@@ -1492,6 +1511,7 @@ static int __must_check recover_cache(struct lc_cache *cache)
 	for (i = 0; i < nr_segments; i++) {
 		r = read_segment_header_device(header, cache, i);
 		if (r) {
+			LCERR();
 			kfree(header);
 			return r;
 		}
@@ -1540,6 +1560,7 @@ static int __must_check recover_cache(struct lc_cache *cache)
 		j = i % nr_segments;
 		r = read_segment_header_device(header, cache, j);
 		if (r) {
+			LCERR();
 			kfree(header);
 			return r;
 		}
@@ -1649,8 +1670,10 @@ static int __must_check format_cache_device(struct dm_dev *dev)
 	int r = 0;
 
 	buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
-	if (!buf)
+	if (!buf) {
+		LCERR();
 		return -ENOMEM;
+	}
 
 	io_req_sup = (struct dm_io_request) {
 		.client = lc_io_client,
@@ -1667,15 +1690,19 @@ static int __must_check format_cache_device(struct dm_dev *dev)
 	r = dm_safe_io(&io_req_sup, &region_sup, 1, false);
 	kfree(buf);
 
-	if (r)
+	if (r) {
+		LCERR();
 		return r;
+	}
 
 	atomic64_set(&context.count, nr_segments);
 	context.err = 0;
 
 	buf = kzalloc(1 << 12, GFP_KERNEL);
-	if (!buf)
+	if (!buf) {
+		LCERR();
 		return -ENOMEM;
+	}
 
 	for (i = 0; i < nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
@@ -1692,19 +1719,23 @@ static int __must_check format_cache_device(struct dm_dev *dev)
 			.count = (1 << 3),
 		};
 		r = dm_safe_io(&io_req_seg, &region_seg, 1, false);
-		if (r)
+		if (r) {
+			LCERR();
 			break;
+		}
 	}
 	kfree(buf);
 
-	if (r)
+	if (r) {
+		LCERR();
 		return r;
+	}
 
 	while (atomic64_read(&context.count))
 		schedule_timeout_interruptible(msecs_to_jiffies(100));
 
 	if (context.err) {
-		DMERR("formatting some segment header failed");
+		LCERR();
 		return -EIO;
 	}
 
@@ -2141,13 +2172,15 @@ static ssize_t var_show(unsigned long var, char *page)
 	return sprintf(page, "%lu\n", var);
 }
 
-static ssize_t var_store(unsigned long *var, const char *page, size_t len)
+static int var_store(unsigned long *var, const char *page)
 {
 	char *p = (char *) page;
 	int r = kstrtoul(p, 10, var);
-	if (r)
+	if (r) {
+		LCERR();
 		return r;
-	return len;
+	}
+	return 0;
 }
 
 static struct kobject *devices_kobj;
@@ -2174,8 +2207,10 @@ static ssize_t device_attr_store(struct kobject *kobj, struct attribute *attr,
 {
 	struct lc_device *device;
 	struct device_sysfs_entry *entry = to_device(attr);
-	if (!entry->store)
+	if (!entry->store) {
+		LCERR();
 		return -EIO;
+	}
 
 	device = container_of(kobj, struct lc_device, kobj);
 	return entry->store(device, page, len);
@@ -2220,9 +2255,13 @@ static ssize_t migrate_threshold_store(struct lc_device *device,
 				       const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 	device->migrate_threshold = x;
-	return r;
+	return count;
 }
 
 static struct device_sysfs_entry migrate_threshold_entry = {
@@ -2278,16 +2317,19 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	r = dm_set_target_max_io_len(ti, (1 << 3));
-	if (r)
+	if (r) {
+		LCERR();
 		return r;
-
+	}
 #else
 	ti->split_io = (1 << 3);
 #endif
 
 	lc = kzalloc(sizeof(*lc), GFP_KERNEL);
-	if (!lc)
+	if (!lc) {
+		LCERR();
 		return -ENOMEM;
+	}
 
 	/*
 	 * EMC's textbook on storage system says
@@ -2298,12 +2340,14 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	atomic64_set(&lc->nr_dirty_caches, 0);
 
 	if (sscanf(argv[0], "%u", &device_id) != 1) {
+		LCERR();
 		r = -EINVAL;
 		goto bad_device_id;
 	}
 	lc->id = device_id;
 
 	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)) {
+		LCERR();
 		r = -EINVAL;
 		goto bad_get_device;
 	}
@@ -2311,6 +2355,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	lc->cache = NULL;
 	if (sscanf(argv[2], "%u", &cache_id) != 1) {
+		LCERR();
 		r = -EINVAL;
 		goto bad_cache_id;
 	}
@@ -2387,12 +2432,15 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 		struct kobject *dev_kobj;
 		r = kobject_init_and_add(&lc->kobj, &device_ktype,
 					 devices_kobj, "%u", lc->id);
-		if (r)
+		if (r) {
+			LCERR();
 			return r;
+		}
 
 		dev_kobj = get_bdev_kobject(lc->device->bdev);
 		r = sysfs_create_link(&lc->kobj, dev_kobj, "device");
 		if (r) {
+			LCERR();
 			kobject_del(&lc->kobj);
 			kobject_put(&lc->kobj);
 			return r;
@@ -2536,8 +2584,10 @@ static ssize_t cache_attr_store(struct kobject *kobj, struct attribute *attr,
 {
 	struct lc_cache *cache;
 	struct cache_sysfs_entry *entry = to_cache(attr);
-	if (!entry->store)
+	if (!entry->store) {
+		LCERR();
 		return -EIO;
+	}
 
 	cache = container_of(kobj, struct lc_cache, kobj);
 	return entry->store(cache, page, len);
@@ -2553,9 +2603,13 @@ static ssize_t commit_super_block_interval_store(struct lc_cache *cache,
 						 const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 	cache->commit_super_block_interval = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry commit_super_block_interval_entry = {
@@ -2575,12 +2629,18 @@ static ssize_t nr_max_batched_migration_store(struct lc_cache *cache,
 					      const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
-	if (x < 1)
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
+	if (x < 1) {
+		LCERR();
 		return -EIO;
+	}
 
 	cache->nr_max_batched_migration = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry nr_max_batched_migration_entry = {
@@ -2599,9 +2659,13 @@ static ssize_t allow_migrate_store(struct lc_cache *cache,
 				   const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 	cache->allow_migrate = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry allow_migrate_entry = {
@@ -2619,9 +2683,13 @@ static ssize_t force_migrate_store(struct lc_cache *cache,
 				   const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 	cache->force_migrate = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry force_migrate_entry = {
@@ -2639,9 +2707,13 @@ static ssize_t update_interval_store(struct lc_cache *cache,
 				     const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 	cache->update_interval = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry update_interval_entry = {
@@ -2660,9 +2732,13 @@ static ssize_t flush_current_buffer_interval_store(
 		struct lc_cache *cache, const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 	cache->flush_current_buffer_interval = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry flush_current_buffer_interval_entry = {
@@ -2681,16 +2757,21 @@ static ssize_t commit_super_block_store(struct lc_cache *cache,
 					const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
-
-	if (x < 1)
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
+	if (x < 1) {
+		LCERR();
 		return -EIO;
+	}
 
 	mutex_lock(&cache->io_lock);
 	commit_super_block(cache);
 	mutex_unlock(&cache->io_lock);
 
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry commit_super_block_entry = {
@@ -2708,12 +2789,18 @@ static ssize_t flush_current_buffer_store(struct lc_cache *cache,
 					  const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
-	if (x < 1)
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
+	if (x < 1) {
+		LCERR();
 		return -EIO;
+	}
 
 	flush_current_buffer_sync(cache);
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry flush_current_buffer_entry = {
@@ -2751,10 +2838,14 @@ static ssize_t barrier_deadline_ms_store(struct lc_cache *cache,
 					 const char *page, size_t count)
 {
 	unsigned long x;
-	ssize_t r = var_store(&x, page, count);
+	int r = var_store(&x, page);
+	if (r) {
+		LCERR();
+		return r;
+	}
 
 	cache->barrier_deadline_ms = x;
-	return r;
+	return count;
 }
 
 static struct cache_sysfs_entry barrier_deadline_ms_entry = {
@@ -2802,7 +2893,7 @@ static int __must_check init_wb_pool(struct lc_cache *cache)
 	cache->wb_pool = kmalloc(
 		sizeof(struct writebuffer) * NR_WB_POOL, GFP_KERNEL);
 	if (!cache->wb_pool) {
-		DMERR("failed to alloc wb_pool");
+		LCERR();
 		return -ENOMEM;
 	}
 
@@ -2815,7 +2906,7 @@ static int __must_check init_wb_pool(struct lc_cache *cache)
 			1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
 			GFP_KERNEL);
 		if (!wb->data) {
-			DMERR("failed to alloc wb_pool data");
+			LCERR();
 			for (j = 0; j < i; j++) {
 				wb = cache->wb_pool + j;
 				kfree(wb->data);
@@ -2851,8 +2942,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		int r;
 		struct dm_dev *dev;
 		if (dm_get_device(ti, argv[1],
-				  dm_table_get_mode(ti->table), &dev))
+				  dm_table_get_mode(ti->table), &dev)) {
+			LCERR();
 			return -EINVAL;
+		}
 
 		r = format_cache_device(dev);
 
@@ -2868,8 +2961,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	if (!strcasecmp(cmd, "switch_to")) {
 		unsigned id;
-		if (sscanf(argv[1], "%u", &id) != 1)
+		if (sscanf(argv[1], "%u", &id) != 1) {
+			LCERR();
 			return -EINVAL;
+		}
 
 		cache_id_ptr = id;
 		return 0;
@@ -2877,8 +2972,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 	if (!strcasecmp(cmd, "clear_stat")) {
 		struct lc_cache *cache = lc_caches[cache_id_ptr];
-		if (!cache)
+		if (!cache) {
+			LCERR();
 			return -EINVAL;
+		}
 
 		clear_stat(cache);
 		return 0;
@@ -2893,11 +2990,14 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		struct dm_dev *dev;
 
 		struct lc_cache *cache = kzalloc(sizeof(*cache), GFP_KERNEL);
-		if (!cache)
+		if (!cache) {
+			LCERR();
 			return -ENOMEM;
+		}
 
 		if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
 				  &dev)) {
+			LCERR();
 			r = -EINVAL;
 			goto bad_get_device;
 		}
@@ -2921,19 +3021,25 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->flush_current_buffer_interval = 0;
 		r = kobject_init_and_add(&cache->kobj, &cache_ktype,
 					 caches_kobj, "%u", cache->id);
-		if (r)
+		if (r) {
+			LCERR();
 			goto bad_kobj_add;
+		}
 
 		dev_kobj = get_bdev_kobject(cache->device->bdev);
 		r = sysfs_create_link(&cache->kobj, dev_kobj, "device");
-		if (r)
+		if (r) {
+			LCERR();
 			goto bad_device_lns;
+		}
 
 		kobject_uevent(&cache->kobj, KOBJ_ADD);
 
 		r = init_wb_pool(cache);
-		if (r)
+		if (r) {
+			LCERR();
 			goto bad_init_wb_pool;
+		}
 		/*
 		 * Select arbitrary one
 		 * as the initial writebuffer.
@@ -2941,28 +3047,38 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		cache->current_wb = cache->wb_pool + 0;
 
 		r = init_segment_header_array(cache);
-		if (r)
+		if (r) {
+			LCERR();
 			goto bad_alloc_segment_header_array;
+		}
 		mb_array_empty_init(cache);
 
 		r = ht_empty_init(cache);
-		if (r)
+		if (r) {
+			LCERR();
 			goto bad_alloc_ht;
+		}
 
 		cache->migrate_buffer = vmalloc(
 				NR_CACHES_INSEG << 12);
-		if (!cache->migrate_buffer)
+		if (!cache->migrate_buffer) {
+			LCERR();
 			goto bad_alloc_migrate_buffer;
+		}
 
 		cache->dirtiness_snapshot = kmalloc(
 				NR_CACHES_INSEG,
 				GFP_KERNEL);
-		if (!cache->dirtiness_snapshot)
+		if (!cache->dirtiness_snapshot) {
+			LCERR();
 			goto bad_alloc_dirtiness_snapshot;
+		}
 
 		cache->migrate_wq = create_singlethread_workqueue("migratewq");
-		if (!cache->migrate_wq)
+		if (!cache->migrate_wq) {
+			LCERR();
 			goto bad_migratewq;
+		}
 
 		INIT_WORK(&cache->migrate_work, migrate_proc);
 		init_waitqueue_head(&cache->migrate_wait_queue);
@@ -2988,8 +3104,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
 		cache->flush_wq = create_singlethread_workqueue("flushwq");
-		if (!cache->flush_wq)
+		if (!cache->flush_wq) {
+			LCERR();
 			goto bad_flushwq;
+		}
 		spin_lock_init(&cache->flush_queue_lock);
 		INIT_WORK(&cache->flush_work, flush_proc);
 		INIT_LIST_HEAD(&cache->flush_queue);
@@ -2997,8 +3115,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 		queue_work(cache->flush_wq, &cache->flush_work);
 
 		r = recover_cache(cache);
-		if (r)
+		if (r) {
+			LCERR();
 			goto bad_recover;
+		}
 
 		lc_caches[cache->id] = cache;
 
@@ -3072,6 +3192,7 @@ bad_get_device:
 		return 0;
 	}
 
+	LCERR();
 	return -EINVAL;
 }
 
@@ -3119,12 +3240,14 @@ lc_mgr_status(
 		}
 
 		cache = lc_caches[cache_id_ptr];
-		if (!cache)
+		if (!cache) {
+			LCERR();
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
 			return -EINVAL;
 #else
 			return;
 #endif
+		}
 
 		DMEMIT("static RAM(approx.): %lu (byte)\n",
 		       calc_static_memory_consumption(cache));
@@ -3184,13 +3307,13 @@ static int __init lc_module_init(void)
 
 	r = dm_register_target(&lc_target);
 	if (r < 0) {
-		DMERR("register lc failed %d", r);
+		LCERR("%d", r);
 		return r;
 	}
 
 	r = dm_register_target(&lc_mgr_target);
 	if (r < 0) {
-		DMERR("register lc-mgr failed %d", r);
+		LCERR("%d", r);
 		goto bad_register_mgr_target;
 	}
 
@@ -3205,22 +3328,27 @@ static int __init lc_module_init(void)
 	r = -ENOMEM;
 
 	devices_kobj = kobject_create_and_add("devices", lc_kobj);
-	if (!devices_kobj)
+	if (!devices_kobj) {
+		LCERR();
 		goto bad_kobj_devices;
+	}
 
 	caches_kobj = kobject_create_and_add("caches", lc_kobj);
-	if (!caches_kobj)
+	if (!caches_kobj) {
+		LCERR();
 		goto bad_kobj_caches;
+	}
 
 	safe_io_wq = alloc_workqueue("safeiowq",
 				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	if (!safe_io_wq) {
-		DMERR("failed to create workqueue safeiowq");
+		LCERR();
 		goto bad_wq;
 	}
 
 	lc_io_client = dm_io_client_create();
 	if (IS_ERR(lc_io_client)) {
+		LCERR();
 		r = PTR_ERR(lc_io_client);
 		goto bad_io_client;
 	}

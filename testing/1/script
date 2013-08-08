@@ -10,7 +10,7 @@ cd /mnt/perflv
 tar xvfz ${RUBY}.tar.gz
 cd ${RUBY}
 
-dmsetup message lc-mgr 0 switch_to 1
+dmsetup message lc-mgr 0 switch_to 3
 dmsetup message lc-mgr 0 clear_stat
 ./configure
 

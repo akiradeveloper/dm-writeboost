@@ -915,9 +915,8 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->current_seg = new_seg;
 }
 
-static void migrate_mb(
-		struct lc_cache *cache, struct segment_header *seg,
-		struct metablock *mb, u8 dirty_bits, bool thread)
+static void migrate_mb(struct lc_cache *cache, struct segment_header *seg,
+		       struct metablock *mb, u8 dirty_bits, bool thread)
 {
 	struct lc_device *lc = lc_devices[mb->device_id];
 
@@ -2728,8 +2727,9 @@ static ssize_t flush_current_buffer_interval_show(struct lc_cache *cache,
 	return var_show(cache->flush_current_buffer_interval, page);
 }
 
-static ssize_t flush_current_buffer_interval_store(
-		struct lc_cache *cache, const char *page, size_t count)
+static ssize_t flush_current_buffer_interval_store(struct lc_cache *cache,
+						   const char *page,
+						   size_t count)
 {
 	unsigned long x;
 	int r = var_store(&x, page);

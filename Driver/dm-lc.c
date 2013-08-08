@@ -17,11 +17,11 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
-#define LCERR(f, args...)\
+#define LCERR(f, args...) \
 	DMERR("err@%d " f, __LINE__, ## args)
-#define LCWARN(f, args...)\
+#define LCWARN(f, args...) \
 	DMWARN("warn@%d " f, __LINE__, ## args)
-#define LCINFO(f, args...)\
+#define LCINFO(f, args...) \
 	DMINFO("info@%d " f, __LINE__, ## args)
 
 /*
@@ -62,7 +62,7 @@ retry_alloc:
 	}
 	return p;
 }
-#define kmalloc_retry(size, flags)\
+#define kmalloc_retry(size, flags) \
 	do_kmalloc_retry((size), (flags), __LINE__)
 
 struct part {

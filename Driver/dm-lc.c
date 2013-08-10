@@ -2613,6 +2613,7 @@ static ssize_t commit_super_block_interval_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+
 	cache->commit_super_block_interval = x;
 	return count;
 }
@@ -2641,7 +2642,7 @@ static ssize_t nr_max_batched_migration_store(struct lc_cache *cache,
 	}
 	if (x < 1) {
 		LCERR();
-		return -EIO;
+		return -EINVAL;
 	}
 
 	cache->nr_max_batched_migration = x;
@@ -2669,6 +2670,7 @@ static ssize_t allow_migrate_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+
 	cache->allow_migrate = x;
 	return count;
 }
@@ -2693,6 +2695,7 @@ static ssize_t force_migrate_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+
 	cache->force_migrate = x;
 	return count;
 }
@@ -2717,6 +2720,7 @@ static ssize_t update_interval_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+
 	cache->update_interval = x;
 	return count;
 }
@@ -2743,6 +2747,7 @@ static ssize_t flush_current_buffer_interval_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+
 	cache->flush_current_buffer_interval = x;
 	return count;
 }
@@ -2770,7 +2775,7 @@ static ssize_t commit_super_block_store(struct lc_cache *cache,
 	}
 	if (x < 1) {
 		LCERR();
-		return -EIO;
+		return -EINVAL;
 	}
 
 	mutex_lock(&cache->io_lock);
@@ -2802,7 +2807,7 @@ static ssize_t flush_current_buffer_store(struct lc_cache *cache,
 	}
 	if (x < 1) {
 		LCERR();
-		return -EIO;
+		return -EINVAL;
 	}
 
 	flush_current_buffer_sync(cache);

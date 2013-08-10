@@ -3242,7 +3242,8 @@ lc_mgr_status(
 
 		cache = lc_caches[cache_id_ptr];
 		if (!cache) {
-			LCERR();
+			LCERR("no cache for the cache_id_ptr %u",
+			      cache_id_ptr);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
 			return -EINVAL;
 #else

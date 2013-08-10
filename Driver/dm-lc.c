@@ -2559,10 +2559,7 @@ static int lc_mgr_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	return 0;
 }
 
-static void lc_mgr_dtr(struct dm_target *ti)
-{
-	return;
-}
+static void lc_mgr_dtr(struct dm_target *ti) { return; }
 
 static struct kobject *caches_kobj;
 

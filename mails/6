@@ -1,0 +1,37 @@
+Hi,
+
+Please apply this patch after the previous patch.
+This will fix bug.
+
+First, sorry to forget adding signed-off to that patch.
+
+When running prepare script,
+the kernel sometimes halt was my annoying problem.
+I may solve this with this patch.
+
+lc_end_io is a callback of a splitted bio.
+It atomic_dec some reference count
+if map_context->ptr is not NULL.
+
+dmsetup create first calls lc_ctr and
+seems to submit few bios to the device just created.
+At this stage, the device is without cache and
+it will later attach to cache.
+
+Without cache,
+said atomic_dec is not only needless
+but also crash the kernel by NULL access.
+
+Maybe,
+map_context->ptr
+where map_context is per_bio_data within bio
+is NOT initialized zero-filled and
+that makes the process
+sometimes run through atomic_dec even though without cache.
+
+Moving the line
+assigning NULL to map_context->ptr in lc_map
+to before "no-cache" path can solve this problem.
+
+After this patch applied,
+the kernel halt did not recur.

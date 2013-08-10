@@ -1905,6 +1905,11 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 	struct lc_device *lc = ti->private;
 	struct dm_dev *orig = lc->device;
 
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
+#endif
+	map_context->ptr = NULL;
+
 	if (!lc->cache) {
 		bio_remap(bio, orig, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
@@ -1933,11 +1938,6 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		queue_barrier_io(cache, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
-
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
-	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
-#endif
-	map_context->ptr = NULL;
 
 	bio_count = bio->bi_size >> SECTOR_SHIFT;
 	bio_fullsize = (bio_count == (1 << 3));

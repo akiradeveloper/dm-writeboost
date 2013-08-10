@@ -253,7 +253,7 @@ typedef u8 device_id;
 struct lc_device {
 	struct kobject kobj;
 
-	unsigned char migrate_threshold;
+	u8 migrate_threshold;
 
 	struct lc_cache *cache;
 
@@ -2258,6 +2258,10 @@ static ssize_t migrate_threshold_store(struct lc_device *device,
 	if (r) {
 		LCERR();
 		return r;
+	}
+	if (x < 0 || x > 100) {
+		LCERR();
+		return -EINVAL;
 	}
 	device->migrate_threshold = x;
 	return count;

@@ -25,28 +25,23 @@ You are provided with nice scripts for quick starting.
 Assuming you have expanded dm-lc under /home/akira,
 
 (1) [common] Configure device paths for backing store and cache device.  
-
 	$ cd /home/akira/dm-lc  
 	$ vi config
 
-(2) If the kernel doesn't have dm-lc merged,  
-please build the module first.  
-Driver/dm-lc.ko is now ready.
-
+(2) If the kernel doesn't have dm-lc merged, please build the module first.  
 	$ source build
 
 (3) [common] Load dm-lc into the kernel.  
 How to Load dm-lc module depends on your environment.  
-If you are using kernel with dm-lc merged,
-modprobe the module or
-embed the module to the kernel if you like.  
-If you will use the portable module
-developed in this repo,
-insmod the .ko file generated in Driver directory.
+
+If you are using kernel with dm-lc merged,  
+	# modprobe dm-lc
+
+If you will use the portable module in this repo,  
+	# cd Driver
+	# insmod dm-lc.ko
 
 (4) [common] Run prepare script  
-
-	# cd /home/akira/dm-lc  
 	# source prepare  
 
 and you are now ready for `/dev/mapper/perflv` powered by dm-lc.  

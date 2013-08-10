@@ -2355,8 +2355,15 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		r = -EINVAL;
 		goto bad_cache_id;
 	}
-	if (cache_id)
+	if (cache_id) {
+		struct lc_cache *cache = lc_caches[cache_id];
+		if (!cache) {
+			LCERR("cache is not set for id(%u)",
+			      cache_id);
+			goto bad_no_cache;
+		}
 		lc->cache = lc_caches[cache_id];
+	}
 
 	lc_devices[lc->id] = lc;
 	ti->private = lc;
@@ -2392,6 +2399,7 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	return 0;
 
+bad_no_cache:
 bad_cache_id:
 	dm_put_device(ti, lc->device);
 bad_get_device:

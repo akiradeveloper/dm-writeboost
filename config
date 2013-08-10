@@ -3,8 +3,7 @@
 export LC_ROOT=`pwd`
 
 # Note:
-# BACKING must be a logical device
-# that is created by LVM.
+# BACKING must be a LVM device only.
 BACKING=/dev/vg2/back18g
 export BACKING
 

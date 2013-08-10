@@ -48,14 +48,14 @@
 
 static void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno)
 {
-	int count = 0;
+	size_t count = 0;
 	void *p;
 
 retry_alloc:
 	p = kmalloc(size, flags);
 	if (!p) {
 		count++;
-		LCWARN("L%d size:%lu, count:%d",
+		LCWARN("L%d size:%lu, count:%lu",
 		       lineno, size, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;
@@ -236,7 +236,8 @@ retry_io:
 	if (count) {
 		LCINFO("L%d rw(%d), sector(%lu), dev(%u:%u)",
 		       lineno,
-		       io_req->bi_rw, region->sector, MAJOR(dev), MINOR(dev));
+		       io_req->bi_rw, region->sector,
+		       MAJOR(dev), MINOR(dev));
 	}
 }
 #define dm_safe_io_retry(io_req, region, num_regions, thread) \
@@ -354,7 +355,7 @@ struct writebuffer {
 	struct completion done;
 };
 
-#define SZ_MAX (~(size_t)0) /* Renamed backport */
+#define SZ_MAX (~(size_t)0)
 struct segment_header {
 	struct metablock mb_array[NR_CACHES_INSEG];
 
@@ -405,7 +406,6 @@ static void cleanup_mb_if_dirty(struct segment_header *seg,
 
 	if (b)
 		dec_nr_dirty_caches(mb->device_id);
-
 }
 
 static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
@@ -741,9 +741,9 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 	return count;
 }
 
-static void prepare_segment_header_device(
-		struct segment_header_device *dest,
-		struct lc_cache *cache, struct segment_header *src)
+static void prepare_segment_header_device(struct segment_header_device *dest,
+					  struct lc_cache *cache,
+					  struct segment_header *src)
 {
 	cache_nr i;
 	u8 left, right;
@@ -843,7 +843,8 @@ static void flush_proc(struct work_struct *work)
 	}
 }
 
-static void prepare_meta_writebuffer(void *writebuffer, struct lc_cache *cache,
+static void prepare_meta_writebuffer(void *writebuffer,
+				     struct lc_cache *cache,
 				     struct segment_header *seg)
 {
 	prepare_segment_header_device(writebuffer, cache, seg);
@@ -1178,7 +1179,7 @@ migrate_write:
 	}
 
 	wait_event_interruptible(cache->migrate_wait_queue,
-				 (atomic_read(&cache->migrate_io_count) == 0));
+				 atomic_read(&cache->migrate_io_count) == 0);
 
 	if (atomic_read(&cache->migrate_fail_count)) {
 		LCWARN("%u writebacks failed. retry.",
@@ -1215,11 +1216,10 @@ migrate_write:
 	 * will craze the cache.
 	 */
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		blkdev_issue_discard(
-			cache->device->bdev,
-			seg->start_sector + (1 << 3),
-			seg->length << 3,
-			GFP_NOIO, 0);
+		blkdev_issue_discard(cache->device->bdev,
+				     seg->start_sector + (1 << 3),
+				     seg->length << 3,
+				     GFP_NOIO, 0);
 	}
 }
 
@@ -1240,17 +1240,16 @@ static void migrate_proc(struct work_struct *work)
 		 * reserving_id > 0 means
 		 * that migration is immediate.
 		 */
-		allow_migrate =
-			cache->reserving_segment_id || cache->allow_migrate;
+		allow_migrate = cache->reserving_segment_id ||
+				cache->allow_migrate;
 
 		if (!allow_migrate) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 
-		nr_mig_candidates =
-			cache->last_flushed_segment_id -
-			cache->last_migrated_segment_id;
+		nr_mig_candidates = cache->last_flushed_segment_id -
+				    cache->last_migrated_segment_id;
 
 		if (!nr_mig_candidates) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -1281,7 +1280,7 @@ static void migrate_proc(struct work_struct *work)
 		 * segments at a time.
 		 */
 		nr_mig = min(nr_mig_candidates,
-				    cache->nr_cur_batched_migration);
+			     cache->nr_cur_batched_migration);
 
 		for (i = 1; i <= nr_mig; i++) {
 			seg = get_segment_header_by_id(
@@ -1299,7 +1298,8 @@ static void migrate_proc(struct work_struct *work)
 		 */
 		cache->last_migrated_segment_id += nr_mig;
 
-		list_for_each_entry_safe(seg, tmp, &cache->migrate_list,
+		list_for_each_entry_safe(seg, tmp,
+					 &cache->migrate_list,
 					 migrate_list) {
 			complete_all(&seg->migrate_done);
 			list_del(&seg->migrate_list);
@@ -1468,9 +1468,9 @@ static void update_by_segment_header_device(struct lc_cache *cache,
 
 static bool checkup_atomicity(struct segment_header_device *header)
 {
-	size_t i;
-	struct metablock_device *o;
+	u8 i;
 	for (i = 0; i < header->length; i++) {
+		struct metablock_device *o;
 		o = header->mbarr + i;
 		if (o->lap != header->lap)
 			return false;
@@ -1784,7 +1784,7 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 			continue;
 
 		src = cache->current_wb->data +
-			    ((offset + i) << SECTOR_SHIFT);
+		      ((offset + i) << SECTOR_SHIFT);
 		memcpy(buf, src, 1 << SECTOR_SHIFT);
 
 		io_req = (struct dm_io_request) {
@@ -2002,10 +2002,10 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 
 		wait_for_completion(&seg->flush_done);
 		if (likely(dirty_bits == 255)) {
-			bio_remap(
-				bio, cache->device,
-				calc_mb_start_sector(seg, mb->idx)
-				+ bio_offset);
+			bio_remap(bio,
+				  cache->device,
+				  calc_mb_start_sector(seg, mb->idx)
+				  + bio_offset);
 			map_context->ptr = seg;
 		} else {
 
@@ -2293,10 +2293,7 @@ static const struct sysfs_ops device_sysfs_ops = {
 	.store = device_attr_store,
 };
 
-static void device_release(struct kobject *kobj)
-{
-	return;
-}
+static void device_release(struct kobject *kobj) { return; }
 
 static struct kobj_type device_ktype = {
 	.sysfs_ops = &device_sysfs_ops,
@@ -2874,10 +2871,7 @@ static const struct sysfs_ops cache_sysfs_ops = {
 	.store = cache_attr_store,
 };
 
-static void cache_release(struct kobject *kobj)
-{
-	return;
-}
+static void cache_release(struct kobject *kobj) { return; }
 
 static struct kobj_type cache_ktype = {
 	.sysfs_ops = &cache_sysfs_ops,
@@ -2890,8 +2884,8 @@ static int __must_check init_wb_pool(struct lc_cache *cache)
 	size_t i, j;
 	struct writebuffer *wb;
 
-	cache->wb_pool = kmalloc(
-		sizeof(struct writebuffer) * NR_WB_POOL, GFP_KERNEL);
+	cache->wb_pool = kmalloc(sizeof(struct writebuffer) * NR_WB_POOL,
+				 GFP_KERNEL);
 	if (!cache->wb_pool) {
 		LCERR();
 		return -ENOMEM;
@@ -3059,8 +3053,7 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 			goto bad_alloc_ht;
 		}
 
-		cache->migrate_buffer = vmalloc(
-				NR_CACHES_INSEG << 12);
+		cache->migrate_buffer = vmalloc(NR_CACHES_INSEG << 12);
 		if (!cache->migrate_buffer) {
 			LCERR();
 			goto bad_alloc_migrate_buffer;
@@ -3200,8 +3193,11 @@ static size_t calc_static_memory_consumption(struct lc_cache *cache)
 {
 	size_t seg = sizeof(struct segment_header) * cache->nr_segments;
 	size_t ht = sizeof(struct ht_head) * cache->htsize;
+	size_t wb_pool = NR_WB_POOL << (LC_SEGMENTSIZE_ORDER + 9);
+	size_t mig_buf = cache->nr_cur_batched_migration *
+			 (NR_CACHES_INSEG << 12);
 
-	return seg + ht;
+	return seg + ht + wb_pool + mig_buf;
 };
 
 static

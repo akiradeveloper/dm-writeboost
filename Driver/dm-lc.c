@@ -1581,8 +1581,11 @@ static int __must_check recover_cache(struct lc_cache *cache)
 		if (header->global_id <= last_flushed_id)
 			break;
 
-		if (!checkup_atomicity(header))
+		if (!checkup_atomicity(header)) {
+			LCWARN("header atomicity broken id %lu",
+			       header->global_id);
 			break;
+		}
 
 		/*
 		 * Now the header is proven valid.

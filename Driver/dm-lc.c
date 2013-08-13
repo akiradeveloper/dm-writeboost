@@ -2187,7 +2187,7 @@ static int var_store(unsigned long *var, const char *page)
 	char *p = (char *) page;
 	int r = kstrtoul(p, 10, var);
 	if (r) {
-		LCERR();
+		LCERR("could not parse the digits");
 		return r;
 	}
 	return 0;
@@ -2205,10 +2205,15 @@ struct device_sysfs_entry {
 static ssize_t device_attr_show(struct kobject *kobj, struct attribute *attr,
 				char *page)
 {
-	struct lc_device *device =
-		container_of(kobj, struct lc_device, kobj);
-	struct device_sysfs_entry *entry = to_device(attr);
+	struct lc_device *device;
 
+	struct device_sysfs_entry *entry = to_device(attr);
+	if (!entry->show) {
+		LCERR();
+		return -EIO;
+	}
+
+	device = container_of(kobj, struct lc_device, kobj);
 	return entry->show(device, page);
 }
 
@@ -2216,6 +2221,7 @@ static ssize_t device_attr_store(struct kobject *kobj, struct attribute *attr,
 				 const char *page, size_t len)
 {
 	struct lc_device *device;
+
 	struct device_sysfs_entry *entry = to_device(attr);
 	if (!entry->store) {
 		LCERR();
@@ -2588,17 +2594,23 @@ struct cache_sysfs_entry {
 static ssize_t cache_attr_show(struct kobject *kobj,
 			       struct attribute *attr, char *page)
 {
-	struct lc_cache *cache =
-		container_of(kobj, struct lc_cache, kobj);
-	struct cache_sysfs_entry *entry = to_cache(attr);
+	struct lc_cache *cache;
 
+	struct cache_sysfs_entry *entry = to_cache(attr);
+	if (!entry->show) {
+		LCERR();
+		return -EIO;
+	}
+
+	cache = container_of(kobj, struct lc_cache, kobj);
 	return entry->show(cache, page);
 }
 
 static ssize_t cache_attr_store(struct kobject *kobj, struct attribute *attr,
-		const char *page, size_t len)
+				const char *page, size_t len)
 {
 	struct lc_cache *cache;
+
 	struct cache_sysfs_entry *entry = to_cache(attr);
 	if (!entry->store) {
 		LCERR();

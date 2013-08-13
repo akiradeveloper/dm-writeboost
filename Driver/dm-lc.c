@@ -153,8 +153,8 @@ struct safe_io {
 	int err;
 	unsigned long err_bits;
 	struct dm_io_request *io_req;
-	struct dm_io_region *region;
 	unsigned num_regions;
+	struct dm_io_region *regions;
 };
 static struct workqueue_struct *safe_io_wq;
 
@@ -162,7 +162,8 @@ static void safe_io_proc(struct work_struct *work)
 {
 	struct safe_io *io = container_of(work, struct safe_io, work);
 	io->err_bits = 0;
-	io->err = dm_io(io->io_req, io->num_regions, io->region, &io->err_bits);
+	io->err = dm_io(io->io_req, io->num_regions, io->regions,
+			&io->err_bits);
 }
 
 /*
@@ -171,7 +172,7 @@ static void safe_io_proc(struct work_struct *work)
  */
 static int dm_safe_io_internal(
 		struct dm_io_request *io_req,
-		struct dm_io_region *region, unsigned num_regions,
+		unsigned num_regions, struct dm_io_region *regions,
 		unsigned long *err_bits, bool thread, int lineno)
 {
 	int err;
@@ -180,7 +181,7 @@ static int dm_safe_io_internal(
 	if (thread) {
 		struct safe_io io = {
 			.io_req = io_req,
-			.region = region,
+			.regions = regions,
 			.num_regions = num_regions,
 		};
 
@@ -190,29 +191,36 @@ static int dm_safe_io_internal(
 		flush_work(&io.work);
 
 		err = io.err;
-		*err_bits = io.err_bits;
+		if (err_bits)
+			*err_bits = io.err_bits;
 	} else {
-		err = dm_io(io_req, num_regions, region, err_bits);
+		err = dm_io(io_req, num_regions, regions, err_bits);
 	}
 
-	dev = region->bdev->bd_dev;
-	if (err || *err_bits) {
+	dev = regions->bdev->bd_dev;
+
+	/* dm_io routines permits NULL for err_bits pointer. */
+	if (err || (err_bits && *err_bits)) {
+		unsigned long eb;
+		if (!err_bits)
+			eb = (~(unsigned long)0);
+		else
+			eb = *err_bits;
 		LCERR("L%d err(%d, %lu), rw(%d), sector(%lu), dev(%u:%u)",
-		      lineno, err, *err_bits,
-		      io_req->bi_rw, region->sector,
+		      lineno, err, eb,
+		      io_req->bi_rw, regions->sector,
 		      MAJOR(dev), MINOR(dev));
 	}
 
 	return err;
 }
-unsigned long err_bits_ignored;
-#define dm_safe_io(io_req, region, num_regions, thread) \
-	dm_safe_io_internal((io_req), (region), (num_regions), \
-			    &err_bits_ignored, (thread), __LINE__)
+#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
+	dm_safe_io_internal((io_req), (num_regions), (regions), \
+			    (err_bits), (thread), __LINE__)
 
 static void dm_safe_io_retry_internal(
 		struct dm_io_request *io_req,
-		struct dm_io_region *region, unsigned num_regions,
+		unsigned num_regions, struct dm_io_region *regions,
 		bool thread, int lineno)
 {
 	int err, count = 0;
@@ -221,10 +229,10 @@ static void dm_safe_io_retry_internal(
 
 retry_io:
 	err_bits = 0;
-	err = dm_safe_io_internal(io_req, region, num_regions, &err_bits,
+	err = dm_safe_io_internal(io_req, num_regions, regions, &err_bits,
 				  thread, lineno);
 
-	dev = region->bdev->bd_dev;
+	dev = regions->bdev->bd_dev;
 	if (err || err_bits) {
 		count++;
 		LCWARN("L%d count(%d)", lineno, count);
@@ -234,15 +242,15 @@ retry_io:
 	}
 
 	if (count) {
-		LCINFO("L%d rw(%d), sector(%lu), dev(%u:%u)",
+		LCWARN("L%d rw(%d), sector(%lu), dev(%u:%u)",
 		       lineno,
-		       io_req->bi_rw, region->sector,
+		       io_req->bi_rw, regions->sector,
 		       MAJOR(dev), MINOR(dev));
 	}
 }
-#define dm_safe_io_retry(io_req, region, num_regions, thread) \
-	dm_safe_io_retry_internal((io_req), (region), \
-				  (num_regions), (thread), __LINE__)
+#define dm_safe_io_retry(io_req, num_regions, regions, thread) \
+	dm_safe_io_retry_internal((io_req), (num_regions), (regions), \
+				  (thread), __LINE__)
 
 /*
  * device_id = 0
@@ -821,7 +829,7 @@ static void flush_proc(struct work_struct *work)
 			.count = (seg->length + 1) << 3,
 		};
 
-		dm_safe_io_retry(&io_req, &region, 1, false);
+		dm_safe_io_retry(&io_req, 1, &region, false);
 
 		cache->last_flushed_segment_id = seg->global_id;
 
@@ -942,7 +950,7 @@ static void migrate_mb(struct lc_cache *cache, struct segment_header *seg,
 			.count = (1 << 3),
 		};
 
-		dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
+		dm_safe_io_retry(&io_req_r, 1, &region_r, thread);
 
 		io_req_w = (struct dm_io_request) {
 			.client = lc_io_client,
@@ -956,7 +964,7 @@ static void migrate_mb(struct lc_cache *cache, struct segment_header *seg,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
-		dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
+		dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
 
 		kfree(buf);
 	} else {
@@ -985,7 +993,7 @@ static void migrate_mb(struct lc_cache *cache, struct segment_header *seg,
 				.sector = src,
 				.count = 1,
 			};
-			dm_safe_io_retry(&io_req_r, &region_r, 1, thread);
+			dm_safe_io_retry(&io_req_r, 1, &region_r, thread);
 
 			io_req_w = (struct dm_io_request) {
 				.client = lc_io_client,
@@ -999,7 +1007,7 @@ static void migrate_mb(struct lc_cache *cache, struct segment_header *seg,
 				.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
-			dm_safe_io_retry(&io_req_w, &region_w, 1, thread);
+			dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
 		}
 		kfree(buf);
 	}
@@ -1056,7 +1064,7 @@ static void submit_migrate_io(struct lc_cache *cache,
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
-			dm_safe_io_retry(&io_req_w, &region_w, 1, false);
+			dm_safe_io_retry(&io_req_w, 1, &region_w, false);
 		} else {
 			for (j = 0; j < 8; j++) {
 				bool b = dirty_bits & (1 << j);
@@ -1078,7 +1086,7 @@ static void submit_migrate_io(struct lc_cache *cache,
 					.count = 1,
 				};
 				dm_safe_io_retry(
-					&io_req_w, &region_w, 1, false);
+					&io_req_w, 1, &region_w, false);
 			}
 		}
 	}
@@ -1105,7 +1113,7 @@ static void memorize_dirty_state(struct lc_cache *cache,
 		.sector = seg->start_sector + (1 << 3),
 		.count = seg->length << 3,
 	};
-	dm_safe_io_retry(&io_req_r, &region_r, 1, false);
+	dm_safe_io_retry(&io_req_r, 1, &region_r, false);
 
 	/*
 	 * We take snapshot of the dirtiness in the segments.
@@ -1344,7 +1352,7 @@ static void commit_super_block(struct lc_cache *cache)
 		.sector = 0,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, &region, 1, true);
+	dm_safe_io_retry(&io_req, 1, &region, true);
 	kfree(buf);
 }
 
@@ -1373,7 +1381,7 @@ static int __must_check read_superblock_device(struct superblock_device *dest,
 		.sector = 0,
 		.count = 1,
 	};
-	r = dm_safe_io(&io_req, &region, 1, true);
+	r = dm_safe_io(&io_req, 1, &region, NULL, true);
 	if (r) {
 		LCERR();
 		goto bad_io;
@@ -1414,7 +1422,7 @@ static int __must_check read_segment_header_device(
 		.sector = calc_segment_header_start(segment_idx),
 		.count = (1 << 3),
 	};
-	r = dm_safe_io(&io_req, &region, 1, false);
+	r = dm_safe_io(&io_req, 1, &region, NULL, false);
 	if (r) {
 		LCERR();
 		goto bad_io;
@@ -1686,7 +1694,7 @@ static int __must_check format_cache_device(struct dm_dev *dev)
 		.sector = 0,
 		.count = 1,
 	};
-	r = dm_safe_io(&io_req_sup, &region_sup, 1, false);
+	r = dm_safe_io(&io_req_sup, 1, &region_sup, NULL, false);
 	kfree(buf);
 
 	if (r) {
@@ -1717,7 +1725,7 @@ static int __must_check format_cache_device(struct dm_dev *dev)
 			.sector = calc_segment_header_start(i),
 			.count = (1 << 3),
 		};
-		r = dm_safe_io(&io_req_seg, &region_seg, 1, false);
+		r = dm_safe_io(&io_req_seg, 1, &region_seg, NULL, false);
 		if (r) {
 			LCERR();
 			break;
@@ -1803,7 +1811,7 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 			.count = 1,
 		};
 
-		dm_safe_io_retry(&io_req, &region, 1, true);
+		dm_safe_io_retry(&io_req, 1, &region, true);
 	}
 	kfree(buf);
 }

@@ -2193,6 +2193,14 @@ static int var_store(unsigned long *var, const char *page)
 	return 0;
 }
 
+#define validate_cond(cond) \
+	do { \
+		if (!(cond)) { \
+			LCERR("violated %s", #cond); \
+			return -EINVAL; \
+		} \
+	} while (false)
+
 static struct kobject *devices_kobj;
 
 struct device_sysfs_entry {
@@ -2276,10 +2284,8 @@ static ssize_t migrate_threshold_store(struct lc_device *device,
 		LCERR();
 		return r;
 	}
-	if (x < 0 || x > 100) {
-		LCERR();
-		return -EINVAL;
-	}
+	validate_cond(0 <= x || x <= 100);
+
 	device->migrate_threshold = x;
 	return count;
 }
@@ -2636,6 +2642,7 @@ static ssize_t commit_super_block_interval_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+	validate_cond(0 <= x);
 
 	cache->commit_super_block_interval = x;
 	return count;
@@ -2663,10 +2670,7 @@ static ssize_t nr_max_batched_migration_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
-	if (x < 1) {
-		LCERR();
-		return -EINVAL;
-	}
+	validate_cond(1 <= x);
 
 	cache->nr_max_batched_migration = x;
 	return count;
@@ -2693,6 +2697,7 @@ static ssize_t allow_migrate_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+	validate_cond(x == 0 || x == 1);
 
 	cache->allow_migrate = x;
 	return count;
@@ -2718,6 +2723,7 @@ static ssize_t force_migrate_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+	validate_cond(x == 0 || x == 1);
 
 	cache->force_migrate = x;
 	return count;
@@ -2743,6 +2749,7 @@ static ssize_t update_interval_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+	validate_cond(0 <= x);
 
 	cache->update_interval = x;
 	return count;
@@ -2770,6 +2777,7 @@ static ssize_t flush_current_buffer_interval_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+	validate_cond(0 <= x);
 
 	cache->flush_current_buffer_interval = x;
 	return count;
@@ -2796,10 +2804,7 @@ static ssize_t commit_super_block_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
-	if (x < 1) {
-		LCERR();
-		return -EINVAL;
-	}
+	validate_cond(x == 1);
 
 	mutex_lock(&cache->io_lock);
 	commit_super_block(cache);
@@ -2828,10 +2833,7 @@ static ssize_t flush_current_buffer_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
-	if (x < 1) {
-		LCERR();
-		return -EINVAL;
-	}
+	validate_cond(x == 1);
 
 	flush_current_buffer_sync(cache);
 	return count;
@@ -2877,6 +2879,7 @@ static ssize_t barrier_deadline_ms_store(struct lc_cache *cache,
 		LCERR();
 		return r;
 	}
+	validate_cond(1 <= x);
 
 	cache->barrier_deadline_ms = x;
 	return count;

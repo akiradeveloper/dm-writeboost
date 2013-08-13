@@ -477,7 +477,7 @@ struct lc_cache {
 	size_t htsize;
 	struct ht_head *null_head;
 
-	cache_nr cursor; /* Index that has written */
+	cache_nr cursor; /* Index that has been written the most lately */
 	struct segment_header *current_seg;
 	struct writebuffer *current_wb;
 	struct writebuffer *wb_pool;
@@ -489,27 +489,27 @@ struct lc_cache {
 	/*
 	 * For Flush daemon
 	 */
+	struct work_struct flush_work;
+	struct workqueue_struct *flush_wq;
 	spinlock_t flush_queue_lock;
 	struct list_head flush_queue;
-	struct work_struct flush_work;
 	wait_queue_head_t flush_wait_queue;
-	struct workqueue_struct *flush_wq;
 
 	/*
 	 * For deferred ack for barriers.
 	 */
+	struct work_struct barrier_deadline_work;
 	struct timer_list barrier_deadline_timer;
 	struct bio_list barrier_ios;
 	unsigned long barrier_deadline_ms;
-	struct work_struct barrier_deadline_work;
 
 	/*
 	 * For Migration daemon
 	 */
+	struct work_struct migrate_work;
+	struct workqueue_struct *migrate_wq;
 	bool allow_migrate;
 	bool force_migrate;
-	struct workqueue_struct *migrate_wq;
-	struct work_struct migrate_work;
 
 	/*
 	 * For migration
@@ -2957,8 +2957,8 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	if (!strcasecmp(cmd, "format_cache_device")) {
 		int r;
 		struct dm_dev *dev;
-		if (dm_get_device(ti, argv[1],
-				  dm_table_get_mode(ti->table), &dev)) {
+		if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+				  &dev)) {
 			LCERR();
 			return -EINVAL;
 		}

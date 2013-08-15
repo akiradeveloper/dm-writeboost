@@ -2328,6 +2328,21 @@ static struct kobj_type device_ktype = {
 	.release = device_release,
 };
 
+static int parse_cache_id(char *s, u8 *cache_id)
+{
+	unsigned id;
+	if (sscanf(s, "%u", &id) != 1) {
+		LCERR();
+		return -EINVAL;
+	}
+	if (id >= LC_NR_SLOTS) {
+		LCERR();
+		return -EINVAL;
+	}
+	*cache_id = id;
+	return 0;
+}
+
 /*
  * <device-id> <path> <cache-id>
  */
@@ -2335,7 +2350,8 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r = 0;
 	struct lc_device *lc;
-	unsigned device_id, cache_id;
+	unsigned device_id;
+	u8 cache_id;
 	struct dm_dev *dev;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
@@ -2367,9 +2383,15 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		r = -EINVAL;
 		goto bad_device_id;
 	}
+	if (device_id >= LC_NR_SLOTS) {
+		LCERR();
+		r = -EINVAL;
+		goto bad_device_id;
+	}
 	lc->id = device_id;
 
-	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)) {
+	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+			  &dev)) {
 		LCERR();
 		r = -EINVAL;
 		goto bad_get_device;
@@ -2377,16 +2399,16 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	lc->device = dev;
 
 	lc->cache = NULL;
-	if (sscanf(argv[2], "%u", &cache_id) != 1) {
+	cache_id = 0;
+	r = parse_cache_id(argv[2], &cache_id);
+	if (r) {
 		LCERR();
-		r = -EINVAL;
 		goto bad_cache_id;
 	}
 	if (cache_id) {
 		struct lc_cache *cache = lc_caches[cache_id];
 		if (!cache) {
-			LCERR("cache is not set for id(%u)",
-			      cache_id);
+			LCERR("cache is not set for id(%u)", cache_id);
 			goto bad_no_cache;
 		}
 		lc->cache = lc_caches[cache_id];
@@ -2994,12 +3016,12 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	 * cache device to operate.
 	 */
 	if (!strcasecmp(cmd, "switch_to")) {
-		unsigned id;
-		if (sscanf(argv[1], "%u", &id) != 1) {
+		u8 id;
+		int r = parse_cache_id(argv[1], &id);
+		if (r) {
 			LCERR();
-			return -EINVAL;
+			return r;
 		}
-
 		cache_id_ptr = id;
 		return 0;
 	}

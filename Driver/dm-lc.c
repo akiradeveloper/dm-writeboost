@@ -2367,9 +2367,15 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		r = -EINVAL;
 		goto bad_device_id;
 	}
+	if (device_id >= LC_NR_SLOTS) {
+		LCERR();
+		r = -EINVAL;
+		goto bad_device_id;
+	}
 	lc->id = device_id;
 
-	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table), &dev)) {
+	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+			  &dev)) {
 		LCERR();
 		r = -EINVAL;
 		goto bad_get_device;
@@ -2382,11 +2388,15 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		r = -EINVAL;
 		goto bad_cache_id;
 	}
+	if (cache_id >= LC_NR_SLOTS) {
+		LCERR();
+		r = -EINVAL;
+		goto bad_cache_id;
+	}
 	if (cache_id) {
 		struct lc_cache *cache = lc_caches[cache_id];
 		if (!cache) {
-			LCERR("cache is not set for id(%u)",
-			      cache_id);
+			LCERR("cache is not set for id(%u)", cache_id);
 			goto bad_no_cache;
 		}
 		lc->cache = lc_caches[cache_id];
@@ -2996,6 +3006,10 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 	if (!strcasecmp(cmd, "switch_to")) {
 		unsigned id;
 		if (sscanf(argv[1], "%u", &id) != 1) {
+			LCERR();
+			return -EINVAL;
+		}
+		if (id >= LC_NR_SLOTS) {
 			LCERR();
 			return -EINVAL;
 		}

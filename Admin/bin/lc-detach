@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from argparse import ArgumentParser
 
 import lc_admin.dirnode as dirnode
@@ -29,13 +30,13 @@ interrupted = False
 
 while True:
 	try:
-		nr = device.nr_dirty_caches()
-		while nr:
+		nr = lambda : device.nr_dirty_caches()
+		while nr():
 			if interrupted:
 				device.unlock()
 				sys.exit()
 
-			print("could not detach the device. %d caches are still dirty remained." % (nr))
+			print("could not detach the device. %d caches are still dirty remained." % (nr()))
 			time.sleep(1)
 
 		print("no dirty cache remained in the device")	

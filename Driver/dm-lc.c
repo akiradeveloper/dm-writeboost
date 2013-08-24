@@ -1302,7 +1302,7 @@ static void migrate_proc(struct work_struct *work)
 		/*
 		 * (Locking)
 		 * Only line of code changes
-		 * last_migrate_segment_id in runtime.
+		 * last_migrate_segment_id during runtime.
 		 */
 		cache->last_migrated_segment_id += nr_mig;
 
@@ -1646,7 +1646,9 @@ static size_t calc_nr_segments(struct dm_dev *dev)
 	sector_t devsize = dm_devsize(dev);
 
 	/*
-	 * Disk format:
+	 * Disk format
+	 *
+	 * Overall:
 	 * superblock(1MB) [segment(1MB)]+
 	 * We reserve the first segment (1MB) as the superblock.
 	 *
@@ -1964,6 +1966,21 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 	k = ht_hash(cache, &key);
 	head = arr_at(cache->htable, k);
 
+	/*
+	 * (Locking)
+	 * Why mutex?
+	 *
+	 * The reason we use mutex instead of rw_semaphore
+	 * that can allow truely concurrent read access
+	 * is that mutex is even lighter than rw_semaphore.
+	 * Since dm-lc is a real performance centric software
+	 * the overhead of rw_semaphore is crucial.
+	 * All in all,
+	 * since exclusive region in read path is enough small
+	 * and cheap, using rw_semaphore and let the reads
+	 * execute concurrently won't improve the performance
+	 * as much as one expects.
+	 */
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if (mb) {
@@ -1997,7 +2014,20 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 				migrate_buffered_mb(cache, mb, dirty_bits);
 
 			/*
-			 * Dirtiness of a live cache:
+			 * Cache class
+			 * Live and Stable
+			 *
+			 * Live:
+			 * The cache is on the RAM buffer.
+			 *
+			 * Stable:
+			 * The cache is not on the RAM buffer
+			 * but at least queued in flush_queue.
+			 */
+
+			/*
+			 * (Locking)
+			 * Dirtiness of a live cache
 			 *
 			 * We can assume dirtiness of a cache only increase
 			 * when it is on the buffer, we call this cache is live.
@@ -2021,7 +2051,8 @@ static int lc_map(struct dm_target *ti, struct bio *bio
 		} else {
 
 			/*
-			 * Dirtiness of a stable cache:
+			 * (Locking)
+			 * Dirtiness of a stable cache
 			 *
 			 * Unlike the live caches that don't
 			 * fluctuate the dirtiness,
@@ -2452,7 +2483,6 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 
 	/*
-	 * Note:
 	 * Reference to the mapped_device
 	 * is used to show device name (major:minor).
 	 * major:minor is used in admin scripts
@@ -2491,8 +2521,7 @@ static int lc_message(struct dm_target *ti, unsigned argc, char **argv)
 	char *cmd = argv[0];
 
 	/*
-	 * We must separate
-	 * these add/remove sysfs code from .ctr
+	 * We must separate these add/remove sysfs code from .ctr
 	 * for a very complex reason.
 	 */
 	if (!strcasecmp(cmd, "add_sysfs")) {

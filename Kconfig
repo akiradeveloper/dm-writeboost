@@ -3,6 +3,6 @@ config DM_LC
 	depends on BLK_DEV_DM
 	default y
 	---help---
-	  dm-lc is a cache layer that tranparently
-	  batches the random writes into a big sequential write
-	  to the designated cache device in Log-structured manner.
+	  A cache layer that
+	  batches random writes into a big sequential write
+	  to a cache device in Log-structured manner.

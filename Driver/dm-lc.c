@@ -2382,14 +2382,14 @@ static int parse_cache_id(char *s, u8 *cache_id)
  * that will result in code dedup
  * in this constructor and switch_to message.
  *
- * The reason why this constructor takes cache-id
- * is to cooperate with the output of `dmsetup table`,
- * that is, dmsetup table | dmsetup load should clone
- * the logical device.
- * This is an implicit rule in device-mapper
- * and dm-lc follows it.
+ * The reason this constructor takes cache-id
+ * is to nicely pipe with dmsetup table that is,
+ * dmsetup table SRC | dmsetup create DEST
+ * should clone the logical device.
+ * This is considered to be an implicit rule
+ * in device-mapper for dm-lc to follow.
  * Other non-essential tunable parameters
- * will not be cloned because that is too much.
+ * will not be cloned.
  */
 static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {

@@ -280,11 +280,12 @@ struct lc_device {
 typedef u8 cache_id;
 
 /*
- * dm-lc can't manange
- * more than (1 << 8)
+ * dm-lc is able to manange
+ * only (1 << 7) - 1
  * virtual devices and cache devices.
+ * id = 0 are reserved for special purposes.
  */
-#define LC_NR_SLOTS ((1 << 8) - 1)
+#define LC_NR_SLOTS (1 << 7)
 
 cache_id cache_id_ptr;
 

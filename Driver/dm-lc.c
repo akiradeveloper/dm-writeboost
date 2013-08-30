@@ -2624,7 +2624,7 @@ lc_status(
 
 static struct target_type lc_target = {
 	.name = "lc",
-	.version = {1, 0, 0},
+	.version = {0, 1, 0},
 	.module = THIS_MODULE,
 	.map = lc_map,
 	.ctr = lc_ctr,
@@ -3392,7 +3392,7 @@ lc_mgr_status(
 
 static struct target_type lc_mgr_target = {
 	.name = "lc-mgr",
-	.version = {1, 0, 0},
+	.version = {0, 1, 0},
 	.module = THIS_MODULE,
 	.map = lc_mgr_map,
 	.ctr = lc_mgr_ctr,

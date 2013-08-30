@@ -1,0 +1,9 @@
+TODO:
+    - Get feedback from 3rd party users.
+    - Reviewed by Mike Snitzer.
+    - Audit userspace interfaces to make sure they are sane.
+    -- Make them like other targets. 
+    - Fix document as other targets.
+
+Please send patches to Greg Kroah-Hartman and Cc:
+Akira Hayakawa <ruby.wktk@gmail.com>

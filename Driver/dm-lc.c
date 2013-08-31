@@ -2436,10 +2436,10 @@ static int lc_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	lc->id = device_id;
 
-	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
-			  &dev)) {
-		LCERR();
-		r = -EINVAL;
+	r = dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+			  &dev);
+	if (r) {
+		LCERR("%d", r);
 		goto bad_get_device;
 	}
 	lc->device = dev;

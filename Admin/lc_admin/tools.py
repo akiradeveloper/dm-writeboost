@@ -9,7 +9,7 @@ class Backing:
 		
 		self.util = 100
 		self.data_old = None
-		
+
 	def path(self):
 		return "/dev/%s" % (dirnode.name(self.block_node))
 		
@@ -38,8 +38,11 @@ class Device:
 		self.lc_node = dirnode.Dirnode("/sys/module/dm_lc/devices/%d" % (device_id))
 		major, minor = list(map(int, self.lc_node.dev.split(":")))
 		self.block_node = dirnode.Dirnode("/sys/block/dm-%d" % (minor))
-		self.backing = Backing(self.lc_node.device) # wrong
+		self.backing = Backing(self.lc_node.device)
 		
+	def no(self):
+		return str.strip(self.lc_node.device_no)
+
 	def dm_name(self):
 		"""
 		dm name like perflv, v1-cache3g ...

@@ -48,7 +48,7 @@ while True:
 	finally:
 
 		load_command = "echo 0 %d lc %d %s 0 | dmsetup reload %s" % \
-				(device.size(), device_id, device.backing.path(), device.dm_name())
+				(device.size(), device_id, device.no(), device.dm_name())
 
 		os.system("dmsetup message %s 0 remove_sysfs" % (device.dm_name()))
 		os.system(load_command)

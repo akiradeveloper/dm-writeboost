@@ -28,7 +28,7 @@ if(device.cache_id()):
 			
 # Note changed. load -> reload
 load_command = "echo 0 %d lc %d %s %d | dmsetup reload %s" % \
-				(device.size(), device_id, device.backing.path(), cache_id, device.dm_name())
+				(device.size(), device_id, device.no(), cache_id, device.dm_name())
 print("attach command: %s" % (load_command))
 
 remove_command = "dmsetup message %s 0 remove_sysfs" % (device.dm_name())

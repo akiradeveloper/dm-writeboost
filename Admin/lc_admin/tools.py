@@ -2,6 +2,8 @@ import os
 import psutil
 import dirnode
 
+from os.path import basename
+
 class Backing:
 
 	def __init__(self, block_node):
@@ -10,12 +12,9 @@ class Backing:
 		self.util = 100
 		self.data_old = None
 
-	def path(self):
-		return "/dev/%s" % (dirnode.name(self.block_node))
-		
 	def update(self, interval):	
 		print("backing update interval:%d" % (interval))
-		name = dirnode.name(self.block_node)
+		name = basename(self.block_node._path_)
 		data_new = psutil.disk_io_counters(perdisk=True)[name]
 		
 		print(self.data_old)
@@ -41,11 +40,15 @@ class Device:
 		self.backing = Backing(self.lc_node.device)
 		
 	def no(self):
+		"""
+		major:minor
+		"""
 		return str.strip(self.lc_node.device_no)
 
 	def dm_name(self):
 		"""
-		dm name like perflv, v1-cache3g ...
+		dm name like
+		perflv, v1-cache3g ...
 		"""
 		return str.strip(self.block_node.dm.name)
 		

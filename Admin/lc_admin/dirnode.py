@@ -5,7 +5,7 @@ Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
 """
 
 import os
-from os.path import isdir, isfile, join, realpath, basename
+from os.path import isdir, isfile, join, realpath
 
 __all__ = ['Dirnode']
 
@@ -15,9 +15,6 @@ def system(command):
 
 def write(node, member, val):
 	system("echo %s > %s\/%s" % (str(val), node._path_, member))
-
-def name(node):
-	return basename(node._path_)
 
 class Dirnode(object):
 
@@ -74,7 +71,6 @@ if __name__ == '__main__':
 	print(d)
 	print(d.docs)
 	print(path(d))
-	print(name(d))
 
 	for e in d:
 		print(e)

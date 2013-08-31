@@ -1,21 +1,34 @@
 import os
-import psutil
 import dirnode
 
 from os.path import basename
+from collections import namedtuple
+
+T = namedtuple("T", "name read_time write_time")
+def get_diskstats():
+	f = open("/proc/diskstats")
+	m = {}
+	for line in f.readlines():
+		L = line.split()
+		major = L[0]
+		minor = L[1]
+		t = T(L[2], int(L[6]), int(L[10]))
+		m["%s:%s" % (major, minor)] = t
+	return m
 
 class Backing:
 
-	def __init__(self, block_node):
-		self.block_node = block_node
+	def __init__(self, no):
+		self.no = no
 		
 		self.util = 100
 		self.data_old = None
 
 	def update(self, interval):	
 		print("backing update interval:%d" % (interval))
-		name = basename(self.block_node._path_)
-		data_new = psutil.disk_io_counters(perdisk=True)[name]
+
+		diskstats = get_diskstats()
+		data_new = diskstats[self.no]
 		
 		print(self.data_old)
 		
@@ -37,7 +50,7 @@ class Device:
 		self.lc_node = dirnode.Dirnode("/sys/module/dm_lc/devices/%d" % (device_id))
 		major, minor = list(map(int, self.lc_node.dev.split(":")))
 		self.block_node = dirnode.Dirnode("/sys/block/dm-%d" % (minor))
-		self.backing = Backing(self.lc_node.device)
+		self.backing = Backing(self.no())
 		
 	def no(self):
 		"""

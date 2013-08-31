@@ -2,8 +2,12 @@ TODO:
     - Get feedback from 3rd party users.
     - Reviewed by Mike Snitzer.
     - Audit userspace interfaces to make sure they are sane.
-    -- Make them like other targets. 
-    - Fix document as other targets.
+      Should use the same approach that is proven successful.
+    - Fix document.
+      Should document the kernel interfaces
+      rather than particular userspace tools.
+    - Add more comments inline
+      to explain what it does and how it works.
 
-Please send patches to Greg Kroah-Hartman and Cc:
+Please send patches to Greg Kroah-Hartman <gregkh@linuxfoundation.org> and Cc:
 Akira Hayakawa <ruby.wktk@gmail.com>

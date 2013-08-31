@@ -2302,6 +2302,16 @@ static struct device_sysfs_entry dev_entry = {
 	.show = dev_show,
 };
 
+static ssize_t device_no_show(struct lc_device *lc, char *page)
+{
+	return sprintf(page, "%s\n", lc->device->name);
+}
+
+static struct device_sysfs_entry device_no_entry = {
+	.attr = { .name = "device_no", .mode = S_IRUGO },
+	.show = device_no_show,
+};
+
 static ssize_t migrate_threshold_show(struct lc_device *device, char *page)
 {
 	return var_show(device->migrate_threshold, (page));
@@ -2342,6 +2352,7 @@ static struct device_sysfs_entry nr_dirty_caches_entry = {
 static struct attribute *device_default_attrs[] = {
 	&cache_id_entry.attr,
 	&dev_entry.attr,
+	&device_no_entry.attr,
 	&migrate_threshold_entry.attr,
 	&nr_dirty_caches_entry.attr,
 	NULL,

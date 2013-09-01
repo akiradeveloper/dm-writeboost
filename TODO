@@ -4,8 +4,6 @@ TODO:
     - Audit userspace interfaces to make sure they are sane.
       Should use the same approach that is proven successful.
     - Fix document.
-      Should document the kernel interfaces
-      rather than particular userspace tools.
     - Add more comments inline
       to explain what it does and how it works.
 

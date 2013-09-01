@@ -38,7 +38,7 @@
  * By default,
  * we allocate 64 * 1MB RAM buffers statically.
  */
-#define NR_WB_POOL 64
+#define NR_RAMBUF_POOL 64
 
 /*
  * The first 4KB (1<<3 sectors) in segment
@@ -359,7 +359,7 @@ struct metablock_device {
 	u32 lap;
 } __packed;
 
-struct writebuffer {
+struct rambuffer {
 	void *data;
 	struct completion done;
 };
@@ -480,8 +480,8 @@ struct lc_cache {
 
 	cache_nr cursor; /* Index that has been written the most lately */
 	struct segment_header *current_seg;
-	struct writebuffer *current_wb;
-	struct writebuffer *wb_pool;
+	struct rambuffer *current_rambuf;
+	struct rambuffer *rambuf_pool;
 
 	size_t last_migrated_segment_id;
 	size_t last_flushed_segment_id;
@@ -778,7 +778,7 @@ static void prepare_segment_header_device(struct segment_header_device *dest,
 struct flush_context {
 	struct list_head flush_queue;
 	struct segment_header *seg;
-	struct writebuffer *wb;
+	struct rambuffer *rambuf;
 	struct bio_list barrier_ios;
 };
 
@@ -821,7 +821,7 @@ static void flush_proc(struct work_struct *work)
 			.bi_rw = WRITE,
 			.notify.fn = NULL,
 			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = ctx->wb->data,
+			.mem.ptr.addr = ctx->rambuf->data,
 		};
 
 		region = (struct dm_io_region) {
@@ -836,7 +836,7 @@ static void flush_proc(struct work_struct *work)
 
 		complete_all(&seg->flush_done);
 
-		complete_all(&ctx->wb->done);
+		complete_all(&ctx->rambuf->done);
 
 		if (!bio_list_empty(&ctx->barrier_ios)) {
 			struct bio *bio;
@@ -852,11 +852,11 @@ static void flush_proc(struct work_struct *work)
 	}
 }
 
-static void prepare_meta_writebuffer(void *writebuffer,
-				     struct lc_cache *cache,
-				     struct segment_header *seg)
+static void prepare_meta_rambuffer(void *rambuffer,
+				   struct lc_cache *cache,
+				   struct segment_header *seg)
 {
-	prepare_segment_header_device(writebuffer, cache, seg);
+	prepare_segment_header_device(rambuffer, cache, seg);
 }
 
 static void queue_flushing(struct lc_cache *cache)
@@ -865,7 +865,7 @@ static void queue_flushing(struct lc_cache *cache)
 	struct segment_header *current_seg = cache->current_seg, *new_seg;
 	struct flush_context *ctx;
 	bool empty;
-	struct writebuffer *next_wb;
+	struct rambuffer *next_rambuf;
 	size_t next_id, n1 = 0, n2 = 0;
 
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
@@ -875,8 +875,8 @@ static void queue_flushing(struct lc_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
-	prepare_meta_writebuffer(cache->current_wb->data, cache,
-				 cache->current_seg);
+	prepare_meta_rambuffer(cache->current_rambuf->data, cache,
+			       cache->current_seg);
 
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
@@ -884,7 +884,7 @@ static void queue_flushing(struct lc_cache *cache)
 	ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
 	INIT_LIST_HEAD(&ctx->flush_queue);
 	ctx->seg = current_seg;
-	ctx->wb = cache->current_wb;
+	ctx->rambuf = cache->current_rambuf;
 
 	bio_list_init(&ctx->barrier_ios);
 	bio_list_merge(&ctx->barrier_ios, &cache->barrier_ios);
@@ -916,11 +916,11 @@ static void queue_flushing(struct lc_cache *cache)
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
 	new_seg->length = 0;
 
-	next_wb = cache->wb_pool + (next_id % NR_WB_POOL);
-	wait_for_completion(&next_wb->done);
-	INIT_COMPLETION(next_wb->done);
+	next_rambuf = cache->rambuf_pool + (next_id % NR_RAMBUF_POOL);
+	wait_for_completion(&next_rambuf->done);
+	INIT_COMPLETION(next_rambuf->done);
 
-	cache->current_wb = next_wb;
+	cache->current_rambuf = next_rambuf;
 
 	cache->current_seg = new_seg;
 }
@@ -1797,7 +1797,7 @@ static void migrate_buffered_mb(struct lc_cache *cache,
 		if (!bit_on)
 			continue;
 
-		src = cache->current_wb->data +
+		src = cache->current_rambuf->data +
 		      ((offset + i) << SECTOR_SHIFT);
 		memcpy(buf, src, 1 << SECTOR_SHIFT);
 
@@ -2177,7 +2177,7 @@ write_on_buffer:
 	start = s << SECTOR_SHIFT;
 	data = bio_data(bio);
 
-	memcpy(cache->current_wb->data + start, data, bio->bi_size);
+	memcpy(cache->current_rambuf->data + start, data, bio->bi_size);
 	atomic_dec(&seg->nr_inflight_ios);
 
 	if (bio->bi_rw & REQ_FUA) {
@@ -2996,33 +2996,33 @@ static struct kobj_type cache_ktype = {
 	.release = cache_release,
 };
 
-static int __must_check init_wb_pool(struct lc_cache *cache)
+static int __must_check init_rambuf_pool(struct lc_cache *cache)
 {
 	size_t i, j;
-	struct writebuffer *wb;
+	struct rambuffer *rambuf;
 
-	cache->wb_pool = kmalloc(sizeof(struct writebuffer) * NR_WB_POOL,
-				 GFP_KERNEL);
-	if (!cache->wb_pool) {
+	cache->rambuf_pool = kmalloc(sizeof(struct rambuffer) * NR_RAMBUF_POOL,
+			 	     GFP_KERNEL);
+	if (!cache->rambuf_pool) {
 		LCERR();
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < NR_WB_POOL; i++) {
-		wb = cache->wb_pool + i;
-		init_completion(&wb->done);
-		complete_all(&wb->done);
+	for (i = 0; i < NR_RAMBUF_POOL; i++) {
+		rambuf = cache->rambuf_pool + i;
+		init_completion(&rambuf->done);
+		complete_all(&rambuf->done);
 
-		wb->data = kmalloc(
+		rambuf->data = kmalloc(
 			1 << (LC_SEGMENTSIZE_ORDER + SECTOR_SHIFT),
 			GFP_KERNEL);
-		if (!wb->data) {
+		if (!rambuf->data) {
 			LCERR();
 			for (j = 0; j < i; j++) {
-				wb = cache->wb_pool + j;
-				kfree(wb->data);
+				rambuf= cache->rambuf_pool + j;
+				kfree(rambuf->data);
 			}
-			kfree(cache->wb_pool);
+			kfree(cache->rambuf_pool);
 			return -ENOMEM;
 		}
 	}
@@ -3030,15 +3030,15 @@ static int __must_check init_wb_pool(struct lc_cache *cache)
 	return 0;
 }
 
-static void free_wb_pool(struct lc_cache *cache)
+static void free_rambuf_pool(struct lc_cache *cache)
 {
-	struct writebuffer *wb;
+	struct rambuffer *rambuf;
 	size_t i;
-	for (i = 0; i < NR_WB_POOL; i++) {
-		wb = cache->wb_pool + i;
-		kfree(wb->data);
+	for (i = 0; i < NR_RAMBUF_POOL; i++) {
+		rambuf = cache->rambuf_pool + i;
+		kfree(rambuf->data);
 	}
-	kfree(cache->wb_pool);
+	kfree(cache->rambuf_pool);
 }
 
 static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
@@ -3146,16 +3146,16 @@ static int lc_mgr_message(struct dm_target *ti, unsigned int argc, char **argv)
 
 		kobject_uevent(&cache->kobj, KOBJ_ADD);
 
-		r = init_wb_pool(cache);
+		r = init_rambuf_pool(cache);
 		if (r) {
 			LCERR();
-			goto bad_init_wb_pool;
+			goto bad_init_rambuf_pool;
 		}
 		/*
 		 * Select arbitrary one
-		 * as the initial writebuffer.
+		 * as the initial rambuffer
 		 */
-		cache->current_wb = cache->wb_pool + 0;
+		cache->current_rambuf = cache->rambuf_pool + 0;
 
 		r = init_segment_header_array(cache);
 		if (r) {
@@ -3254,8 +3254,8 @@ bad_alloc_migrate_buffer:
 bad_alloc_ht:
 		kill_arr(cache->segment_header_array);
 bad_alloc_segment_header_array:
-		free_wb_pool(cache);
-bad_init_wb_pool:
+		free_rambuf_pool(cache);
+bad_init_rambuf_pool:
 		kobject_uevent(&cache->kobj, KOBJ_REMOVE);
 		sysfs_remove_link(&cache->kobj, "device");
 bad_device_lns:
@@ -3287,7 +3287,7 @@ bad_get_device:
 		kill_arr(cache->htable);
 		kill_arr(cache->segment_header_array);
 
-		free_wb_pool(cache);
+		free_rambuf_pool(cache);
 
 		kobject_uevent(&cache->kobj, KOBJ_REMOVE);
 		sysfs_remove_link(&cache->kobj, "device");
@@ -3310,11 +3310,11 @@ static size_t calc_static_memory_consumption(struct lc_cache *cache)
 {
 	size_t seg = sizeof(struct segment_header) * cache->nr_segments;
 	size_t ht = sizeof(struct ht_head) * cache->htsize;
-	size_t wb_pool = NR_WB_POOL << (LC_SEGMENTSIZE_ORDER + 9);
+	size_t rambuf_pool = NR_RAMBUF_POOL << (LC_SEGMENTSIZE_ORDER + 9);
 	size_t mig_buf = cache->nr_cur_batched_migration *
 			 (NR_CACHES_INSEG << 12);
 
-	return seg + ht + wb_pool + mig_buf;
+	return seg + ht + rambuf_pool + mig_buf;
 };
 
 static

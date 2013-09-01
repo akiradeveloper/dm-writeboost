@@ -8,6 +8,7 @@ setup(
 	author = 'Akira Hayakawa',
 	author_email = 'ruby.wktk@gmail.com',
 	packages = ['writeboost_admin'],
+	zip_safe = False,
 	scripts = [
 		'bin/writeboost-create',
 		'bin/writeboost-attach',
@@ -21,6 +22,5 @@ setup(
 	install_requires = [
 		'python-daemon',
 		'argparse',
-		'psutil',
 	],
 )

@@ -5,6 +5,7 @@ dmsetup create writeboost-mgr --table "0 1 writeboost-mgr"
 . ./config
 
 cd Admin
+python setup.py build
 python setup.py install
 cd -
 

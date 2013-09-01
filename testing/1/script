@@ -10,8 +10,8 @@ cd /mnt/perflv
 tar xvfz ${RUBY}.tar.gz
 cd ${RUBY}
 
-dmsetup message lc-mgr 0 switch_to 3
-dmsetup message lc-mgr 0 clear_stat
+dmsetup message writeboost-mgr 0 switch_to 3
+dmsetup message writeboost-mgr 0 clear_stat
 ./configure
 
 make -j 8

@@ -76,7 +76,7 @@ Discussion,
 RAID is a technique to parallelize number of devices for
 reliability and throughput but the shortcoming is RAID penalty.
 The write is relatively slow than read in RAID-ed storage system.
-This is also why dm-lc is desired.  
+This is also why dm-writeboost is desired.  
 - (B) Samsung's firmware is very smart. This is 76% of
 the sequential throughput shown in (C).  
 - (C) fio configuration is change to write
@@ -84,7 +84,7 @@ sequentially by 1MB for each write.
 Although Samsung's official specification sheet
 says that write throughput is 520MB/s but
 the result is different in my experiment.  
-- (D) A dominant performance factor in dm-lc configuration
+- (D) A dominant performance factor in dm-writeboost configuration
 is the size of segment. segment is the container for each log buffer.
 The bigger the buffer is, the throughput is likely to be higher
 because of these reason one, it decreases the overhead to create log
@@ -93,7 +93,7 @@ The result 259 MB/sec only loses 3% throughput
 compared to the sequetial throughput of the cache device 266 MB/sec 
 which is shown (C). This result shows that 
 the CPU overhead is very small because the implementation
-of dm-lc is very compact and sophisticated.  
+of dm-writeboost is very compact and sophisticated.  
 - (E) The applications in reality often submit sync writes
 which lead to embarrassing bios with REQ_FUA ro REQ_FLUSH flags.
 The size of segment is in tradeoff. The bigger the segment is
@@ -107,7 +107,7 @@ however still needs some improvements is for sure.
 There existing PCI-e SSD devices that performs
 more than 1 GB/sec write throughput like ioDrive.
 Because the relation between RAM buffer and the SSD device
-in dm-lc is like stream processing,
+in dm-writeboost is like stream processing,
 we can assume the theoritical maximum throughput
 with a fast enough cache device in imagination which
 we call MaxSSD.

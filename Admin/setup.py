@@ -2,21 +2,21 @@
 from setuptools import setup
 
 setup(
-	name = 'lc-admin',
+	name = 'writeboost-admin',
 	version = '1.0',
-	description = 'Tools for dm-lc admins',
+	description = 'Tools for dm-writeboost admins',
 	author = 'Akira Hayakawa',
 	author_email = 'ruby.wktk@gmail.com',
-	packages = ['lc_admin'],
+	packages = ['writeboost_admin'],
 	scripts = [
-		'bin/lc-create',
-		'bin/lc-attach',
-		'bin/lc-detach',
-		'bin/lc-remove',
-		'bin/lc-format-cache',
-		'bin/lc-resume-cache',
-		'bin/lc-free-cache',
-		'bin/lc-daemon',
+		'bin/writeboost-create',
+		'bin/writeboost-attach',
+		'bin/writeboost-detach',
+		'bin/writeboost-remove',
+		'bin/writeboost-format-cache',
+		'bin/writeboost-resume-cache',
+		'bin/writeboost-free-cache',
+		'bin/writeboost-daemon',
 	],
 	install_requires = [
 		'python-daemon',

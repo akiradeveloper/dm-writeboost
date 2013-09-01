@@ -1,17 +1,17 @@
 #!/bin/sh
 
-#lc-daemon start
+#writeboost-daemon start
 
-echo lc-detach ...
-lc-detach 5
+echo writeboost-detach ...
+writeboost-detach 5
 
-echo lc-remove ...
-lc-remove 5
+echo writeboost-remove ...
+writeboost-remove 5
 
-echo lc-daemon stop ...
-lc-daemon stop
+echo writeboost-daemon stop ...
+writeboost-daemon stop
 
-echo lc-free-cache ...
-lc-free-cache 3
+echo writeboost-free-cache ...
+writeboost-free-cache 3
 
-dmsetup remove lc-mgr
+dmsetup remove writeboost-mgr

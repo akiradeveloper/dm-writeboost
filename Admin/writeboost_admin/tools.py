@@ -1,3 +1,9 @@
+"""
+tools.py
+
+Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+"""
+
 import os
 import dirnode
 
@@ -47,8 +53,8 @@ class Device:
 	
 	def __init__(self, device_id):
 		self.device_id = device_id
-		self.lc_node = dirnode.Dirnode("/sys/module/dm_lc/devices/%d" % (device_id))
-		major, minor = list(map(int, self.lc_node.dev.split(":")))
+		self.wb_node = dirnode.Dirnode("/sys/module/dm_writeboost/devices/%d" % (device_id))
+		major, minor = list(map(int, self.wb_node.dev.split(":")))
 		self.block_node = dirnode.Dirnode("/sys/block/dm-%d" % (minor))
 		self.backing = Backing(self.no())
 		
@@ -56,7 +62,7 @@ class Device:
 		"""
 		major:minor
 		"""
-		return str.strip(self.lc_node.device_no)
+		return str.strip(self.wb_node.device_no)
 
 	def dm_name(self):
 		"""
@@ -69,16 +75,16 @@ class Device:
 		return int(self.block_node.size)
 		
 	def cache_id(self):
-		return int(self.lc_node.cache_id)
+		return int(self.wb_node.cache_id)
 
 	def migrate_threshold(self):
-		return int(self.lc_node.migrate_threshold)
+		return int(self.wb_node.migrate_threshold)
 
 	def nr_dirty_caches(self):
 		"""
 		nr dirty caches remained in cache.
 		"""
-		return int(self.lc_node.nr_dirty_caches)
+		return int(self.wb_node.nr_dirty_caches)
 
 	def lock(self):
 		os.system("dmsetup suspend %s" % (self.dm_name()))
@@ -89,38 +95,37 @@ class Device:
 class Cache:
 	def __init__(self, cache_id):
 		self.cache_id = cache_id
-		self.lc_node = dirnode.Dirnode("/sys/module/dm_lc/caches/%d" % (self.cache_id))
+		self.wb_node = dirnode.Dirnode("/sys/module/dm_writeboost/caches/%d" % (self.cache_id))
 		self.last_flushed_segment_id_cached = 0
 		
 	def update_interval(self):
-		return int(self.lc_node.update_interval)
+		return int(self.wb_node.update_interval)
 		
 	def force_migrate(self):
-		return int(self.lc_node.force_migrate)
+		return int(self.wb_node.force_migrate)
 
 	def flush_current_buffer_interval(self):
-		return int(self.lc_node.flush_current_buffer_interval)
+		return int(self.wb_node.flush_current_buffer_interval)
 
 	def last_flushed_segment_id(self):
-		return int(self.lc_node.last_flushed_segment_id)
+		return int(self.wb_node.last_flushed_segment_id)
 
 	def commit_super_block_interval(self):
-		return int(self.lc_node.commit_super_block_interval)
+		return int(self.wb_node.commit_super_block_interval)
 			
 def table():
 	t = {}
 	t[0] = [] 
 		
-	root = dirnode.Dirnode('/sys/')
+	root = dirnode.Dirnode('/sys/module/dm_writeboost')
 		
-	dm_lc = root.module.dm_lc
-	for _cache_id in dm_lc.caches:	
+	for _cache_id in root.caches:	
 		cache_id = int(_cache_id)
 		t[cache_id] = []
 			
-	for _device_id in dm_lc.devices:
+	for _device_id in root.devices:
 		device_id = int(_device_id)
-		_cache_id = dm_lc.devices[_device_id].cache_id
+		_cache_id = root.devices[_device_id].cache_id
 		cache_id = int(_cache_id)
 		t[cache_id].append(device_id)
 		

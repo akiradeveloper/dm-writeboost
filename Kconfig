@@ -1,4 +1,4 @@
-config DM_LC
+config DM_WRITEBOOST
 	tristate "Log-structured Caching (EXPERIMENTAL)"
 	depends on BLK_DEV_DM
 	default y

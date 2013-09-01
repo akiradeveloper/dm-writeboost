@@ -1,6 +1,6 @@
 #! /bin/sh
 
-export LC_ROOT=`pwd`
+export WB_ROOT=`pwd`
 
 # Note:
 # BACKING must be a LVM device only.

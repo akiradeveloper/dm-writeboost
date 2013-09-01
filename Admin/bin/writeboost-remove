@@ -3,7 +3,7 @@
 import os
 from argparse import ArgumentParser
 
-import lc_admin.tools as tools
+import writeboost_admin.tools as tools
 
 parser = ArgumentParser()
 parser.add_argument('device_id', type=int)
@@ -14,7 +14,7 @@ device = tools.Device(device_id)
 
 # This line makes sure that
 # this device is not bound to any cache.
-os.system("lc-detach %d" % (device_id))
+os.system("writeboost-detach %d" % (device_id))
 
 name = device.dm_name()
 os.system("dmsetup message %s 0 remove_sysfs" % name)

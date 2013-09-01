@@ -6,7 +6,7 @@ PWD := $(shell pwd)
 # EXTRA_CFLAGS += -O0 -DCONFIG_DM_DEBUG -fno-inline #-Wall
 # EXTRA_CFLAGS += -O2 -UCONFIG_DM_DEBUG
 
-obj-m := dm-lc.o
+obj-m := dm-writeboost.o
 
 all:
 	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) modules

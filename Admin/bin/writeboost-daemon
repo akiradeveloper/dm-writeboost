@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-lc_daemon.py
+writeboost-daemon
 
 Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
 """
@@ -16,13 +16,13 @@ from daemon.pidfile import PIDLockFile
 import time
 import psutil
 
-import lc_admin.dirnode as dirnode
-import lc_admin.tools as tools
+import writeboost_admin.dirnode as dirnode
+import writeboost_admin.tools as tools
 
 dc = DaemonContext(
 		pidfile = PIDLockFile('/tmp/lc_daemon.pid'),
-		stdout  = open('/var/log/lc_daemon_out.log', 'w', 0),
-		stderr  = open('/var/log/lc_daemon_err.log', 'w+'))
+		stdout  = open('/var/log/writeboost_daemon_out.log', 'w', 0),
+		stderr  = open('/var/log/writeboost_daemon_err.log', 'w+'))
 				
 class Daemon:
 	
@@ -64,12 +64,10 @@ class Daemon:
 		print("allow migrarte?")		
 		if b:		
 			print("yes")
-			# cache.lc_node.allow_migrate = 1
-			dirnode.write(cache.lc_node, "allow_migrate", 1)
+			dirnode.write(cache.wb_node, "allow_migrate", 1)
 		else:
 			print("no")
-			# cache.lc_node.allow_migrate = 0
-			dirnode.write(cache.lc_node, "allow_migrate", 0)
+			dirnode.write(cache.wb_node, "allow_migrate", 0)
 
 	def modulate_migration(self):
 		for cache_id in self.t.keys():		
@@ -100,8 +98,7 @@ class Daemon:
 				continue
 			
 			print("flush buffer (t:%d)" % (int(time.time())))
-			# cache.lc_node.flush_current_buffer = 1
-			dirnode.write(cache.lc_node, "flush_current_buffer", 1)
+			dirnode.write(cache.wb_node, "flush_current_buffer", 1)
 		return
 
 	def should_commit_super_block(self, cache):
@@ -124,8 +121,7 @@ class Daemon:
 				continue
 			
 			print("commit super block (t:%d)" % (int(time.time())))
-			# cache.lc_node.commit_super_block = 1
-			dirnode.write(cache.lc_node, "commit_super_block", 1)
+			dirnode.write(cache.wb_node, "commit_super_block", 1)
 		return
 
 	def loop(self):
@@ -138,9 +134,9 @@ class Daemon:
 			
 			time.sleep(1)
 
-def run_lc_daemon():
+def run_wb_daemon():
 	context = Daemon()
 	context.loop()
 
 with dc:
-	run_lc_daemon()
+	run_wb_daemon()

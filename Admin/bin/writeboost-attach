@@ -6,7 +6,7 @@ import sys
 import time
 from argparse import ArgumentParser
 
-import lc_admin.tools as tools
+import writeboost_admin.tools as tools
 
 parser = ArgumentParser()
 
@@ -27,7 +27,7 @@ if(device.cache_id()):
 	sys.exit("cache already attached.")
 			
 # Note changed. load -> reload
-load_command = "echo 0 %d lc %d %s %d | dmsetup reload %s" % \
+load_command = "echo 0 %d writeboost %d %s %d | dmsetup reload %s" % \
 				(device.size(), device_id, device.no(), cache_id, device.dm_name())
 print("attach command: %s" % (load_command))
 

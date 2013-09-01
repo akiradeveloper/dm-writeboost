@@ -13,4 +13,4 @@ args = parser.parse_args()
 #print(args.nobarrier)
 
 #os.system("dmsetup message lc-mgr 0 format_cache_device %s %d" % (args.path, args.buffersize))
-os.system("dmsetup message lc-mgr 0 format_cache_device %s" % (args.path))
+os.system("dmsetup message writeboost-mgr 0 format_cache_device %s" % (args.path))

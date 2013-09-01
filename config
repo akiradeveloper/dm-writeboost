@@ -2,8 +2,6 @@
 
 export WB_ROOT=`pwd`
 
-# Note:
-# BACKING must be a LVM device only.
 #BACKING=/dev/vg2/back18g
 #BACKING=/dev/vdd
 BACKING=/dev/vdd1

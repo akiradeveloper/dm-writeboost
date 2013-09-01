@@ -1,113 +1,59 @@
-dm-lc
-=====
-
-dm-lc provides write-back log-structured caching.
+dm-writeboost
+=============
+dm-writeboost provides write-back log-structured caching.
 It batches random writes into a big sequential write.
 
-1. Setup
-========
-dm-lc is composed of two target_type instances named lc and lc-mgr.
+dm-writeboost is composed of two target_type
+named writeboost and writeboost-mgr.
 
-- lc target is responsible for creating logical volumes and controlling ios.
-- lc-mgr target is reponsible for doing
+- writeboost target is responsible for
+  creating logical volumes and controlling ios.
+- writeboost-mgr target is reponsible for doing
   formatting/initializing/destructing cache devices.
-  Operating dm-lc through these native interfaces are not recommended.
 
-Nice userland tools are provided in
-	https://github.com/akiradeveloper/dm-lc
+1. Example
+==========
+This article shows show to create
+a logical volume named myLV
+backed by /dev/myBacking and
+using /dev/myCache as a cache device.
 
-To install the tools, cd Admin directory and run
-	python setup.py install
-and you are a dm-lc admin.
-
-2. Admin example
-================
-Let's create a logical volume named myLV
-backed by /dev/myVg/myBacking and
-uses /dev/myCache as a cache device.
-
-myLV |-- (backing store) /dev/myVg/myBacking
+myLV |-- (backing store) /dev/myBacking
      |-- (cache device)  /dev/myCache
 
-Note that backing store is limited to a LVM device
-in the current implementation.
+dmsetup create mgr --table "writeboost-mgr 0 1"
+dmsetup mgr 0 message format-cache /dev/myCache
+dmsetup mgr 0 message switch_to 3
+dmsetup mgr 0 message resume-cache /dev/myCache
+dmsetup create perflv 0 10000 writeboost 5 /dev/myBacking 3
 
-1. Format myCache
-Format the on-disk metadata blocks on a device.
-Be careful, this operation erases
-all the existing data on the cache device.
+2. Userland Tools
+=================
+Using dm-writeboost through said kernel interfaces
+is possible but not recommended.
+Instead, dm-writeboost provides nice userland tools
+that make it safer to manage the kernel module.
 
-	lc-format-cache /dev/myCache
+The userland tools is managed in Github.
+https://github.com/akiradeveloper/dm-writeboost
 
-2. Create myLV
-Create a logical volume simply backed by a existing volume.
-We give device ID 5 to the volume in this example.
+Also, quick-start script is provided in the repo.
+For the information, please read the README there.
 
-As of now, this operation create a logical volume
-with different name from the backing store.
-But some users don't want to change the name
-because the backing store is in operation
-and want to apply dm-lc on the fly.
-This can be technically realizable
-but I haven't implemented it at this time
-because it is too tricky.
+3. Sysfs Interfaces
+===================
+dm-writeboost provides
+sysfs interfaces to control the module behavior.
+The sysfs tree is located under /sys/module/dm_writeboost.
 
-	lc-create myLV 5 /dev/myVg/myBacking
-
-3. Resume myCache
-Resuming cache device builds in-memory structures
-such as a hashtable scanned from the on-disk metadata.
-We give cache ID 3 to the device in this example.
-
-Be careful,
-you MUST create all the LVs
-as the destinations of the dirty blocks on the cache device
-before this operation.
-Otherwise, the kernel may crash.
-
-	lc-resume 3 /dev/myCache
-
-4. Attach myCache to myLV
-To start caching writes submitted to the myLV,
-you must attach myLV to myCache.
-This can be done on the fly.
-
-	lc-attach 5 3
-
-5. Start userland daemon
-dm-lc provides daemon program that
-autonomously control the module behavior such as migration.
-
-	lc-daemon start
-
-6. Terminate myLV
-Safely terminating myLV already attached to myCache is fallible
-and that's one of the reasons dm-lc provides these admin tools.
-myLV can not detach from myCache
-until all the dirty caches on myCache are migrated to myBacking.
-
-	lc-detach 5
-	lc-remove 5
-
-7. Terminate myCache
-After detaching all the LVs that is attached to myCache.
-myCache can be terminated.
-
-	lc-daemon stop
-	lc-free-cache 3
-
-3. Sysfs
-========
-dm-lc provides some sysfs interfaces to control the module behavior.
-The sysfs tree is located under /sys/module/dm_lc.
-
-/sys/module/dm_lc
+/sys/module/dm_writeboost
 |
 |-- devices
 |   `-- 5
 |       |-- cache_id
 |       |-- dev
 |       |-- device -> ../../../../devices/virtual/block/dm-0
+|	|-- device_no
 |       |-- migrate_threshold
 |       |-- nr_dirty_caches
 |
@@ -126,58 +72,62 @@ The sysfs tree is located under /sys/module/dm_lc.
 |       |-- nr_max_batched_migration
 |       `-- update_interval
 
-4. Technical Issues
-===================
-There are not a few technical issues that
-distinguishes dm-lc from other cache softwares.
+4. Technical Features
+=====================
+There are not a few technical features that
+distinguishes dm-writeboost from other cache softwares.
 
 4.1 RAM buffer and immediate completion
-dm-lc allocated RAM buffers of 64MB in total by default.
+dm-writeboost allocated RAM buffers of 64MB in total by default.
 All of the writes are first stored in one of these RAM buffers
 and immediate completion is notified to the upper layer
 that is quite fast in few microseconds.
 
 4.2 Metadata durability
 After RAM buffer gets full or some deadline comes
-dm-lc creates segment log that combines RAM buffer and its metadata.
+dm-writeboost creates segment log
+that combines RAM buffer and its metadata.
 Metadata have information such as relation between
-address in the cache device and the counterpart in the backing store.
-As the segment log is finally written to persistent cache device,
+address in the cache device and
+the counterpart in the backing store.
+As the segment log is
+finally written to persistent cache device,
 any data will not be lost due to machine failure.
 
 4.3 Asynchronous log flushing
-dm-lc has a background worker called flush daemon.
+dm-writeboost has a background worker called flush daemon.
 Flushing segment log starts from simply queueing the flush task.
-Flush daemon in background periodically checks if the queue has some tasks
+Flush daemon in background
+periodically checks if the queue has some tasks
 and actually executes the tasks if exists.
 The fact that the upper layer doesn't block in queueing the task
-maximizes the write throughput
+can maximizes the write throughput,
 that is measured as 259MB/s random writes
 with cache device of 266MB/s sequential write which is only 3% loss
 and 1.5GB/s theoritically with a fast enough cache like PCI-e SSDs.
 
 4.4 Deferred ack for REQ_FUA or REQ_FLUSH bios
 Some applications such as NFS, journal filesystems
-and databases often submit SYNC write that
+and databases often submit SYNC write which
 incurs bios flagged with REQ_FUA or REQ_FLUSH.
 Handling these unusual bios immediately and thus synchronously
 desparately deteriorates the whole throughput.
-To address this issue, dm-lc handles acks for these bios
+To address this issue, dm-writeboost handles acks for these bios
 lazily or in deferred manner.
-Completion related to these bios will not be done until
-they are written persistently to the cache device
+Completion related to these bios will not be done
+until they are written persistently to the cache device
 so this storategy doesn't betray the semantics.
 In the worst case scenario, a bio with some of these flags
 is completed in deadline period that is configurable
-in barrier_deadline_ms in sysfs.
+in barrier_deadline_ms in said sysfs.
 
 4.5 Asynchronous and autonomous migration
 Some time after a log segment is flushed to the cache device
 it will be migrated to the backing store.
-Migrate daemon is also a background worker
-that periodically checks if log segments to migrate exist.
+Migrate daemon is also a background worker that
+periodically checks if log segments to migrate exist.
 
 Restlessly migrating highly burdens backing store
 so migration is preferable to execute when the backing store is in lazy time.
-lc-daemon in userland surveils the load of the backing store
+writeboost-daemon in userland surveils the load of the backing store
 and autonomously turns on and off migration according to the load.

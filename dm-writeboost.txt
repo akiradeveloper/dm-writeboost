@@ -25,7 +25,7 @@ dmsetup create mgr --table "writeboost-mgr 0 1"
 dmsetup mgr 0 message format-cache /dev/myCache
 dmsetup mgr 0 message switch_to 3
 dmsetup mgr 0 message resume-cache /dev/myCache
-dmsetup create perflv 0 10000 writeboost 5 /dev/myBacking 3
+dmsetup create myLV 0 10000 writeboost 5 /dev/myBacking 3
 
 2. Userland Tools
 =================
@@ -53,7 +53,7 @@ The sysfs tree is located under /sys/module/dm_writeboost.
 |       |-- cache_id
 |       |-- dev
 |       |-- device -> ../../../../devices/virtual/block/dm-0
-|	|-- device_no
+|       |-- device_no
 |       |-- migrate_threshold
 |       |-- nr_dirty_caches
 |

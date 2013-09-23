@@ -1,13 +1,6 @@
 #!/bin/sh
 
-dmsetup create writeboost-mgr --table "0 1 writeboost-mgr"
-
 . ./config
-
-cd Admin
-python setup.py build
-python setup.py install
-cd -
 
 # Discard the whole cache device before formatting
 # blkdiscard command is included in upstream util-linux.
@@ -15,22 +8,15 @@ cd -
 # This is only a performance-relevant issue.
 blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
 
-echo writeboost-format-cache ...
-time writeboost-format-cache ${CACHE}
+# Zeroing the first sector in the cache device
+# triggers formatting the cache device
+echo destory cache ... 
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 
-echo writeboost-create ...
-writeboost-create perflv 5 ${BACKING}
+echo create perflv ...
+sz=`blockdev --getsize ${BACKING}`
+dmsetup create perflv --table "0 ${sz} writeboost ${BACKING} ${CACHE}"
 
-echo writeboost-resume-cache ...
-time writeboost-resume-cache 3 ${CACHE}
-
-echo writeboost-attach ...
-writeboost-attach 5 3
-
-echo writeboost-daemon start ...
-# To disable automated controll by writeboost-daemon.
-# Comment out this line.
-writeboost-daemon start
-
-echo 1 > /sys/module/dm_writeboost/caches/3/flush_current_buffer_interval
-echo 1 > /sys/module/dm_writeboost/caches/3/commit_super_block_interval
+echo configure things for tests ...
+#dmsetup message perflv 0 commit_record_interval 2
+#dmsetup message perflv 0 flush_current_buffer_interval 3

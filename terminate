@@ -1,17 +1,4 @@
 #!/bin/sh
 
-#writeboost-daemon start
-
-echo writeboost-detach ...
-writeboost-detach 5
-
-echo writeboost-remove ...
-writeboost-remove 5
-
-echo writeboost-daemon stop ...
-writeboost-daemon stop
-
-echo writeboost-free-cache ...
-writeboost-free-cache 3
-
-dmsetup remove writeboost-mgr
+echo remove perflv ...
+dmsetup remove perflv

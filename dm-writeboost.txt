@@ -3,87 +3,32 @@ dm-writeboost
 dm-writeboost provides write-back log-structured caching.
 It batches random writes into a big sequential write.
 
-dm-writeboost is composed of two target_type
-named writeboost and writeboost-mgr.
 
-- writeboost target is responsible for
-  creating logical volumes and controlling ios.
-- writeboost-mgr target is reponsible for doing
-  formatting/initializing/destructing cache devices.
+Target Interface
+================
 
-1. Example
-==========
-This article shows show to create
-a logical volume named myLV
-backed by /dev/myBacking and
-using /dev/myCache as a cache device.
+Constructor
+-----------
+writeboost <origin dev> <cache dev>
 
-myLV |-- (backing store) /dev/myBacking
-     |-- (cache device)  /dev/myCache
+Status
+------
 
-dmsetup create mgr --table "writeboost-mgr 0 1"
-dmsetup mgr 0 message format-cache /dev/myCache
-dmsetup mgr 0 message switch_to 3
-dmsetup mgr 0 message resume-cache /dev/myCache
-dmsetup create myLV 0 10000 writeboost 5 /dev/myBacking 3
+Messages
+--------
 
-2. Userland Tools
-=================
-Using dm-writeboost through said kernel interfaces
-is possible but not recommended.
-Instead, dm-writeboost provides nice userland tools
-that make it safer to manage the kernel module.
-
-The userland tools is managed in Github.
-https://github.com/akiradeveloper/dm-writeboost
-
-Also, quick-start script is provided in the repo.
-For the information, please read the README there.
-
-3. Sysfs Interfaces
-===================
-dm-writeboost provides
-sysfs interfaces to control the module behavior.
-The sysfs tree is located under /sys/module/dm_writeboost.
-
-/sys/module/dm_writeboost
-|
-|-- devices
-|   `-- 5
-|       |-- cache_id
-|       |-- dev
-|       |-- device -> ../../../../devices/virtual/block/dm-0
-|       |-- device_no
-|       |-- migrate_threshold
-|       |-- nr_dirty_caches
-|
-|-- caches
-|   `-- 3
-|       |-- allow_migrate
-|       |-- barrier_deadline_ms
-|       |-- commit_super_block
-|       |-- commit_super_block_interval
-|       |-- device -> ../../../../devices/virtual/block/dm-1
-|       |-- flush_current_buffer
-|       |-- flush_current_buffer_interval
-|       |-- force_migrate
-|       |-- last_flushed_segment_id
-|       |-- last_migrated_segment_id
-|       |-- nr_max_batched_migration
-|       `-- update_interval
-
-4. Technical Features
-=====================
+Technical Features
+==================
 There are not a few technical features that
 distinguishes dm-writeboost from other cache softwares.
 
-4.1 RAM buffer and immediate completion
+# RAM buffer and immediate completion
 dm-writeboost allocated RAM buffers of 64MB in total by default.
 All of the writes are first stored in one of these RAM buffers
 and immediate completion is notified to the upper layer
 that is quite fast in few microseconds.
 
-4.2 Metadata durability
+# Metadata durability
 After RAM buffer gets full or some deadline comes
 dm-writeboost creates segment log
 that combines RAM buffer and its metadata.
@@ -94,7 +39,7 @@ As the segment log is
 finally written to persistent cache device,
 any data will not be lost due to machine failure.
 
-4.3 Asynchronous log flushing
+# Asynchronous log flushing
 dm-writeboost has a background worker called flush daemon.
 Flushing segment log starts from simply queueing the flush task.
 Flush daemon in background
@@ -106,7 +51,7 @@ that is measured as 259MB/s random writes
 with cache device of 266MB/s sequential write which is only 3% loss
 and 1.5GB/s theoritically with a fast enough cache like PCI-e SSDs.
 
-4.4 Deferred ack for REQ_FUA or REQ_FLUSH bios
+# Deferred ack for REQ_FUA or REQ_FLUSH bios
 Some applications such as NFS, journal filesystems
 and databases often submit SYNC write which
 incurs bios flagged with REQ_FUA or REQ_FLUSH.
@@ -121,7 +66,7 @@ In the worst case scenario, a bio with some of these flags
 is completed in deadline period that is configurable
 in barrier_deadline_ms in said sysfs.
 
-4.5 Asynchronous and autonomous migration
+# Asynchronous and autonomous migration
 Some time after a log segment is flushed to the cache device
 it will be migrated to the backing store.
 Migrate daemon is also a background worker that
@@ -129,5 +74,21 @@ periodically checks if log segments to migrate exist.
 
 Restlessly migrating highly burdens backing store
 so migration is preferable to execute when the backing store is in lazy time.
-writeboost-daemon in userland surveils the load of the backing store
+A in-core daemon surveils the load of the backing store
 and autonomously turns on and off migration according to the load.
+
+Example
+=======
+To create a logical volume named myLV
+backed by /dev/myBacking and
+using /dev/myCache as a cache device.
+
+myLV |-- (backing store) /dev/myBacking
+     |-- (cache device)  /dev/myCache
+
+sz=`blockdev --getsize /dev/myBacking`
+dmsetup create myLV 0 $sz writeboost 5 /dev/myBacking 3
+
+Other PDF documents and Quick start script
+are provided in a Github repo.
+https://github.com/akiradeveloper/dm-writeboost

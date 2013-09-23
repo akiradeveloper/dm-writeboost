@@ -13,3 +13,6 @@ CACHE=/dev/vg1/cache3m
 #CACHE=/dev/vg1/cache2g
 #CACHE=/dev/sdd2
 export CACHE
+
+echo BACKING: ${BACKING}
+echo CACHE  : ${CACHE}

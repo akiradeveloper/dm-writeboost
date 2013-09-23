@@ -65,87 +65,6 @@ retry_alloc:
 #define kmalloc_retry(size, flags) \
 	do_kmalloc_retry((size), (flags), __LINE__)
 
-struct part {
-	void *memory;
-};
-
-struct arr {
-	struct part *parts;
-	size_t nr_elems;
-	size_t elemsize;
-};
-
-#define ALLOC_SIZE (1 << 16)
-static size_t nr_elems_in_part(struct arr *arr)
-{
-	return ALLOC_SIZE / arr->elemsize;
-};
-
-static size_t nr_parts(struct arr *arr)
-{
-	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
-}
-
-static struct arr *make_arr(size_t elemsize, size_t nr_elems)
-{
-	size_t i, j;
-	struct part *part;
-
-	struct arr *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
-	if (!arr) {
-		WBERR();
-		return NULL;
-	}
-
-	arr->elemsize = elemsize;
-	arr->nr_elems = nr_elems;
-	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
-	if (!arr->parts) {
-		WBERR();
-		goto bad_alloc_parts;
-	}
-
-	for (i = 0; i < nr_parts(arr); i++) {
-		part = arr->parts + i;
-		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
-		if (!part->memory) {
-			WBERR();
-			for (j = 0; j < i; j++) {
-				part = arr->parts + j;
-				kfree(part->memory);
-			}
-			goto bad_alloc_parts_memory;
-		}
-	}
-	return arr;
-
-bad_alloc_parts_memory:
-	kfree(arr->parts);
-bad_alloc_parts:
-	kfree(arr);
-	return NULL;
-}
-
-static void kill_arr(struct arr *arr)
-{
-	size_t i;
-	for (i = 0; i < nr_parts(arr); i++) {
-		struct part *part = arr->parts + i;
-		kfree(part->memory);
-	}
-	kfree(arr->parts);
-	kfree(arr);
-}
-
-static void *arr_at(struct arr *arr, size_t i)
-{
-	size_t n = nr_elems_in_part(arr);
-	size_t j = i / n;
-	size_t k = i % n;
-	struct part *part = arr->parts + j;
-	return part->memory + (arr->elemsize * k);
-}
-
 static struct dm_io_client *wb_io_client;
 
 struct safe_io {
@@ -252,6 +171,98 @@ retry_io:
 	dm_safe_io_retry_internal((io_req), (num_regions), (regions), \
 				  (thread), __LINE__)
 
+/* TODO rename */
+/*
+ * struct arr
+ * A array like structure
+ * that can contain million of elements.
+ * The aim of this class is the same as flex_array.
+ * The reason we don't use flex_array is
+ * that the class trades the performance
+ * to get the resizability.
+ * struct arr is fast and light-weighted.
+ */
+struct part {
+	void *memory;
+};
+
+struct arr {
+	struct part *parts;
+	size_t nr_elems;
+	size_t elemsize;
+};
+
+#define ALLOC_SIZE (1 << 16)
+static size_t nr_elems_in_part(struct arr *arr)
+{
+	return ALLOC_SIZE / arr->elemsize;
+};
+
+static size_t nr_parts(struct arr *arr)
+{
+	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
+}
+
+static struct arr *make_arr(size_t elemsize, size_t nr_elems)
+{
+	size_t i, j;
+	struct part *part;
+
+	struct arr *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
+	if (!arr) {
+		WBERR();
+		return NULL;
+	}
+
+	arr->elemsize = elemsize;
+	arr->nr_elems = nr_elems;
+	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
+	if (!arr->parts) {
+		WBERR();
+		goto bad_alloc_parts;
+	}
+
+	for (i = 0; i < nr_parts(arr); i++) {
+		part = arr->parts + i;
+		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
+		if (!part->memory) {
+			WBERR();
+			for (j = 0; j < i; j++) {
+				part = arr->parts + j;
+				kfree(part->memory);
+			}
+			goto bad_alloc_parts_memory;
+		}
+	}
+	return arr;
+
+bad_alloc_parts_memory:
+	kfree(arr->parts);
+bad_alloc_parts:
+	kfree(arr);
+	return NULL;
+}
+
+static void kill_arr(struct arr *arr)
+{
+	size_t i;
+	for (i = 0; i < nr_parts(arr); i++) {
+		struct part *part = arr->parts + i;
+		kfree(part->memory);
+	}
+	kfree(arr->parts);
+	kfree(arr);
+}
+
+static void *arr_at(struct arr *arr, size_t i)
+{
+	size_t n = nr_elems_in_part(arr);
+	size_t j = i / n;
+	size_t k = i % n;
+	struct part *part = arr->parts + j;
+	return part->memory + (arr->elemsize * k);
+}
+
 /*
  * The Detail of the Disk Format
  *
@@ -260,19 +271,19 @@ retry_io:
  * We reserve the first segment (1MB) as the superblock.
  *
  * Superblock(1MB):
- * superblock header(512B) ... superblock record(512B) 
+ * superblock header(512B) ... superblock record(512B)
  *
  * Segment(1MB):
  * segment_header_device(4KB) metablock_device(4KB) * NR_CACHES_INSEG
  */
 
 /*
- * Superblock Header 
+ * Superblock Header
  * First one sector of the super block region.
  * The value is fixed after formatted.
  */
 
- /* 
+ /*
   * Magic Number
   * "WBst"
   */
@@ -380,6 +391,16 @@ struct segment_header {
 };
 
 /*
+ * (Locking)
+ * Locking metablocks by their granularity
+ * needs too much memory space for lock structures.
+ * We only locks a metablock by locking the parent segment
+ * that includes the metablock.
+ */
+#define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
+#define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
+
+/*
  * On-disk segment header.
  *
  * Must be at most 4KB large.
@@ -459,7 +480,7 @@ struct wb_cache {
 	 * Flush daemon
 	 *
 	 * Writeboost first queue the segment to flush
-	 * and flush daemon asynchronously 
+	 * and flush daemon asynchronously
 	 * flush them to the cache device.
 	 */
 	struct work_struct flush_work;
@@ -488,12 +509,11 @@ struct wb_cache {
 	struct work_struct migrate_work;
 	struct workqueue_struct *migrate_wq;
 	bool allow_migrate;
-	bool force_migrate; /* FIXME not used */
 
 	/*
 	 * Batched Migration
 	 *
-	 * Migration is done atomically 
+	 * Migration is done atomically
 	 * with number of segments batched.
 	 */
 	wait_queue_head_t migrate_wait_queue;
@@ -515,7 +535,7 @@ struct wb_cache {
 	bool enable_migration_modulator;
 
 	/*
-	 * Update the superblock record 
+	 * Update the superblock record
 	 * periodically.
 	 */
 	unsigned long update_record_interval;
@@ -533,7 +553,6 @@ struct wb_cache {
 	bool on_terminate;
 
 	atomic64_t stat[STATLEN];
-
 };
 
 struct wb_device {
@@ -547,59 +566,6 @@ struct wb_device {
 
 	atomic64_t nr_dirty_caches;
 };
-
-static void inc_nr_dirty_caches(struct wb_device *wb)
-{
-	BUG_ON(!wb);
-	atomic64_inc(&wb->nr_dirty_caches);
-}
-
-static void dec_nr_dirty_caches(struct wb_device *wb)
-{
-	BUG_ON(!wb);
-	atomic64_dec(&wb->nr_dirty_caches);
-}
-
-/*
- * (Locking)
- * Locking metablocks by their granularity
- * needs too much memory space for lock structures.
- * We only locks a metablock by locking the parent segment
- * that includes the metablock.
- */
-#define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
-#define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
-
-static void cleanup_mb_if_dirty(struct wb_cache *cache,
-				struct segment_header *seg,
-				struct metablock *mb)
-{
-	unsigned long flags;
-
-	bool b = false;
-	lockseg(seg, flags);
-	if (mb->dirty_bits) {
-		mb->dirty_bits = 0;
-		b = true;
-	}
-	unlockseg(seg, flags);
-
-	if (b)
-		dec_nr_dirty_caches(cache->wb);
-}
-
-static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
-				   struct metablock *mb)
-{
-	unsigned long flags;
-	u8 r;
-
-	lockseg(seg, flags);
-	r = mb->dirty_bits;
-	unlockseg(seg, flags);
-
-	return r;
-}
 
 static void inc_stat(struct wb_cache *cache,
 		     int rw, bool found, bool on_buffer, bool fullsize)
@@ -627,6 +593,48 @@ static void clear_stat(struct wb_cache *cache)
 		atomic64_t *v = &cache->stat[i];
 		atomic64_set(v, 0);
 	}
+}
+
+/*
+ * Get the segment from the segment id.
+ * The Index of the segment is calculated from the segment id.
+ */
+static struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
+						       size_t segment_id)
+{
+	struct segment_header *r =
+		arr_at(cache->segment_header_array,
+		       (segment_id - 1) % cache->nr_segments);
+	return r;
+}
+
+static u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id)
+{
+	u32 a = (segment_id - 1) / cache->nr_segments;
+	return a + 1;
+};
+
+static sector_t calc_mb_start_sector(struct segment_header *seg,
+				     cache_nr mb_idx)
+{
+	size_t k = 1 + (mb_idx % NR_CACHES_INSEG);
+	return seg->start_sector + (k << 3);
+}
+
+static sector_t calc_segment_header_start(size_t segment_idx)
+{
+	return (1 << WB_SEGMENTSIZE_ORDER) * (segment_idx + 1);
+}
+
+static sector_t dm_devsize(struct dm_dev *dev)
+{
+	return i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT;
+}
+
+static u64 calc_nr_segments(struct dm_dev *dev)
+{
+	sector_t devsize = dm_devsize(dev);
+	return devsize / (1 << WB_SEGMENTSIZE_ORDER) - 1;
 }
 
 /*
@@ -790,30 +798,47 @@ static int __must_check init_segment_header_array(struct wb_cache *cache)
 	return 0;
 }
 
-/*
- * Get the segment from the segment id.
- * The Index of the segment is calculated from the segment id.
- */
-static struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
-						       size_t segment_id)
+static void inc_nr_dirty_caches(struct wb_device *wb)
 {
-	struct segment_header *r =
-		arr_at(cache->segment_header_array,
-		       (segment_id - 1) % cache->nr_segments);
-	return r;
+	BUG_ON(!wb);
+	atomic64_inc(&wb->nr_dirty_caches);
 }
 
-static u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id)
+static void dec_nr_dirty_caches(struct wb_device *wb)
 {
-	u32 a = (segment_id - 1) / cache->nr_segments;
-	return a + 1;
-};
+	BUG_ON(!wb);
+	atomic64_dec(&wb->nr_dirty_caches);
+}
 
-static sector_t calc_mb_start_sector(struct segment_header *seg,
-				     cache_nr mb_idx)
+static void cleanup_mb_if_dirty(struct wb_cache *cache,
+				struct segment_header *seg,
+				struct metablock *mb)
 {
-	size_t k = 1 + (mb_idx % NR_CACHES_INSEG);
-	return seg->start_sector + (k << 3);
+	unsigned long flags;
+
+	bool b = false;
+	lockseg(seg, flags);
+	if (mb->dirty_bits) {
+		mb->dirty_bits = 0;
+		b = true;
+	}
+	unlockseg(seg, flags);
+
+	if (b)
+		dec_nr_dirty_caches(cache->wb);
+}
+
+static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
+				   struct metablock *mb)
+{
+	unsigned long flags;
+	u8 r;
+
+	lockseg(seg, flags);
+	r = mb->dirty_bits;
+	unlockseg(seg, flags);
+
+	return r;
 }
 
 static u8 count_dirty_caches_remained(struct segment_header *seg)
@@ -918,50 +943,6 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 	}
 }
 
-static void wait_for_migration(struct wb_cache *cache, size_t id)
-{
-	struct segment_header *seg = get_segment_header_by_id(cache, id);
-
-	/*
-	 * Set reserving_segment_id to non zero
-	 * to force the migartion daemon
-	 * to complete migarate of this segment
-	 * immediately.
-	 */
-	cache->reserving_segment_id = id;
-	wait_for_completion(&seg->migrate_done);
-	cache->reserving_segment_id = 0;
-}
-
-static sector_t calc_segment_header_start(size_t segment_idx)
-{
-	return (1 << WB_SEGMENTSIZE_ORDER) * (segment_idx + 1);
-}
-
-static sector_t dm_devsize(struct dm_dev *dev)
-{
-	return i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT;
-}
-
-static u64 calc_nr_segments(struct dm_dev *dev)
-{
-	sector_t devsize = dm_devsize(dev);
-	return devsize / (1 << WB_SEGMENTSIZE_ORDER) - 1;
-}
-
-struct format_segmd_context {
-	atomic64_t count;
-	int err;
-};
-
-static void format_segmd_endio(unsigned long error, void *__context)
-{
-	struct format_segmd_context *context = __context;
-	if (error)
-		context->err = 1;
-	atomic64_dec(&context->count);
-}
-
 static bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
 {
 	cache_nr start = cache->current_seg->start_idx;
@@ -972,18 +953,6 @@ static bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
 		return false;
 
 	return true;
-}
-
-static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
-{
-	bio->bi_bdev = dev->bdev;
-	bio->bi_sector = sector;
-}
-
-static sector_t calc_cache_alignment(struct wb_cache *cache,
-				     sector_t bio_sector)
-{
-	return (bio_sector / (1 << 3)) * (1 << 3);
 }
 
 /*
@@ -1031,6 +1000,21 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 		dm_safe_io_retry(&io_req, 1, &region, true);
 	}
 	kfree(buf);
+}
+
+static void wait_for_migration(struct wb_cache *cache, size_t id)
+{
+	struct segment_header *seg = get_segment_header_by_id(cache, id);
+
+	/*
+	 * Set reserving_segment_id to non zero
+	 * to force the migartion daemon
+	 * to complete migarate of this segment
+	 * immediately.
+	 */
+	cache->reserving_segment_id = id;
+	wait_for_completion(&seg->migrate_done);
+	cache->reserving_segment_id = 0;
 }
 
 /*
@@ -1132,7 +1116,7 @@ static void queue_flushing(struct wb_cache *cache)
 
 	discard_caches_inseg(cache, new_seg);
 
-	/* 
+	/*
 	 * Set the cursor to the last of the flushed segment.
 	 */
 	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
@@ -1182,24 +1166,6 @@ static void flush_current_buffer_sync(struct wb_cache *cache)
 	wait_for_completion(&old_seg->flush_done);
 }
 
-static void flush_barrier_ios(struct work_struct *work)
-{
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache,
-			     barrier_deadline_work);
-
-	if (bio_list_empty(&cache->barrier_ios))
-		return;
-
-	flush_current_buffer_sync(cache);
-}
-
-static void barrier_deadline_proc(unsigned long data)
-{
-	struct wb_cache *cache = (struct wb_cache *) data;
-	schedule_work(&cache->barrier_deadline_work);
-}
-
 static void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
 {
 	mutex_lock(&cache->io_lock);
@@ -1209,6 +1175,18 @@ static void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
 	if (!timer_pending(&cache->barrier_deadline_timer))
 		mod_timer(&cache->barrier_deadline_timer,
 			  msecs_to_jiffies(cache->barrier_deadline_ms));
+}
+
+static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
+{
+	bio->bi_bdev = dev->bdev;
+	bio->bi_sector = sector;
+}
+
+static sector_t calc_cache_alignment(struct wb_cache *cache,
+				     sector_t bio_sector)
+{
+	return (bio_sector / (1 << 3)) * (1 << 3);
 }
 
 #define PER_BIO_VERSION KERNEL_VERSION(3, 8, 0)
@@ -1527,14 +1505,6 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 	return 0;
 }
 
-#define validate_cond(cond) \
-	do { \
-		if (!(cond)) { \
-			WBERR("violated %s", #cond); \
-			return -EINVAL; \
-		} \
-	} while (false)
-
 static void flush_proc(struct work_struct *work)
 {
 	unsigned long flags;
@@ -1625,7 +1595,7 @@ static void migrate_endio(unsigned long error, void *context)
 /*
  * Submit the segment data at position k
  * in migrate buffer.
- * Batched migration first gather all the segments 
+ * Batched migration first gather all the segments
  * to migrate into a migrate buffer.
  * So, there are a number of segment data
  * in the buffer.
@@ -1808,6 +1778,21 @@ migrate_write:
 		cleanup_segment(cache, seg);
 	}
 
+	/*
+	 * The segment may have a block
+	 * that returns ACK for persistent write
+	 * on the cache device.
+	 * Migrating them in non-persistent way
+	 * is betrayal to the client
+	 * who received the ACK and
+	 * expects the data is persistent.
+	 * Since it is difficult to know
+	 * whether a cache in a segment
+	 * is of that status
+	 * we are on the safe side
+	 * on this issue by always
+	 * migrating those data persistently.
+	 */
 	blkdev_issue_flush(cache->wb->device->bdev, GFP_NOIO, NULL);
 
 	/*
@@ -1917,6 +1902,24 @@ static void migrate_proc(struct work_struct *work)
 	}
 }
 
+static void flush_barrier_ios(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache,
+			     barrier_deadline_work);
+
+	if (bio_list_empty(&cache->barrier_ios))
+		return;
+
+	flush_current_buffer_sync(cache);
+}
+
+static void barrier_deadline_proc(unsigned long data)
+{
+	struct wb_cache *cache = (struct wb_cache *) data;
+	schedule_work(&cache->barrier_deadline_work);
+}
+
 static int __must_check read_superblock_record(
 		struct superblock_record_device *record,
 		struct wb_cache *cache)
@@ -1987,7 +1990,8 @@ static void update_superblock_record(struct wb_cache *cache)
 }
 
 
-static int read_superblock_header(struct superblock_header_device *sup, struct dm_dev *dev)
+static int read_superblock_header(struct superblock_header_device *sup,
+				  struct dm_dev *dev)
 {
 	int r = 0;
 	struct dm_io_request io_req_sup;
@@ -2033,7 +2037,7 @@ static int audit_superblock_header(struct superblock_header_device *sup)
 {
 	u32 magic = le32_to_cpu(sup->magic);
 
-	if(magic != WRITEBOOST_MAGIC) {
+	if (magic != WRITEBOOST_MAGIC) {
 		WBERR();
 		return -EINVAL;
 	}
@@ -2080,6 +2084,19 @@ static int format_superblock_header(struct dm_dev *dev)
 	}
 
 	return 0;
+}
+
+struct format_segmd_context {
+	atomic64_t count;
+	int err;
+};
+
+static void format_segmd_endio(unsigned long error, void *__context)
+{
+	struct format_segmd_context *context = __context;
+	if (error)
+		context->err = 1;
+	atomic64_dec(&context->count);
 }
 
 static int __must_check format_cache_device(struct dm_dev *dev)
@@ -2302,7 +2319,7 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 }
 
 /*
- * If only if the lap attributes 
+ * If only if the lap attributes
  * are the same between header and all the metablock,
  * the segment is judged to be flushed correctly
  * and then merge into the runtime structure.
@@ -2331,7 +2348,7 @@ static int __must_check recover_cache(struct wb_cache *cache)
 	    max_id, oldest_id, last_flushed_id, init_segment_id,
 	    oldest_idx, nr_segments = cache->nr_segments,
 	    header_id, record_id;
-	
+
 	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, cache);
 	if (r) {
@@ -2485,7 +2502,6 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
 	cache->on_terminate = false;
 	cache->allow_migrate = false;
-	cache->force_migrate = false;
 	cache->reserving_segment_id = 0;
 	mutex_init(&cache->io_lock);
 
@@ -2663,9 +2679,9 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	r = audit_superblock_header(&sup);
-	if(r) {
+	if (r) {
 		r = format_cache_device(cachedev);
-		if(r){
+		if (r) {
 			WBERR("%d", r);
 			goto bad_format_cache;
 		}
@@ -2678,7 +2694,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	r = resume_cache(cache, cachedev);
-	if(r){
+	if (r) {
 		WBERR("%d", r);
 		goto bad_resume_cache;
 	}
@@ -2754,6 +2770,9 @@ static void writeboost_dtr(struct dm_target *ti)
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct wb_device *wb = ti->private;
+	struct wb_cache *cache = wb->cache;
+
+	unsigned long tmp;
 	char *cmd = argv[0];
 
 	if (!strcasecmp(cmd, "clear_stat")) {
@@ -2762,35 +2781,53 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 		return 0;
 	}
 
+	if (kstrtoul(argv[1], 10, &tmp))
+		return -EINVAL;
+
 	if (!strcasecmp(cmd, "allow_migrate")) {
+		if (tmp > 1)
+			return -EINVAL;
+		cache->allow_migrate = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "enable_migration_modulator")) {
+		if (tmp > 1)
+			return -EINVAL;
+		cache->enable_migration_modulator = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "barrier_deadline_ms")) {
+		if (tmp < 1)
+			return -EINVAL;
+		cache->barrier_deadline_ms = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "nr_max_batched_migration")) {
+		if (tmp < 1)
+			return -EINVAL;
+		cache->nr_max_batched_migration = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "migrate_threshold")) {
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "force_migrate")) {
+		wb->migrate_threshold = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "update_record_interval")) {
+		if (tmp < 1)
+			return -EINVAL;
+		cache->update_record_interval = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "flush_current_buffer_interval")) {
+		if (tmp < 1)
+			return -EINVAL;
+		cache->flush_current_buffer_interval = tmp;
 		return 0;
 	}
 
@@ -2849,12 +2886,14 @@ writeboost_status(
 
 	switch (type) {
 	case STATUSTYPE_INFO:
-		DMEMIT("%llu ", (long long unsigned int) atomic64_read(&wb->nr_dirty_caches));
-		DMEMIT("%llu ", (long long unsigned int) cache->nr_segments);
-		DMEMIT("%llu ", (long long unsigned int) cache->last_migrated_segment_id);
-		DMEMIT("%llu ", (long long unsigned int) cache->last_flushed_segment_id);
-		DMEMIT("%llu ", (long long unsigned int) cache->current_seg->global_id);
-		DMEMIT("%u ", (unsigned int) cache->cursor);
+		DMEMIT("%llu %llu %llu %llu %llu %u ",
+		       (long long unsigned int)
+		       atomic64_read(&wb->nr_dirty_caches),
+		       (long long unsigned int) cache->nr_segments,
+		       (long long unsigned int) cache->last_migrated_segment_id,
+		       (long long unsigned int) cache->last_flushed_segment_id,
+		       (long long unsigned int) cache->current_seg->global_id,
+		       (unsigned int) cache->cursor);
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v;
@@ -2865,15 +2904,20 @@ writeboost_status(
 			DMEMIT("%lu ", atomic64_read(v));
 		}
 
-		DMEMIT("%d ", 8);
-		DMEMIT("barrier_deadline_ms %lu ", cache->barrier_deadline_ms);
-		DMEMIT("allow_migrate %d ", cache->allow_migrate ? 1 : 0);
-		DMEMIT("force_migrate %d ", cache->force_migrate ? 1 : 0);
-		DMEMIT("enable_migration_modulator %d ", cache->enable_migration_modulator ? 1 : 0);
+		DMEMIT("%d ", 7);
+		DMEMIT("barrier_deadline_ms %lu ",
+		       cache->barrier_deadline_ms);
+		DMEMIT("allow_migrate %d ",
+		       cache->allow_migrate ? 1 : 0);
+		DMEMIT("enable_migration_modulator %d ",
+		       cache->enable_migration_modulator ? 1 : 0);
 		DMEMIT("migrate_threshold %d ", wb->migrate_threshold);
-		DMEMIT("nr_cur_batched_migration %lu ", cache->nr_cur_batched_migration);
-		DMEMIT("flush_current_buffer_interval %lu ", cache->flush_current_buffer_interval);
-		DMEMIT("update_record_interval %lu", cache->update_record_interval);
+		DMEMIT("nr_cur_batched_migration %lu ",
+		       cache->nr_cur_batched_migration);
+		DMEMIT("flush_current_buffer_interval %lu ",
+		       cache->flush_current_buffer_interval);
+		DMEMIT("update_record_interval %lu",
+		       cache->update_record_interval);
 		break;
 
 	case STATUSTYPE_TABLE:

@@ -533,6 +533,7 @@ struct wb_cache {
 	 * according to the load of backing store.
 	 */
 	bool enable_migration_modulator;
+	struct work_struct modulator_work;
 
 	/*
 	 * Update the superblock record
@@ -1902,6 +1903,42 @@ static void migrate_proc(struct work_struct *work)
 	}
 }
 
+static void modulator_proc(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, modulator_work);
+	struct wb_device *wb = cache->wb;
+
+	struct hd_struct *hd = wb->device->bdev->bd_part;
+	unsigned long long r_old = 0, w_old = 0, r_new, w_new, util;
+	unsigned long intvl = 1000;
+
+	while (true) {
+		if (cache->on_terminate)
+			return;
+
+		r_new = jiffies_to_msecs(part_stat_read(hd, ticks[READ]));
+		w_new = jiffies_to_msecs(part_stat_read(hd, ticks[WRITE]));
+		
+		if (!cache->enable_migration_modulator)
+			goto modulator_update;
+
+		util = (100 * ((r_new - r_old) + (w_new - w_old))) / intvl;
+		/* FIXME 2000% ? rediculous */ 
+		WBINFO("%u", (unsigned) util);
+		if (util < wb->migrate_threshold)
+			cache->allow_migrate = true;
+		else
+			cache->allow_migrate = false;
+
+modulator_update:
+		r_old = r_new;
+		w_old = w_new;
+
+		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
+	}
+}
+
 static void flush_barrier_ios(struct work_struct *work)
 {
 	struct wb_cache *cache =
@@ -1997,6 +2034,7 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
 
+	/* FIXME kmalloc is enough */
 	void *buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
 		WBERR();
@@ -2128,7 +2166,7 @@ static int __must_check format_cache_device(struct dm_dev *dev)
 	region_sup = (struct dm_io_region) {
 		.bdev = dev->bdev,
 		.sector = 0,
-		.count = 1,
+		.count = (1 << 11),
 	};
 	r = dm_safe_io(&io_req_sup, 1, &region_sup, NULL, false);
 	kfree(buf);
@@ -2355,7 +2393,9 @@ static int __must_check recover_cache(struct wb_cache *cache)
 		WBERR();
 		return r;
 	}
+	WBINFO("%llu", record.last_migrated_segment_id);
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
+	WBINFO("%llu", record_id);
 
 	header = kmalloc(sizeof(*header), GFP_KERNEL);
 	if (!header) {
@@ -2477,6 +2517,7 @@ setup_init_segment:
 	if (record_id > cache->last_migrated_segment_id)
 		cache->last_migrated_segment_id = record_id;
 
+	WBINFO("%llu", cache->last_migrated_segment_id);
 	wait_for_migration(cache, seg->global_id);
 
 	discard_caches_inseg(cache, seg);
@@ -2501,7 +2542,8 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->nr_segments = calc_nr_segments(cache->device);
 	cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
 	cache->on_terminate = false;
-	cache->allow_migrate = false;
+	// cache->allow_migrate = false;
+	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
 	mutex_init(&cache->io_lock);
 
@@ -2533,6 +2575,12 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		goto bad_alloc_ht;
 	}
 
+	r = recover_cache(cache);
+	if (r) {
+		WBERR();
+		goto bad_recover;
+	}
+
 	cache->migrate_buffer = vmalloc(NR_CACHES_INSEG << 12);
 	if (!cache->migrate_buffer) {
 		WBERR();
@@ -2553,6 +2601,14 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		goto bad_migratewq;
 	}
 
+	cache->flush_wq = create_singlethread_workqueue("flushwq");
+	if (!cache->flush_wq) {
+		WBERR();
+		goto bad_flushwq;
+	}
+
+
+	/* Migration Daemon */
 	INIT_WORK(&cache->migrate_work, migrate_proc);
 	init_waitqueue_head(&cache->migrate_wait_queue);
 	INIT_LIST_HEAD(&cache->migrate_list);
@@ -2562,6 +2618,11 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->nr_cur_batched_migration = 1;
 	queue_work(cache->migrate_wq, &cache->migrate_work);
 
+
+	/* Deferred ACK for barrier writes */
+	/*
+	 * barrier_deadline_proc schedules barrier_deadline_work.
+	 */
 	setup_timer(&cache->barrier_deadline_timer,
 		    barrier_deadline_proc, (unsigned long) cache);
 	bio_list_init(&cache->barrier_ios);
@@ -2576,41 +2637,32 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->barrier_deadline_ms = 3;
 	INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
-	cache->flush_wq = create_singlethread_workqueue("flushwq");
-	if (!cache->flush_wq) {
-		WBERR();
-		goto bad_flushwq;
-	}
+
+	/* Flush Daemon */
 	spin_lock_init(&cache->flush_queue_lock);
 	INIT_WORK(&cache->flush_work, flush_proc);
 	INIT_LIST_HEAD(&cache->flush_queue);
 	init_waitqueue_head(&cache->flush_wait_queue);
 	queue_work(cache->flush_wq, &cache->flush_work);
 
-	r = recover_cache(cache);
-	if (r) {
-		WBERR();
-		goto bad_recover;
-	}
+
+	/* Migartion Modulator */
+	INIT_WORK(&cache->modulator_work, modulator_proc);
+	schedule_work(&cache->modulator_work);
+
 
 	clear_stat(cache);
 
 	return 0;
 
-bad_recover:
-	cache->on_terminate = true;
-	cancel_work_sync(&cache->flush_work);
-	destroy_workqueue(cache->flush_wq);
 bad_flushwq:
-	cache->on_terminate = true;
-	cancel_work_sync(&cache->barrier_deadline_work);
-	cancel_work_sync(&cache->migrate_work);
 	destroy_workqueue(cache->migrate_wq);
 bad_migratewq:
 	kfree(cache->dirtiness_snapshot);
 bad_alloc_dirtiness_snapshot:
 	vfree(cache->migrate_buffer);
 bad_alloc_migrate_buffer:
+bad_recover:
 	kill_arr(cache->htable);
 bad_alloc_ht:
 	kill_arr(cache->segment_header_array);
@@ -2693,13 +2745,14 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_alloc_cache;
 	}
 
+	wb->cache = cache;
+	wb->cache->wb = wb;
+
 	r = resume_cache(cache, cachedev);
 	if (r) {
 		WBERR("%d", r);
 		goto bad_resume_cache;
 	}
-	wb->cache = cache;
-	wb->cache->wb = wb;
 
 	wb->ti = ti;
 	ti->private = wb;
@@ -2725,9 +2778,9 @@ bad_resume_cache:
 bad_alloc_cache:
 bad_format_cache:
 bad_read_sup:
-	dm_put_device(ti, wb->device);
+	dm_put_device(ti, cachedev);
 bad_get_device_cache:
-	dm_put_device(ti, wb->device);
+	dm_put_device(ti, origdev);
 bad_get_device_orig:
 	kfree(wb);
 	return r;
@@ -2736,6 +2789,8 @@ bad_get_device_orig:
 static void free_cache(struct wb_cache *cache)
 {
 	cache->on_terminate = true;
+
+	cancel_work_sync(&cache->modulator_work);
 
 	cancel_work_sync(&cache->flush_work);
 	destroy_workqueue(cache->flush_wq);
@@ -2751,18 +2806,19 @@ static void free_cache(struct wb_cache *cache)
 	kill_arr(cache->segment_header_array);
 
 	free_rambuf_pool(cache);
-
-	dm_put_device(cache->wb->ti, cache->device);
-	kfree(cache);
 }
 
 static void writeboost_dtr(struct dm_target *ti)
 {
 	struct wb_device *wb = ti->private;
+	struct wb_cache *cache = wb->cache;
 
-	free_cache(wb->cache);
+	free_cache(cache);
+	kfree(cache);
 
+	dm_put_device(wb->ti, cache->device);
 	dm_put_device(ti, wb->device);
+
 	ti->private = NULL;
 	kfree(wb);
 }

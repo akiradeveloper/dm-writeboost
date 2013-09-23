@@ -1910,21 +1910,20 @@ static void modulator_proc(struct work_struct *work)
 	struct wb_device *wb = cache->wb;
 
 	struct hd_struct *hd = wb->device->bdev->bd_part;
-	unsigned long long r_old = 0, w_old = 0, r_new, w_new, util;
+	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 
 	while (true) {
 		if (cache->on_terminate)
 			return;
 
-		r_new = jiffies_to_msecs(part_stat_read(hd, ticks[READ]));
-		w_new = jiffies_to_msecs(part_stat_read(hd, ticks[WRITE]));
+		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 		
 		if (!cache->enable_migration_modulator)
 			goto modulator_update;
 
-		util = (100 * ((r_new - r_old) + (w_new - w_old))) / intvl;
-		/* FIXME 2000% ? rediculous */ 
+		util = (100 * (new - old)) / 1000;
+
 		WBINFO("%u", (unsigned) util);
 		if (util < wb->migrate_threshold)
 			cache->allow_migrate = true;
@@ -1932,8 +1931,7 @@ static void modulator_proc(struct work_struct *work)
 			cache->allow_migrate = false;
 
 modulator_update:
-		r_old = r_new;
-		w_old = w_new;
+		old = new;
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}

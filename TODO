@@ -6,6 +6,7 @@ TODO:
     - Fix document.
     - Add more comments inline
       to explain what it does and how it works.
+    - Rename struct arr
 
 Please send patches to Greg Kroah-Hartman <gregkh@linuxfoundation.org> and Cc:
 Akira Hayakawa <ruby.wktk@gmail.com>

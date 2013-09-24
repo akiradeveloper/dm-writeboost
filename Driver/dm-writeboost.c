@@ -1526,6 +1526,7 @@ static void flush_proc(struct work_struct *work)
 		container_of(work, struct wb_cache, flush_work);
 
 	while (true) {
+		WBINFO();
 		struct flush_context *ctx;
 		struct segment_header *seg;
 		struct dm_io_request io_req;
@@ -1834,6 +1835,7 @@ static void migrate_proc(struct work_struct *work)
 		container_of(work, struct wb_cache, migrate_work);
 
 	while (true) {
+		WBINFO();
 		bool allow_migrate;
 		size_t i, nr_mig_candidates, nr_mig;
 		struct segment_header *seg, *tmp;
@@ -1930,7 +1932,7 @@ static void modulator_proc(struct work_struct *work)
 			return;
 
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
-		
+
 		if (!cache->enable_migration_modulator)
 			goto modulator_update;
 
@@ -2856,8 +2858,6 @@ bad_get_device_orig:
 
 static void free_cache(struct wb_cache *cache)
 {
-	/* TODO cleanup for dirty data */
-
 	cache->on_terminate = true;
 
 	/* Kill in-kernel daemons */
@@ -2886,6 +2886,12 @@ static void writeboost_dtr(struct dm_target *ti)
 {
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
+
+	/*
+	 * Synchronize all the dirty writes
+	 * before Termination.
+	 */
+	cache->sync_interval = 1;
 
 	free_cache(cache);
 	kfree(cache);

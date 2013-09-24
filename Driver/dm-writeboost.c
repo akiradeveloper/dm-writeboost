@@ -1152,6 +1152,11 @@ static void queue_current_buffer(struct wb_cache *cache)
 	queue_flushing(cache);
 }
 
+/*
+ * Persistenttly flush all the dirty data at a moment.
+ * Clean up the writes before termination
+ * is an example of the usecase.
+ */
 static void flush_current_buffer_sync(struct wb_cache *cache)
 {
 	struct segment_header *old_seg;
@@ -1165,6 +1170,8 @@ static void flush_current_buffer_sync(struct wb_cache *cache)
 	mutex_unlock(&cache->io_lock);
 
 	wait_for_completion(&old_seg->flush_done);
+
+	blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 }
 
 static void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
@@ -2023,7 +2030,6 @@ static void update_superblock_record(struct wb_cache *cache)
 	dm_safe_io_retry(&io_req, 1, &region, true);
 	kfree(buf);
 }
-
 
 static int read_superblock_header(struct superblock_header_device *sup,
 				  struct dm_dev *dev)

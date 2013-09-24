@@ -20,4 +20,4 @@ dmsetup create perflv --table "0 ${sz} writeboost ${BACKING} ${CACHE}"
 echo configure things for tests ...
 dmsetup message perflv 0 enable_migration_modulator 1
 dmsetup message perflv 0 update_record_interval 2
-dmsetup message perflv 0 flush_current_buffer_interval 3
+dmsetup message perflv 0 sync_interval 3

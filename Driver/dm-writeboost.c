@@ -537,6 +537,8 @@ struct wb_cache {
 	struct work_struct modulator_work;
 
 	/*
+	 * Superblock Recorder
+	 *
 	 * Update the superblock record
 	 * periodically.
 	 */
@@ -544,9 +546,13 @@ struct wb_cache {
 	struct work_struct recorder_work;
 
 	/*
-	 * Flush the RAM buffer periodically.
+	 * Cache Synchronizer
+	 *
+	 * Sync the dirty writes
+	 * periodically.
 	 */
-	unsigned long flush_current_buffer_interval;
+	unsigned long sync_interval;
+	struct work_struct sync_work;
 
 	/*
 	 * on_terminate is true
@@ -1155,11 +1161,12 @@ static void queue_current_buffer(struct wb_cache *cache)
 }
 
 /*
- * Persistenttly flush all the dirty data at a moment.
+ * flush all the dirty data at a moment
+ * but NOT persistently.
  * Clean up the writes before termination
  * is an example of the usecase.
  */
-static void flush_current_buffer_sync(struct wb_cache *cache)
+static void flush_current_buffer(struct wb_cache *cache)
 {
 	struct segment_header *old_seg;
 
@@ -1172,8 +1179,6 @@ static void flush_current_buffer_sync(struct wb_cache *cache)
 	mutex_unlock(&cache->io_lock);
 
 	wait_for_completion(&old_seg->flush_done);
-
-	blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 }
 
 static void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
@@ -1978,6 +1983,7 @@ static void recorder_proc(struct work_struct *work)
 	struct wb_cache *cache =
 		container_of(work, struct wb_cache, recorder_work);
 	unsigned long intvl;
+
 	while (true) {
 		if (cache->on_terminate)
 			return;
@@ -1990,7 +1996,34 @@ static void recorder_proc(struct work_struct *work)
 			continue;
 		}
 
+		WBINFO();
 		update_superblock_record(cache);
+
+		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
+	}
+}
+
+static void sync_proc(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, sync_work);
+	unsigned long intvl;
+
+	while (true) {
+		if (cache->on_terminate)
+			return;
+
+		/* sec -> ms */
+		intvl = cache->sync_interval * 1000;
+
+		if (!intvl) {
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
+			continue;
+		}
+
+		WBINFO();
+		flush_current_buffer(cache);
+		blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
@@ -2005,7 +2038,7 @@ static void flush_barrier_ios(struct work_struct *work)
 	if (bio_list_empty(&cache->barrier_ios))
 		return;
 
-	flush_current_buffer_sync(cache);
+	flush_current_buffer(cache);
 }
 
 static void barrier_deadline_proc(unsigned long data)
@@ -2575,7 +2608,7 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	cache->enable_migration_modulator = false;
 	cache->update_record_interval = 0;
-	cache->flush_current_buffer_interval = 0;
+	cache->sync_interval = 0;
 
 	r = init_rambuf_pool(cache);
 	if (r) {
@@ -2680,6 +2713,12 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	/* Superblock Recorder */
 	INIT_WORK(&cache->recorder_work, recorder_proc);
 	schedule_work(&cache->recorder_work);
+
+
+	/* Cache Synchronizer */
+	INIT_WORK(&cache->sync_work, sync_proc);
+	schedule_work(&cache->sync_work);
+
 
 	clear_stat(cache);
 
@@ -2823,6 +2862,7 @@ static void free_cache(struct wb_cache *cache)
 	cache->on_terminate = true;
 
 	/* Kill in-kernel daemons */
+	cancel_work_sync(&cache->sync_work);
 	cancel_work_sync(&cache->recorder_work);
 	cancel_work_sync(&cache->modulator_work);
 
@@ -2913,8 +2953,8 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 		return 0;
 	}
 
-	if (!strcasecmp(cmd, "flush_current_buffer_interval")) {
-		cache->flush_current_buffer_interval = tmp;
+	if (!strcasecmp(cmd, "sync_interval")) {
+		cache->sync_interval = tmp;
 		return 0;
 	}
 
@@ -3001,8 +3041,8 @@ writeboost_status(
 		DMEMIT("migrate_threshold %d ", wb->migrate_threshold);
 		DMEMIT("nr_cur_batched_migration %lu ",
 		       cache->nr_cur_batched_migration);
-		DMEMIT("flush_current_buffer_interval %lu ",
-		       cache->flush_current_buffer_interval);
+		DMEMIT("sync_interval %lu ",
+		       cache->sync_interval);
 		DMEMIT("update_record_interval %lu",
 		       cache->update_record_interval);
 		break;

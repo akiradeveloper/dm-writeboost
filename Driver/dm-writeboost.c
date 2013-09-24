@@ -267,10 +267,11 @@ static void *arr_at(struct arr *arr, size_t i)
  * The Detail of the Disk Format
  *
  * Whole:
- * Superblock(1MB) Segment(1MB) ...
+ * Superblock(1MB) Segment(1MB) Segment(1MB) ...
  * We reserve the first segment (1MB) as the superblock.
  *
  * Superblock(1MB):
+ * head <----                               ----> tail
  * superblock header(512B) ... superblock record(512B)
  *
  * Segment(1MB):
@@ -540,6 +541,7 @@ struct wb_cache {
 	 * periodically.
 	 */
 	unsigned long update_record_interval;
+	struct work_struct recorder_work;
 
 	/*
 	 * Flush the RAM buffer periodically.
@@ -1942,6 +1944,58 @@ modulator_update:
 	}
 }
 
+static void update_superblock_record(struct wb_cache *cache)
+{
+	struct superblock_record_device o;
+	void *buf;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
+	o.last_migrated_segment_id =
+		cpu_to_le64(cache->last_migrated_segment_id);
+
+	buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO | __GFP_ZERO);
+	memcpy(buf, &o, sizeof(o));
+
+	io_req = (struct dm_io_request) {
+		.client = wb_io_client,
+		.bi_rw = WRITE_FUA,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	region = (struct dm_io_region) {
+		.bdev = cache->device->bdev,
+		.sector = (1 << 11) - 1,
+		.count = 1,
+	};
+	dm_safe_io_retry(&io_req, 1, &region, true);
+	kfree(buf);
+}
+
+static void recorder_proc(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, recorder_work);
+	unsigned long intvl;
+	while (true) {
+		if (cache->on_terminate)
+			return;
+
+		/* sec -> ms */
+		intvl = cache->update_record_interval * 1000;
+
+		if (!intvl) {
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
+			continue;
+		}
+
+		update_superblock_record(cache);
+
+		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
+	}
+}
+
 static void flush_barrier_ios(struct work_struct *work)
 {
 	struct wb_cache *cache =
@@ -1998,35 +2052,6 @@ static int __must_check read_superblock_record(
 	memcpy(record, buf, sizeof(*record));
 
 	return r;
-}
-
-static void update_superblock_record(struct wb_cache *cache)
-{
-	struct superblock_record_device o;
-	void *buf;
-	struct dm_io_request io_req;
-	struct dm_io_region region;
-
-	o.last_migrated_segment_id =
-		cpu_to_le64(cache->last_migrated_segment_id);
-
-	buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
-	memcpy(buf, &o, sizeof(o));
-
-	io_req = (struct dm_io_request) {
-		.client = wb_io_client,
-		.bi_rw = WRITE_FUA,
-		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = buf,
-	};
-	region = (struct dm_io_region) {
-		.bdev = cache->device->bdev,
-		.sector = (1 << 11) - 1,
-		.count = 1,
-	};
-	dm_safe_io_retry(&io_req, 1, &region, true);
-	kfree(buf);
 }
 
 static int read_superblock_header(struct superblock_header_device *sup,
@@ -2652,6 +2677,10 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	schedule_work(&cache->modulator_work);
 
 
+	/* Superblock Recorder */
+	INIT_WORK(&cache->recorder_work, recorder_proc);
+	schedule_work(&cache->recorder_work);
+
 	clear_stat(cache);
 
 	return 0;
@@ -2789,8 +2818,12 @@ bad_get_device_orig:
 
 static void free_cache(struct wb_cache *cache)
 {
+	/* TODO cleanup for dirty data */
+
 	cache->on_terminate = true;
 
+	/* Kill in-kernel daemons */
+	cancel_work_sync(&cache->recorder_work);
 	cancel_work_sync(&cache->modulator_work);
 
 	cancel_work_sync(&cache->flush_work);
@@ -2803,6 +2836,7 @@ static void free_cache(struct wb_cache *cache)
 	kfree(cache->dirtiness_snapshot);
 	vfree(cache->migrate_buffer);
 
+	/* Destroy in-core structures */
 	kill_arr(cache->htable);
 	kill_arr(cache->segment_header_array);
 
@@ -2875,15 +2909,11 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	if (!strcasecmp(cmd, "update_record_interval")) {
-		if (tmp < 1)
-			return -EINVAL;
 		cache->update_record_interval = tmp;
 		return 0;
 	}
 
 	if (!strcasecmp(cmd, "flush_current_buffer_interval")) {
-		if (tmp < 1)
-			return -EINVAL;
 		cache->flush_current_buffer_interval = tmp;
 		return 0;
 	}

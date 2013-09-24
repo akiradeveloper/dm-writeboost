@@ -1211,7 +1211,6 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 			 )
 {
 	unsigned long flags;
-	struct wb_cache *cache;
 	struct segment_header *uninitialized_var(seg);
 	struct metablock *mb, *new_mb;
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
@@ -1228,6 +1227,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 	void *data;
 
 	struct wb_device *wb = ti->private;
+	struct wb_cache *cache = wb->cache;
 	struct dm_dev *orig = wb->device;
 
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
@@ -1250,8 +1250,6 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 		bio_remap(bio, orig, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
-
-	cache = wb->cache;
 
 	if (bio->bi_rw & REQ_FLUSH) {
 		BUG_ON(bio->bi_size);
@@ -2038,8 +2036,7 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
 
-	/* FIXME kmalloc is enough */
-	void *buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
+	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
 		WBERR();
 		return -ENOMEM;

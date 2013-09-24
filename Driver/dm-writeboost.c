@@ -496,7 +496,7 @@ struct wb_cache {
 	struct work_struct barrier_deadline_work;
 	struct timer_list barrier_deadline_timer;
 	struct bio_list barrier_ios;
-	unsigned long barrier_deadline_ms;
+	unsigned long barrier_deadline_ms; /* param */
 
 	/*
 	 * Migration daemon
@@ -509,7 +509,7 @@ struct wb_cache {
 	 */
 	struct work_struct migrate_work;
 	struct workqueue_struct *migrate_wq;
-	bool allow_migrate;
+	bool allow_migrate; /* param */
 
 	/*
 	 * Batched Migration
@@ -520,11 +520,11 @@ struct wb_cache {
 	wait_queue_head_t migrate_wait_queue;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
-	size_t nr_max_batched_migration;
-	size_t nr_cur_batched_migration;
 	struct list_head migrate_list;
 	u8 *dirtiness_snapshot;
 	void *migrate_buffer;
+	size_t nr_cur_batched_migration;
+	size_t nr_max_batched_migration; /* param */
 
 	/*
 	 * Migration modulator
@@ -533,8 +533,8 @@ struct wb_cache {
 	 * the migration
 	 * according to the load of backing store.
 	 */
-	bool enable_migration_modulator;
 	struct work_struct modulator_work;
+	bool enable_migration_modulator; /* param */
 
 	/*
 	 * Superblock Recorder
@@ -542,8 +542,8 @@ struct wb_cache {
 	 * Update the superblock record
 	 * periodically.
 	 */
-	unsigned long update_record_interval;
 	struct work_struct recorder_work;
+	unsigned long update_record_interval; /* param */
 
 	/*
 	 * Cache Synchronizer
@@ -551,12 +551,12 @@ struct wb_cache {
 	 * Sync the dirty writes
 	 * periodically.
 	 */
-	unsigned long sync_interval;
 	struct work_struct sync_work;
+	unsigned long sync_interval; /* param */
 
 	/*
 	 * on_terminate is true
-	 * to notify all the background daemon to
+	 * to notify all the background daemons to
 	 * stop their operations.
 	 */
 	bool on_terminate;
@@ -1061,10 +1061,16 @@ static void prepare_meta_rambuffer(void *rambuffer,
 	prepare_segment_header_device(rambuffer, cache, seg);
 }
 
-struct flush_context {
+struct flush_job {
 	struct list_head flush_queue;
 	struct segment_header *seg;
+	/*
+	 * The data to flush to cache device.
+	 */
 	struct rambuffer *rambuf;
+	/*
+	 * List of bios with barrier flags.
+	 */
 	struct bio_list barrier_ios;
 };
 
@@ -1076,10 +1082,11 @@ static void queue_flushing(struct wb_cache *cache)
 {
 	unsigned long flags;
 	struct segment_header *current_seg = cache->current_seg, *new_seg;
-	struct flush_context *ctx;
+	struct flush_job *job;
 	bool empty;
 	struct rambuffer *next_rambuf;
-	size_t next_id, n1 = 0, n2 = 0;
+	size_t n1 = 0, n2 = 0;
+	u64 next_id;
 
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
 		n1++;
@@ -1094,18 +1101,18 @@ static void queue_flushing(struct wb_cache *cache)
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
 
-	ctx = kmalloc_retry(sizeof(*ctx), GFP_NOIO);
-	INIT_LIST_HEAD(&ctx->flush_queue);
-	ctx->seg = current_seg;
-	ctx->rambuf = cache->current_rambuf;
+	job = kmalloc_retry(sizeof(*job), GFP_NOIO);
+	INIT_LIST_HEAD(&job->flush_queue);
+	job->seg = current_seg;
+	job->rambuf = cache->current_rambuf;
 
-	bio_list_init(&ctx->barrier_ios);
-	bio_list_merge(&ctx->barrier_ios, &cache->barrier_ios);
+	bio_list_init(&job->barrier_ios);
+	bio_list_merge(&job->barrier_ios, &cache->barrier_ios);
 	bio_list_init(&cache->barrier_ios);
 
 	spin_lock_irqsave(&cache->flush_queue_lock, flags);
 	empty = list_empty(&cache->flush_queue);
-	list_add_tail(&ctx->flush_queue, &cache->flush_queue);
+	list_add_tail(&job->flush_queue, &cache->flush_queue);
 	spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 	if (empty)
 		wake_up_interruptible(&cache->flush_wait_queue);
@@ -1526,11 +1533,12 @@ static void flush_proc(struct work_struct *work)
 		container_of(work, struct wb_cache, flush_work);
 
 	while (true) {
-		WBINFO();
-		struct flush_context *ctx;
+		struct flush_job *job;
 		struct segment_header *seg;
 		struct dm_io_request io_req;
 		struct dm_io_region region;
+
+		WBINFO();
 
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while (list_empty(&cache->flush_queue)) {
@@ -1549,19 +1557,19 @@ static void flush_proc(struct work_struct *work)
 		 * Pop a fluch_context from a list
 		 * and flush it.
 		 */
-		ctx = list_first_entry(
-			&cache->flush_queue, struct flush_context, flush_queue);
-		list_del(&ctx->flush_queue);
+		job = list_first_entry(
+			&cache->flush_queue, struct flush_job, flush_queue);
+		list_del(&job->flush_queue);
 		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 
-		seg = ctx->seg;
+		seg = job->seg;
 
 		io_req = (struct dm_io_request) {
 			.client = wb_io_client,
 			.bi_rw = WRITE,
 			.notify.fn = NULL,
 			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = ctx->rambuf->data,
+			.mem.ptr.addr = job->rambuf->data,
 		};
 
 		region = (struct dm_io_region) {
@@ -1576,22 +1584,22 @@ static void flush_proc(struct work_struct *work)
 
 		complete_all(&seg->flush_done);
 
-		complete_all(&ctx->rambuf->done);
+		complete_all(&job->rambuf->done);
 
 		/*
 		 * Deferred ACK
 		 */
-		if (!bio_list_empty(&ctx->barrier_ios)) {
+		if (!bio_list_empty(&job->barrier_ios)) {
 			struct bio *bio;
 			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
-			while ((bio = bio_list_pop(&ctx->barrier_ios)))
+			while ((bio = bio_list_pop(&job->barrier_ios)))
 				bio_endio(bio, 0);
 
 			mod_timer(&cache->barrier_deadline_timer,
 				  msecs_to_jiffies(cache->barrier_deadline_ms));
 		}
 
-		kfree(ctx);
+		kfree(job);
 	}
 }
 
@@ -1835,10 +1843,11 @@ static void migrate_proc(struct work_struct *work)
 		container_of(work, struct wb_cache, migrate_work);
 
 	while (true) {
-		WBINFO();
 		bool allow_migrate;
 		size_t i, nr_mig_candidates, nr_mig;
 		struct segment_header *seg, *tmp;
+
+		WBINFO();
 
 		if (cache->on_terminate)
 			return;
@@ -2186,8 +2195,8 @@ static int format_superblock_header(struct dm_dev *dev)
 }
 
 struct format_segmd_context {
-	atomic64_t count;
 	int err;
+	atomic64_t count;
 };
 
 static void format_segmd_endio(unsigned long error, void *__context)
@@ -2908,8 +2917,8 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 
-	unsigned long tmp;
 	char *cmd = argv[0];
+	unsigned long tmp;
 
 	if (!strcasecmp(cmd, "clear_stat")) {
 		struct wb_cache *cache = wb->cache;

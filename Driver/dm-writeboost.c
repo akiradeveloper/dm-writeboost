@@ -2601,14 +2601,13 @@ static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->nr_segments = calc_nr_segments(cache->device);
 	cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
 	cache->on_terminate = false;
-	// cache->allow_migrate = false;
 	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
 	mutex_init(&cache->io_lock);
 
-	cache->enable_migration_modulator = false;
-	cache->update_record_interval = 0;
-	cache->sync_interval = 0;
+	cache->enable_migration_modulator = true;
+	cache->update_record_interval = 60;
+	cache->sync_interval = 60;
 
 	r = init_rambuf_pool(cache);
 	if (r) {

@@ -1,5 +1,6 @@
 #ifndef WRITEBOOST_HASHTABLE_H
 #define WRITEBOOST_HASHTABLE_H
+
 #include "writeboost.h"
 #include "segment.h"
 

@@ -10,7 +10,7 @@
 #include "target.h"
 
 /*
- * <backing path> <cache path>
+ * <backing dev> <cache dev>
  */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {

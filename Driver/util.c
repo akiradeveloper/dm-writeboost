@@ -17,7 +17,7 @@ retry_alloc:
 	return p;
 }
 
-struct workqueue_struct *safe_io_wq;
+extern struct workqueue_struct *safe_io_wq;
 struct safe_io {
 	struct work_struct work;
 	int err;

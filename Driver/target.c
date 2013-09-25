@@ -333,7 +333,8 @@ static struct target_type writeboost_target = {
 	.iterate_devices = writeboost_iterate_devices,
 };
 
-extern struct workqueue_struct *safe_io_wq;
+struct dm_io_client *wb_io_client;
+struct workqueue_struct *safe_io_wq;
 static int __init writeboost_module_init(void)
 {
 	int r = 0;

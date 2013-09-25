@@ -10,22 +10,22 @@ obj-m := dm-writeboost.o
 dm-writeboost-objs := \
 	target.o \
 	handle-io.o \
-	format-segment.o \
-	format-superblock.o \
-	util.o \
-	bigarray.o \
-	cache-alloc.o \
-	recover.o \
-	segment.o \
-	hashtable.o \
-	rambuf.o \
 	queue-flush-job.o \
-	flush.o \
+	flush-daemon.o \
 	migrate-daemon.o \
 	migrate-modulator.o \
 	defer-barrier.o \
 	superblock-recorder.o \
-	cache-sync.o
+	cache-sync.o \
+	bigarray.o \
+	segment.o \
+	hashtable.o \
+	cache-alloc.o \
+	format-segment.o \
+	format-superblock.o \
+	recover.o \
+	rambuf.o \
+	util.o
 
 all:
 	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) modules

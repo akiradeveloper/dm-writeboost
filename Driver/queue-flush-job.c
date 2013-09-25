@@ -1,7 +1,5 @@
 #include "writeboost.h"
 
-u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id);
-
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {
 	u8 i, count = 0;

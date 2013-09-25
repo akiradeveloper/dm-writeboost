@@ -1,7 +1,7 @@
 #include "writeboost.h"
 
 int read_superblock_header(struct superblock_header_device *sup,
-				  struct dm_dev *dev)
+			   struct dm_dev *dev)
 {
 	int r = 0;
 	struct dm_io_request io_req_sup;

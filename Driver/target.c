@@ -11,20 +11,20 @@ int read_superblock_header(struct superblock_header_device *, struct dm_dev *);
 int audit_superblock_header(struct superblock_header_device *);
 int format_cache_device(struct dm_dev *);
 
-int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *);
-void free_cache(struct wb_cache *cache);
+int __must_check resume_cache(struct wb_cache *, struct dm_dev *);
+void free_cache(struct wb_cache *);
 
-int writeboost_map(struct dm_target *ti, struct bio *bio
+int writeboost_map(struct dm_target *, struct bio *
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-			, union map_info *map_context
+		 , union map_info *
 #endif
-			 );
+		  );
 
-int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
+int writeboost_end_io(struct dm_target *, struct bio *, int error
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-			   , union map_info *map_context
+		    , union map_info *
 #endif
-			    );
+		     );
 
 /*
  * <orig path> <cache path>

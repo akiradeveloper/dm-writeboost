@@ -369,6 +369,14 @@ struct flush_job {
 	struct bio_list barrier_ios;
 };
 
+#define PER_BIO_VERSION KERNEL_VERSION(3, 8, 0)
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+struct per_bio_data {
+	void *ptr;
+};
+#endif
+
+
 struct arr;
 struct arr *make_arr(size_t elemsize, size_t nr_elems);
 void kill_arr(struct arr *);
@@ -398,33 +406,33 @@ void dm_safe_io_retry_internal(
 
 sector_t dm_devsize(struct dm_dev *);
 
-cache_nr ht_hash(struct wb_cache *cache, struct lookup_key *key);
-void ht_del(struct wb_cache *cache, struct metablock *mb);
-void ht_register(struct wb_cache *cache, struct ht_head *head,
-			struct lookup_key *key, struct metablock *mb);
-struct metablock *ht_lookup(struct wb_cache *cache,
-				   struct ht_head *head, struct lookup_key *key);
-void discard_caches_inseg(struct wb_cache *cache,
-				 struct segment_header *seg);
+
+cache_nr ht_hash(struct wb_cache *, struct lookup_key *);
+struct metablock *ht_lookup(struct wb_cache *,
+			    struct ht_head *, struct lookup_key *key);
+void ht_register(struct wb_cache *, struct ht_head *,
+		 struct lookup_key *, struct metablock *);
+void ht_del(struct wb_cache *, struct metablock *);
+void discard_caches_inseg(struct wb_cache *,
+			  struct segment_header *);
 
 
-void wait_for_migration(struct wb_cache *cache, size_t id);
-
-struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
-						       size_t segment_id);
-u64 calc_nr_segments(struct dm_dev *dev);
+u64 calc_nr_segments(struct dm_dev *);
+struct segment_header *get_segment_header_by_id(struct wb_cache *,
+					        size_t segment_id);
 sector_t calc_segment_header_start(size_t segment_idx);
- 
-void clear_stat(struct wb_cache *);
+sector_t calc_mb_start_sector(struct segment_header *, cache_nr mb_idx);
+u32 calc_segment_lap(struct wb_cache *, size_t segment_id);
+struct metablock *mb_at(struct wb_cache *, cache_nr idx);
+bool is_on_buffer(struct wb_cache *, cache_nr mb_idx);
+
 
 void flush_current_buffer(struct wb_cache *);
 
-#define PER_BIO_VERSION KERNEL_VERSION(3, 8, 0)
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
-struct per_bio_data {
-	void *ptr;
-};
+void wait_for_migration(struct wb_cache *, size_t id);
 
-#endif
+void inc_nr_dirty_caches(struct wb_device *);
+
+void clear_stat(struct wb_cache *);
 
 #endif

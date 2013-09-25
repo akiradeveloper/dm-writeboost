@@ -1,7 +1,5 @@
 #include "writeboost.h"
 
-struct metablock *mb_at(struct wb_cache *cache, cache_nr idx);
-
 /*
  * Initialize the Hash Table.
  */
@@ -62,7 +60,7 @@ void ht_del(struct wb_cache *cache, struct metablock *mb)
 }
 
 void ht_register(struct wb_cache *cache, struct ht_head *head,
-			struct lookup_key *key, struct metablock *mb)
+		 struct lookup_key *key, struct metablock *mb)
 {
 	hlist_del(&mb->ht_list);
 	hlist_add_head(&mb->ht_list, &head->ht_list);
@@ -71,7 +69,7 @@ void ht_register(struct wb_cache *cache, struct ht_head *head,
 };
 
 struct metablock *ht_lookup(struct wb_cache *cache,
-				   struct ht_head *head, struct lookup_key *key)
+			    struct ht_head *head, struct lookup_key *key)
 {
 	struct metablock *mb, *found = NULL;
 
@@ -94,7 +92,7 @@ struct metablock *ht_lookup(struct wb_cache *cache,
  * Discard all the metablock in the given segment.
  */
 void discard_caches_inseg(struct wb_cache *cache,
-				 struct segment_header *seg)
+			  struct segment_header *seg)
 {
 	u8 i;
 	for (i = 0; i < NR_CACHES_INSEG; i++) {

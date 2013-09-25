@@ -1,9 +1,8 @@
 #include "writeboost.h"
 
-sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx);
-void queue_barrier_io(struct wb_cache *cache, struct bio *bio);
-void queue_current_buffer(struct wb_cache *cache);
-bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx);
+void queue_barrier_io(struct wb_cache *, struct bio *);
+
+void queue_current_buffer(struct wb_cache *);
 
 void inc_nr_dirty_caches(struct wb_device *wb)
 {
@@ -11,15 +10,15 @@ void inc_nr_dirty_caches(struct wb_device *wb)
 	atomic64_inc(&wb->nr_dirty_caches);
 }
 
-void dec_nr_dirty_caches(struct wb_device *wb)
+static void dec_nr_dirty_caches(struct wb_device *wb)
 {
 	BUG_ON(!wb);
 	atomic64_dec(&wb->nr_dirty_caches);
 }
 
 void cleanup_mb_if_dirty(struct wb_cache *cache,
-				struct segment_header *seg,
-				struct metablock *mb)
+			 struct segment_header *seg,
+			 struct metablock *mb)
 {
 	unsigned long flags;
 
@@ -36,7 +35,7 @@ void cleanup_mb_if_dirty(struct wb_cache *cache,
 }
 
 u8 atomic_read_mb_dirtiness(struct segment_header *seg,
-				   struct metablock *mb)
+			    struct metablock *mb)
 {
 	unsigned long flags;
 	u8 r;
@@ -211,6 +210,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 	}
 	kfree(buf);
 }
+
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
 	bio->bi_bdev = dev->bdev;
@@ -225,9 +225,9 @@ static sector_t calc_cache_alignment(struct wb_cache *cache,
 
 int writeboost_map(struct dm_target *ti, struct bio *bio
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-			, union map_info *map_context
+		 , union map_info *map_context
 #endif
-			 )
+		  )
 {
 	unsigned long flags;
 	struct segment_header *uninitialized_var(seg);
@@ -512,9 +512,9 @@ write_on_buffer:
 
 int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-			   , union map_info *map_context
+		    , union map_info *map_context
 #endif
-			    )
+		     )
 {
 	struct segment_header *seg;
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION

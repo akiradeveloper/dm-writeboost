@@ -1,7 +1,6 @@
 #include "writeboost.h"
 
 int format_superblock_header(struct dm_dev *dev);
-sector_t calc_segment_header_start(size_t segment_idx);
 
 struct format_segmd_context {
 	int err;

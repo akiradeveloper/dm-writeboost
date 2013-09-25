@@ -1,11 +1,11 @@
 #include "writeboost.h"
 
-u8 atomic_read_mb_dirtiness(struct segment_header *seg,
-				   struct metablock *mb);
+u8 atomic_read_mb_dirtiness(struct segment_header *,
+			    struct metablock *);
 
-void cleanup_mb_if_dirty(struct wb_cache *cache,
-				struct segment_header *seg,
-				struct metablock *mb);
+void cleanup_mb_if_dirty(struct wb_cache *,
+			 struct segment_header *,
+			 struct metablock *);
 
 static void migrate_endio(unsigned long error, void *context)
 {

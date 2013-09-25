@@ -1,10 +1,8 @@
 #include "writeboost.h"
 
-void inc_nr_dirty_caches(struct wb_device *wb);
-
-static int __must_check read_superblock_record(
-		struct superblock_record_device *record,
-		struct wb_cache *cache)
+static int __must_check
+read_superblock_record(struct superblock_record_device *record,
+		       struct wb_cache *cache)
 {
 	int r = 0;
 	struct dm_io_request io_req;
@@ -42,9 +40,9 @@ static int __must_check read_superblock_record(
 	return r;
 }
 
-static int __must_check read_segment_header_device(
-		struct segment_header_device *dest,
-		struct wb_cache *cache, size_t segment_idx)
+static int __must_check
+read_segment_header_device(struct segment_header_device *dest,
+			   struct wb_cache *cache, size_t segment_idx)
 {
 	int r = 0;
 	struct dm_io_request io_req;

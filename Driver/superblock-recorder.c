@@ -1,3 +1,5 @@
+#include "writeboost.h"
+
 static void update_superblock_record(struct wb_cache *cache)
 {
 	struct superblock_record_device o;
@@ -27,7 +29,7 @@ static void update_superblock_record(struct wb_cache *cache)
 	kfree(buf);
 }
 
-static void recorder_proc(struct work_struct *work)
+void recorder_proc(struct work_struct *work)
 {
 	struct wb_cache *cache =
 		container_of(work, struct wb_cache, recorder_work);

@@ -1,3 +1,20 @@
+#include "writeboost.h"
+
+u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id);
+
+static u8 count_dirty_caches_remained(struct segment_header *seg)
+{
+	u8 i, count = 0;
+
+	struct metablock *mb;
+	for (i = 0; i < seg->length; i++) {
+		mb = seg->mb_array + i;
+		if (mb->dirty_bits)
+			count++;
+	}
+	return count;
+}
+
 /*
  * Make a metadata in segment data to flush.
  * @dest The metadata part of the segment to flush
@@ -106,7 +123,7 @@ static void queue_flushing(struct wb_cache *cache)
 	cache->current_seg = new_seg;
 }
 
-static void queue_current_buffer(struct wb_cache *cache)
+void queue_current_buffer(struct wb_cache *cache)
 {
 	/*
 	 * Before we get the next segment
@@ -132,7 +149,7 @@ static void queue_current_buffer(struct wb_cache *cache)
  * Clean up the writes before termination
  * is an example of the usecase.
  */
-static void flush_current_buffer(struct wb_cache *cache)
+void flush_current_buffer(struct wb_cache *cache)
 {
 	struct segment_header *old_seg;
 
@@ -146,4 +163,3 @@ static void flush_current_buffer(struct wb_cache *cache)
 
 	wait_for_completion(&old_seg->flush_done);
 }
-

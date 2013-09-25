@@ -1,4 +1,6 @@
-static int __must_check init_rambuf_pool(struct wb_cache *cache)
+#include "writeboost.h"
+
+int __must_check init_rambuf_pool(struct wb_cache *cache)
 {
 	size_t i, j;
 	struct rambuffer *rambuf;
@@ -32,7 +34,7 @@ static int __must_check init_rambuf_pool(struct wb_cache *cache)
 	return 0;
 }
 
-static void free_rambuf_pool(struct wb_cache *cache)
+void free_rambuf_pool(struct wb_cache *cache)
 {
 	struct rambuffer *rambuf;
 	size_t i;
@@ -42,4 +44,3 @@ static void free_rambuf_pool(struct wb_cache *cache)
 	}
 	kfree(cache->rambuf_pool);
 }
-

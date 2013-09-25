@@ -1,4 +1,6 @@
-static void modulator_proc(struct work_struct *work)
+#include "writeboost.h"
+
+void modulator_proc(struct work_struct *work)
 {
 	struct wb_cache *cache =
 		container_of(work, struct wb_cache, modulator_work);

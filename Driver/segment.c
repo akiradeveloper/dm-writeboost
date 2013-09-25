@@ -3,7 +3,7 @@
 /*
  * Get the in-core metablock of the given index.
  */
-static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
+struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 {
 	u64 seg_idx = idx / NR_CACHES_INSEG;
 	struct segment_header *seg =
@@ -12,7 +12,7 @@ static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 	return seg->mb_array + idx_inseg;
 }
 
-static void mb_array_empty_init(struct wb_cache *cache)
+void mb_array_empty_init(struct wb_cache *cache)
 {
 	size_t i;
 	for (i = 0; i < cache->nr_caches; i++) {
@@ -24,7 +24,7 @@ static void mb_array_empty_init(struct wb_cache *cache)
 	}
 }
 
-static int __must_check init_segment_header_array(struct wb_cache *cache)
+int __must_check init_segment_header_array(struct wb_cache *cache)
 {
 	u64 segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
@@ -58,4 +58,53 @@ static int __must_check init_segment_header_array(struct wb_cache *cache)
 	}
 
 	return 0;
+}
+
+/*
+ * Get the segment from the segment id.
+ * The Index of the segment is calculated from the segment id.
+ */
+struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
+						       size_t segment_id)
+{
+	struct segment_header *r =
+		arr_at(cache->segment_header_array,
+		       (segment_id - 1) % cache->nr_segments);
+	return r;
+}
+
+u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id)
+{
+	u32 a = (segment_id - 1) / cache->nr_segments;
+	return a + 1;
+};
+
+sector_t calc_mb_start_sector(struct segment_header *seg,
+				     cache_nr mb_idx)
+{
+	size_t k = 1 + (mb_idx % NR_CACHES_INSEG);
+	return seg->start_sector + (k << 3);
+}
+
+sector_t calc_segment_header_start(size_t segment_idx)
+{
+	return (1 << WB_SEGMENTSIZE_ORDER) * (segment_idx + 1);
+}
+
+u64 calc_nr_segments(struct dm_dev *dev)
+{
+	sector_t devsize = dm_devsize(dev);
+	return devsize / (1 << WB_SEGMENTSIZE_ORDER) - 1;
+}
+
+bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
+{
+	cache_nr start = cache->current_seg->start_idx;
+	if (mb_idx < start)
+		return false;
+
+	if (mb_idx >= (start + NR_CACHES_INSEG))
+		return false;
+
+	return true;
 }

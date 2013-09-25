@@ -1,3 +1,5 @@
+#include "writeboost.h"
+
 /* TODO rename */
 /*
  * struct arr
@@ -30,7 +32,7 @@ static size_t nr_parts(struct arr *arr)
 	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
 }
 
-static struct arr *make_arr(size_t elemsize, size_t nr_elems)
+struct arr *make_arr(size_t elemsize, size_t nr_elems)
 {
 	size_t i, j;
 	struct part *part;
@@ -70,7 +72,7 @@ bad_alloc_parts:
 	return NULL;
 }
 
-static void kill_arr(struct arr *arr)
+void kill_arr(struct arr *arr)
 {
 	size_t i;
 	for (i = 0; i < nr_parts(arr); i++) {
@@ -81,7 +83,7 @@ static void kill_arr(struct arr *arr)
 	kfree(arr);
 }
 
-static void *arr_at(struct arr *arr, size_t i)
+void *arr_at(struct arr *arr, size_t i)
 {
 	size_t n = nr_elems_in_part(arr);
 	size_t j = i / n;
@@ -89,4 +91,3 @@ static void *arr_at(struct arr *arr, size_t i)
 	struct part *part = arr->parts + j;
 	return part->memory + (arr->elemsize * k);
 }
-

@@ -1,4 +1,6 @@
-#include "writeboost"
+#include "writeboost.h"
+
+void inc_nr_dirty_caches(struct wb_device *wb);
 
 static int __must_check read_superblock_record(
 		struct superblock_record_device *record,
@@ -144,7 +146,7 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	return true;
 }
 
-static int __must_check recover_cache(struct wb_cache *cache)
+int __must_check recover_cache(struct wb_cache *cache)
 {
 	int r = 0;
 	struct segment_header_device *header;

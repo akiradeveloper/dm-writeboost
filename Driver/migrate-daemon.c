@@ -1,3 +1,12 @@
+#include "writeboost.h"
+
+u8 atomic_read_mb_dirtiness(struct segment_header *seg,
+				   struct metablock *mb);
+
+void cleanup_mb_if_dirty(struct wb_cache *cache,
+				struct segment_header *seg,
+				struct metablock *mb);
+
 static void migrate_endio(unsigned long error, void *context)
 {
 	struct wb_cache *cache = context;
@@ -232,7 +241,7 @@ migrate_write:
 	}
 }
 
-static void migrate_proc(struct work_struct *work)
+void migrate_proc(struct work_struct *work)
 {
 	struct wb_cache *cache =
 		container_of(work, struct wb_cache, migrate_work);
@@ -321,3 +330,17 @@ static void migrate_proc(struct work_struct *work)
 	}
 }
 
+void wait_for_migration(struct wb_cache *cache, size_t id)
+{
+	struct segment_header *seg = get_segment_header_by_id(cache, id);
+
+	/*
+	 * Set reserving_segment_id to non zero
+	 * to force the migartion daemon
+	 * to complete migarate of this segment
+	 * immediately.
+	 */
+	cache->reserving_segment_id = id;
+	wait_for_completion(&seg->migrate_done);
+	cache->reserving_segment_id = 0;
+}

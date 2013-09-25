@@ -20,6 +20,7 @@
 #define WBINFO(f, args...) \
 	DMINFO("info@%d " f, __LINE__, ## args)
 
+
 /*
  * (1 << x) sector.
  * 4 <= x <= 11
@@ -367,5 +368,63 @@ struct flush_job {
 	 */
 	struct bio_list barrier_ios;
 };
+
+struct arr;
+struct arr *make_arr(size_t elemsize, size_t nr_elems);
+void kill_arr(struct arr *);
+void *arr_at(struct arr *, size_t i);
+
+void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno);
+#define kmalloc_retry(size, flags) \
+	do_kmalloc_retry((size), (flags), __LINE__)
+
+extern struct dm_io_client *wb_io_client;
+
+int dm_safe_io_internal(
+		struct dm_io_request *,
+		unsigned num_regions, struct dm_io_region *,
+		unsigned long *err_bits, bool thread, int lineno);
+#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
+	dm_safe_io_internal((io_req), (num_regions), (regions), \
+			    (err_bits), (thread), __LINE__)
+
+void dm_safe_io_retry_internal(
+		struct dm_io_request *,
+		unsigned num_regions, struct dm_io_region *,
+		bool thread, int lineno);
+#define dm_safe_io_retry(io_req, num_regions, regions, thread) \
+	dm_safe_io_retry_internal((io_req), (num_regions), (regions), \
+				  (thread), __LINE__)
+
+sector_t dm_devsize(struct dm_dev *);
+
+cache_nr ht_hash(struct wb_cache *cache, struct lookup_key *key);
+void ht_del(struct wb_cache *cache, struct metablock *mb);
+void ht_register(struct wb_cache *cache, struct ht_head *head,
+			struct lookup_key *key, struct metablock *mb);
+struct metablock *ht_lookup(struct wb_cache *cache,
+				   struct ht_head *head, struct lookup_key *key);
+void discard_caches_inseg(struct wb_cache *cache,
+				 struct segment_header *seg);
+
+
+void wait_for_migration(struct wb_cache *cache, size_t id);
+
+struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
+						       size_t segment_id);
+u64 calc_nr_segments(struct dm_dev *dev);
+sector_t calc_segment_header_start(size_t segment_idx);
+ 
+void clear_stat(struct wb_cache *);
+
+void flush_current_buffer(struct wb_cache *);
+
+#define PER_BIO_VERSION KERNEL_VERSION(3, 8, 0)
+#if LINUX_VERSION_CODE >= PER_BIO_VERSION
+struct per_bio_data {
+	void *ptr;
+};
+
+#endif
 
 #endif

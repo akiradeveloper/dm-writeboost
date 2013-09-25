@@ -1,6 +1,6 @@
-#include "writeboost"
+#include "writeboost.h"
 
-static void sync_proc(struct work_struct *work)
+void sync_proc(struct work_struct *work)
 {
 	struct wb_cache *cache =
 		container_of(work, struct wb_cache, sync_work);
@@ -25,4 +25,3 @@ static void sync_proc(struct work_struct *work)
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
 }
-

@@ -21,8 +21,8 @@ dm-writeboost-objs := \
 	rambuf.o \
 	queue-flush-job.o \
 	flush.o \
-	migrate.o \
-	migrate-modulator.o
+	migrate-daemon.o \
+	migrate-modulator.o \
 	defer-barrier.o \
 	superblock-recorder.o \
 	cache-sync.o

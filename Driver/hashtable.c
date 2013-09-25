@@ -1,7 +1,11 @@
+#include "writeboost.h"
+
+struct metablock *mb_at(struct wb_cache *cache, cache_nr idx);
+
 /*
  * Initialize the Hash Table.
  */
-static int __must_check ht_empty_init(struct wb_cache *cache)
+int __must_check ht_empty_init(struct wb_cache *cache)
 {
 	cache_nr idx;
 	size_t i;
@@ -37,7 +41,7 @@ static int __must_check ht_empty_init(struct wb_cache *cache)
 	return 0;
 }
 
-static cache_nr ht_hash(struct wb_cache *cache, struct lookup_key *key)
+cache_nr ht_hash(struct wb_cache *cache, struct lookup_key *key)
 {
 	return key->sector % cache->htsize;
 }
@@ -47,7 +51,7 @@ static bool mb_hit(struct metablock *mb, struct lookup_key *key)
 	return mb->sector == key->sector;
 }
 
-static void ht_del(struct wb_cache *cache, struct metablock *mb)
+void ht_del(struct wb_cache *cache, struct metablock *mb)
 {
 	struct ht_head *null_head;
 
@@ -57,7 +61,7 @@ static void ht_del(struct wb_cache *cache, struct metablock *mb)
 	hlist_add_head(&mb->ht_list, &null_head->ht_list);
 }
 
-static void ht_register(struct wb_cache *cache, struct ht_head *head,
+void ht_register(struct wb_cache *cache, struct ht_head *head,
 			struct lookup_key *key, struct metablock *mb)
 {
 	hlist_del(&mb->ht_list);
@@ -66,7 +70,7 @@ static void ht_register(struct wb_cache *cache, struct ht_head *head,
 	mb->sector = key->sector;
 };
 
-static struct metablock *ht_lookup(struct wb_cache *cache,
+struct metablock *ht_lookup(struct wb_cache *cache,
 				   struct ht_head *head, struct lookup_key *key)
 {
 	struct metablock *mb, *found = NULL;
@@ -89,7 +93,7 @@ static struct metablock *ht_lookup(struct wb_cache *cache,
 /*
  * Discard all the metablock in the given segment.
  */
-static void discard_caches_inseg(struct wb_cache *cache,
+void discard_caches_inseg(struct wb_cache *cache,
 				 struct segment_header *seg)
 {
 	u8 i;
@@ -98,4 +102,3 @@ static void discard_caches_inseg(struct wb_cache *cache,
 		ht_del(cache, mb);
 	}
 }
-

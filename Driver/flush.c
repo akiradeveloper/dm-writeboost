@@ -1,4 +1,6 @@
-static void flush_proc(struct work_struct *work)
+#include "writeboost.h"
+
+void flush_proc(struct work_struct *work)
 {
 	unsigned long flags;
 

@@ -1,3 +1,216 @@
+#include "writeboost.h"
+
+sector_t calc_mb_start_sector(struct segment_header *seg, cache_nr mb_idx);
+void queue_barrier_io(struct wb_cache *cache, struct bio *bio);
+void queue_current_buffer(struct wb_cache *cache);
+bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx);
+
+void inc_nr_dirty_caches(struct wb_device *wb)
+{
+	BUG_ON(!wb);
+	atomic64_inc(&wb->nr_dirty_caches);
+}
+
+void dec_nr_dirty_caches(struct wb_device *wb)
+{
+	BUG_ON(!wb);
+	atomic64_dec(&wb->nr_dirty_caches);
+}
+
+void cleanup_mb_if_dirty(struct wb_cache *cache,
+				struct segment_header *seg,
+				struct metablock *mb)
+{
+	unsigned long flags;
+
+	bool b = false;
+	lockseg(seg, flags);
+	if (mb->dirty_bits) {
+		mb->dirty_bits = 0;
+		b = true;
+	}
+	unlockseg(seg, flags);
+
+	if (b)
+		dec_nr_dirty_caches(cache->wb);
+}
+
+u8 atomic_read_mb_dirtiness(struct segment_header *seg,
+				   struct metablock *mb)
+{
+	unsigned long flags;
+	u8 r;
+
+	lockseg(seg, flags);
+	r = mb->dirty_bits;
+	unlockseg(seg, flags);
+
+	return r;
+}
+
+static void inc_stat(struct wb_cache *cache,
+		     int rw, bool found, bool on_buffer, bool fullsize)
+{
+	atomic64_t *v;
+
+	int i = 0;
+	if (rw)
+		i |= (1 << STAT_WRITE);
+	if (found)
+		i |= (1 << STAT_HIT);
+	if (on_buffer)
+		i |= (1 << STAT_ON_BUFFER);
+	if (fullsize)
+		i |= (1 << STAT_FULLSIZE);
+
+	v = &cache->stat[i];
+	atomic64_inc(v);
+}
+
+void clear_stat(struct wb_cache *cache)
+{
+	int i;
+	for (i = 0; i < STATLEN; i++) {
+		atomic64_t *v = &cache->stat[i];
+		atomic64_set(v, 0);
+	}
+}
+
+static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
+		       struct metablock *mb, u8 dirty_bits, bool thread)
+{
+	struct wb_device *wb = cache->wb;
+
+	if (!dirty_bits)
+		return;
+
+	if (dirty_bits == 255) {
+		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
+		struct dm_io_request io_req_r, io_req_w;
+		struct dm_io_region region_r, region_w;
+
+		io_req_r = (struct dm_io_request) {
+			.client = wb_io_client,
+			.bi_rw = READ,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = buf,
+		};
+		region_r = (struct dm_io_region) {
+			.bdev = cache->device->bdev,
+			.sector = calc_mb_start_sector(seg, mb->idx),
+			.count = (1 << 3),
+		};
+
+		dm_safe_io_retry(&io_req_r, 1, &region_r, thread);
+
+		io_req_w = (struct dm_io_request) {
+			.client = wb_io_client,
+			.bi_rw = WRITE_FUA,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = buf,
+		};
+		region_w = (struct dm_io_region) {
+			.bdev = wb->device->bdev,
+			.sector = mb->sector,
+			.count = (1 << 3),
+		};
+		dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
+
+		kfree(buf);
+	} else {
+		void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+		size_t i;
+		for (i = 0; i < 8; i++) {
+			bool bit_on = dirty_bits & (1 << i);
+			struct dm_io_request io_req_r, io_req_w;
+			struct dm_io_region region_r, region_w;
+			sector_t src;
+
+			if (!bit_on)
+				continue;
+
+			io_req_r = (struct dm_io_request) {
+				.client = wb_io_client,
+				.bi_rw = READ,
+				.notify.fn = NULL,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = buf,
+			};
+			/* A tmp variable just to avoid 80 cols rule */
+			src = calc_mb_start_sector(seg, mb->idx) + i;
+			region_r = (struct dm_io_region) {
+				.bdev = cache->device->bdev,
+				.sector = src,
+				.count = 1,
+			};
+			dm_safe_io_retry(&io_req_r, 1, &region_r, thread);
+
+			io_req_w = (struct dm_io_request) {
+				.client = wb_io_client,
+				.bi_rw = WRITE,
+				.notify.fn = NULL,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = buf,
+			};
+			region_w = (struct dm_io_region) {
+				.bdev = wb->device->bdev,
+				.sector = mb->sector + 1 * i,
+				.count = 1,
+			};
+			dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
+		}
+		kfree(buf);
+	}
+}
+
+/*
+ * Migrate the cache on the RAM buffer.
+ * Rarely called.
+ */
+static void migrate_buffered_mb(struct wb_cache *cache,
+				struct metablock *mb, u8 dirty_bits)
+{
+	struct wb_device *wb = cache->wb;
+
+	u8 i, k = 1 + (mb->idx % NR_CACHES_INSEG);
+	sector_t offset = (k << 3);
+
+	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	for (i = 0; i < 8; i++) {
+		struct dm_io_request io_req;
+		struct dm_io_region region;
+		void *src;
+		sector_t dest;
+
+		bool bit_on = dirty_bits & (1 << i);
+		if (!bit_on)
+			continue;
+
+		src = cache->current_rambuf->data +
+		      ((offset + i) << SECTOR_SHIFT);
+		memcpy(buf, src, 1 << SECTOR_SHIFT);
+
+		io_req = (struct dm_io_request) {
+			.client = wb_io_client,
+			.bi_rw = WRITE_FUA,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = buf,
+		};
+
+		dest = mb->sector + 1 * i;
+		region = (struct dm_io_region) {
+			.bdev = wb->device->bdev,
+			.sector = dest,
+			.count = 1,
+		};
+
+		dm_safe_io_retry(&io_req, 1, &region, true);
+	}
+	kfree(buf);
+}
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
 	bio->bi_bdev = dev->bdev;
@@ -10,14 +223,7 @@ static sector_t calc_cache_alignment(struct wb_cache *cache,
 	return (bio_sector / (1 << 3)) * (1 << 3);
 }
 
-#define PER_BIO_VERSION KERNEL_VERSION(3, 8, 0)
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
-struct per_bio_data {
-	void *ptr;
-};
-#endif
-
-static int writeboost_map(struct dm_target *ti, struct bio *bio
+int writeboost_map(struct dm_target *ti, struct bio *bio
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
 			, union map_info *map_context
 #endif
@@ -304,7 +510,7 @@ write_on_buffer:
 	return DM_MAPIO_SUBMITTED;
 }
 
-static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
+int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
 			   , union map_info *map_context
 #endif
@@ -323,4 +529,3 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 
 	return 0;
 }
-

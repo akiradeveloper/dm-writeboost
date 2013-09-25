@@ -12,7 +12,7 @@ struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 	return seg->mb_array + idx_inseg;
 }
 
-void mb_array_empty_init(struct wb_cache *cache)
+static void mb_array_empty_init(struct wb_cache *cache)
 {
 	size_t i;
 	for (i = 0; i < cache->nr_caches; i++) {
@@ -56,6 +56,8 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 		init_completion(&seg->migrate_done);
 		complete_all(&seg->migrate_done);
 	}
+
+	mb_array_empty_init(cache);
 
 	return 0;
 }

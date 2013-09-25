@@ -10,7 +10,6 @@ void barrier_deadline_proc(unsigned long data);
 
 int __must_check init_segment_header_array(struct wb_cache *);
 int __must_check ht_empty_init(struct wb_cache *);
-void mb_array_empty_init(struct wb_cache *);
 
 int __must_check recover_cache(struct wb_cache *);
 
@@ -49,7 +48,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		WBERR();
 		goto bad_alloc_segment_header_array;
 	}
-	mb_array_empty_init(cache);
 
 	r = ht_empty_init(cache);
 	if (r) {

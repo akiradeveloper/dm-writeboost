@@ -10,7 +10,8 @@ obj-m := dm-writeboost.o
 dm-writeboost-objs := \
 	target.o \
 	handle-io.o \
-	format.o \
+	format-segment.o \
+	format-superblock.o \
 	util.o \
 	bigarray.o \
 	cache-alloc.o \

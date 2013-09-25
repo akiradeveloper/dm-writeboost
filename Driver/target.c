@@ -7,25 +7,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
-
-int __must_check audit_cache_device(struct dm_dev *, bool *cache_valid);
-int __must_check format_cache_device(struct dm_dev *);
-
-int __must_check resume_cache(struct wb_cache *, struct dm_dev *);
-void free_cache(struct wb_cache *);
-
-int writeboost_map(struct dm_target *, struct bio *
-#if LINUX_VERSION_CODE < PER_BIO_VERSION
-		 , union map_info *
-#endif
-		  );
-
-int writeboost_end_io(struct dm_target *, struct bio *, int error
-#if LINUX_VERSION_CODE < PER_BIO_VERSION
-		    , union map_info *
-#endif
-		     );
+#include "target.h"
 
 /*
  * <backing path> <cache path>

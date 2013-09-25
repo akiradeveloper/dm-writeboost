@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "queue-flush-job.h"
 
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {

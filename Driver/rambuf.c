@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "rambuf.h"
 
 int __must_check init_rambuf_pool(struct wb_cache *cache)
 {

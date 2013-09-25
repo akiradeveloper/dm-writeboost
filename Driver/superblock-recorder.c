@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "superblock-recorder.h"
 
 static void update_superblock_record(struct wb_cache *cache)
 {

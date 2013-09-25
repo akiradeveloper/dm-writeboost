@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "format-cache.h"
 
 static int read_superblock_header(struct superblock_header_device *sup,
 				  struct dm_dev *dev)

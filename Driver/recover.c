@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "recover.h"
 
 static int __must_check
 read_superblock_record(struct superblock_record_device *record,

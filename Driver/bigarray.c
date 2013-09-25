@@ -15,7 +15,7 @@
  * struct arr is fast and light-weighted.
  */
 
-#include "writeboost.h"
+#include "bigarray.h"
 
 struct part {
 	void *memory;

@@ -4,11 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
-
-void queue_barrier_io(struct wb_cache *, struct bio *);
-
-void queue_current_buffer(struct wb_cache *);
+#include "handle-io.h"
 
 void inc_nr_dirty_caches(struct wb_device *wb)
 {

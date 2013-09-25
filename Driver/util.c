@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "util.h"
 
 void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno)
 {
@@ -23,7 +23,6 @@ retry_alloc:
 	return p;
 }
 
-extern struct workqueue_struct *safe_io_wq;
 struct safe_io {
 	struct work_struct work;
 	int err;

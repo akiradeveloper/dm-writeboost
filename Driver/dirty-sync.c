@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "dirty-sync.h"
 
 void sync_proc(struct work_struct *work)
 {

@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "hashtable.h"
 
 /*
  * Initialize the Hash Table.

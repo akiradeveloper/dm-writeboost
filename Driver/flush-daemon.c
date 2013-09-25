@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "flush-daemon.h"
 
 void flush_proc(struct work_struct *work)
 {

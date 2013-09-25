@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "segment.h"
 
 /*
  * Get the in-core metablock of the given index.

@@ -4,7 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
+#include "defer-barrier.h"
 
 void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
 {

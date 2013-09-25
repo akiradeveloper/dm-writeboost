@@ -11,24 +11,7 @@
  * region in the cache device.
  */
 
-#include "writeboost.h"
-
-/* Lots of Daemons */
-void flush_proc(struct work_struct *);
-void migrate_proc(struct work_struct *);
-void modulator_proc(struct work_struct *);
-void recorder_proc(struct work_struct *);
-void sync_proc(struct work_struct *);
-void flush_barrier_ios(struct work_struct *);
-void barrier_deadline_proc(unsigned long data);
-
-int __must_check init_segment_header_array(struct wb_cache *);
-int __must_check ht_empty_init(struct wb_cache *);
-
-int __must_check recover_cache(struct wb_cache *);
-
-int __must_check init_rambuf_pool(struct wb_cache *);
-void free_rambuf_pool(struct wb_cache *);
+#include "cache-alloc.h"
 
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 {

@@ -4,14 +4,7 @@
  * This file is released under the GPL.
  */
 
-#include "writeboost.h"
-
-u8 atomic_read_mb_dirtiness(struct segment_header *,
-			    struct metablock *);
-
-void cleanup_mb_if_dirty(struct wb_cache *,
-			 struct segment_header *,
-			 struct metablock *);
+#include "migrate-daemon.h"
 
 static void migrate_endio(unsigned long error, void *context)
 {

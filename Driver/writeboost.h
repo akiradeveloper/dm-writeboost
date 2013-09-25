@@ -1,5 +1,11 @@
-#ifndef WRITEBOOST_H
-#define WRITEBOOST_H
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
+#ifndef DM_WRITEBOOST_H
+#define DM_WRITEBOOST_H
 
 #define DM_MSG_PREFIX "writeboost"
 
@@ -409,7 +415,7 @@ sector_t dm_devsize(struct dm_dev *);
 
 cache_nr ht_hash(struct wb_cache *, struct lookup_key *);
 struct metablock *ht_lookup(struct wb_cache *,
-			    struct ht_head *, struct lookup_key *key);
+			    struct ht_head *, struct lookup_key *);
 void ht_register(struct wb_cache *, struct ht_head *,
 		 struct lookup_key *, struct metablock *);
 void ht_del(struct wb_cache *, struct metablock *);

@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
 #include "writeboost.h"
 
 static int read_superblock_header(struct superblock_header_device *sup,
@@ -39,10 +45,6 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	return 0;
 }
 
-/*
- * Check if the superblock is formatted.
- * return 0 if formatted.
- */
 static int audit_superblock_header(struct superblock_header_device *sup)
 {
 	u32 magic = le32_to_cpu(sup->magic);
@@ -55,15 +57,21 @@ static int audit_superblock_header(struct superblock_header_device *sup)
 	return 0;
 }
 
+/*
+ * Check if the cache device is already formatted.
+ * Returns 0 iff this routine runs without failure.
+ * cache_valid is stored true iff the cache device
+ * is formatted and needs not to be re-fomatted.
+ */
 int __must_check audit_cache_device(struct dm_dev *dev,
 				    bool *cache_valid)
 {
 	int r = 0;
 	struct superblock_header_device sup;
 	r = read_superblock_header(&sup, dev);
-	if (r) 
+	if (r)
 		return r;
-	
+
 	*cache_valid = audit_superblock_header(&sup) ? false : true;
 	return r;
 }
@@ -122,6 +130,10 @@ static void format_segmd_endio(unsigned long error, void *__context)
 	atomic64_dec(&context->count);
 }
 
+/*
+ * Format superblock header and
+ * all the metadata regions over the cache device.
+ */
 int __must_check format_cache_device(struct dm_dev *dev)
 {
 	u64 i, nr_segments = calc_nr_segments(dev);
@@ -163,8 +175,10 @@ int __must_check format_cache_device(struct dm_dev *dev)
 
 	format_superblock_header(dev);
 
+	/* Format the metadata regions */
+
 	/*
-	 * Format the metadata regions
+	 * Count the number of segments
 	 */
 	atomic64_set(&context.count, nr_segments);
 	context.err = 0;
@@ -175,6 +189,9 @@ int __must_check format_cache_device(struct dm_dev *dev)
 		return -ENOMEM;
 	}
 
+	/*
+	 * Submit all the writes asynchronously.
+	 */
 	for (i = 0; i < nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
 			.client = wb_io_client,
@@ -202,6 +219,9 @@ int __must_check format_cache_device(struct dm_dev *dev)
 		return r;
 	}
 
+	/*
+	 * Wait for all the writes complete.
+	 */
 	while (atomic64_read(&context.count))
 		schedule_timeout_interruptible(msecs_to_jiffies(100));
 

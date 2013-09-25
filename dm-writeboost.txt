@@ -53,7 +53,7 @@ Superblock is a last sector of first 1MB region in cache device.
 It contains what id of the segment lastly migrated.
 This daemon periodically update the region every `update_record_interval` seconds.
 
-* Cache Synchronizer
+* Dirty Synchronizer
 This daemon forcefully makes all the dirty writes persistent
 every `sync_interval` seconds.
 Since writeboost correctly implements the bio semantics

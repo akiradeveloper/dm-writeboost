@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
 #include "writeboost.h"
 
 static u8 count_dirty_caches_remained(struct segment_header *seg)

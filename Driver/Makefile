@@ -16,7 +16,7 @@ dm-writeboost-objs := \
 	migrate-modulator.o \
 	defer-barrier.o \
 	superblock-recorder.o \
-	cache-sync.o \
+	dirty-sync.o \
 	bigarray.o \
 	segment.o \
 	hashtable.o \

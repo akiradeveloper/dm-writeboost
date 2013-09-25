@@ -1,5 +1,7 @@
 /*
- * dm-writeboost.c : Log-structured Caching for Linux.
+ * writeboost
+ * Log-structured Caching for Linux
+ *
  * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
@@ -7,8 +9,8 @@
 
 #include "writeboost.h"
 
-int audit_cache_device(struct dm_dev *, bool *cache_valid);
-int format_cache_device(struct dm_dev *);
+int __must_check audit_cache_device(struct dm_dev *, bool *cache_valid);
+int __must_check format_cache_device(struct dm_dev *);
 
 int __must_check resume_cache(struct wb_cache *, struct dm_dev *);
 void free_cache(struct wb_cache *);
@@ -26,7 +28,7 @@ int writeboost_end_io(struct dm_target *, struct bio *, int error
 		     );
 
 /*
- * <orig path> <cache path>
+ * <backing path> <cache path>
  */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
@@ -54,7 +56,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	/*
 	 * EMC's textbook on storage system says
-	 * storage should keep its disk util less than 70%.
+	 * storage should keep its disk util less
+	 * than 70%.
 	 */
 	wb->migrate_threshold = 70;
 
@@ -81,9 +84,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		WBERR("%d", r);
 		/*
 		 * If something happens in auditing the cache
-		 * such as read io error,
-		 * either go formatting or
-		 * resume it trusting the cache is valid
+		 * such as read io error either go formatting
+		 * or resume it trusting the cache is valid
 		 * are dangerous. So we quit.
 		 */
 		goto bad_audit_cache;
@@ -151,7 +153,7 @@ static void writeboost_dtr(struct dm_target *ti)
 
 	/*
 	 * Synchronize all the dirty writes
-	 * before Termination.
+	 * before termination.
 	 */
 	cache->sync_interval = 1;
 

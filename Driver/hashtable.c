@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
 #include "writeboost.h"
 
 /*
@@ -69,7 +75,8 @@ void ht_register(struct wb_cache *cache, struct ht_head *head,
 };
 
 struct metablock *ht_lookup(struct wb_cache *cache,
-			    struct ht_head *head, struct lookup_key *key)
+			    struct ht_head *head,
+			    struct lookup_key *key)
 {
 	struct metablock *mb, *found = NULL;
 
@@ -89,7 +96,7 @@ struct metablock *ht_lookup(struct wb_cache *cache,
 }
 
 /*
- * Discard all the metablock in the given segment.
+ * Discard all the metablock in a segment.
  */
 void discard_caches_inseg(struct wb_cache *cache,
 			  struct segment_header *seg)

@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
 #include "writeboost.h"
 
 void queue_barrier_io(struct wb_cache *, struct bio *);
@@ -75,6 +81,9 @@ void clear_stat(struct wb_cache *cache)
 	}
 }
 
+/*
+ * Migrate a data on the cache device
+ */
 static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 		       struct metablock *mb, u8 dirty_bits, bool thread)
 {
@@ -166,7 +175,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 
 /*
  * Migrate the cache on the RAM buffer.
- * Rarely called.
+ * Calling this function is really rare.
  */
 static void migrate_buffered_mb(struct wb_cache *cache,
 				struct metablock *mb, u8 dirty_bits)
@@ -270,6 +279,13 @@ int writeboost_map(struct dm_target *ti, struct bio *bio
 		return DM_MAPIO_REMAPPED;
 	}
 
+	/*
+	 * defered ACK for barrier writes
+	 *
+	 * bio with REQ_FLUSH is guaranteed
+	 * to have no data.
+	 * So, simply queue it and return.
+	 */
 	if (bio->bi_rw & REQ_FLUSH) {
 		BUG_ON(bio->bi_size);
 		queue_barrier_io(cache, bio);
@@ -501,6 +517,16 @@ write_on_buffer:
 	memcpy(cache->current_rambuf->data + start, data, bio->bi_size);
 	atomic_dec(&seg->nr_inflight_ios);
 
+	/*
+	 * deferred ACK for barrier writes
+	 *
+	 * bio with REQ_FUA flag has data.
+	 * So, we run through the path for the
+	 * ordinary bio. And the data is
+	 * now stored in the RAM buffer.
+	 * After that, queue it and return
+	 * to defer completion.
+	 */
 	if (bio->bi_rw & REQ_FUA) {
 		queue_barrier_io(cache, bio);
 		return DM_MAPIO_SUBMITTED;

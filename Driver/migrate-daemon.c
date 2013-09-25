@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
 #include "writeboost.h"
 
 u8 atomic_read_mb_dirtiness(struct segment_header *,
@@ -168,10 +174,10 @@ static void migrate_linked_segments(struct wb_cache *cache)
 	size_t k, migrate_io_count = 0;
 
 	/*
-	 * Memorize
-	 * How many migration writes should be submitted
-	 * atomically,
-	 * Which cache line is dirty to migarate etc.
+	 * Memorize the dirty state to migrate before going in.
+	 * - How many migration writes should be submitted atomically,
+	 * - Which cache lines are dirty to migarate
+	 * - etc.
 	 */
 	k = 0;
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {

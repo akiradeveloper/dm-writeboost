@@ -1,5 +1,19 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
+/*
+ * Cache resume/free operations are provided.
+ * Resuming a cache is to construct in-core
+ * metadata structures from the metadata
+ * region in the cache device.
+ */
+
 #include "writeboost.h"
 
+/* Lots of Daemons */
 void flush_proc(struct work_struct *);
 void migrate_proc(struct work_struct *);
 void modulator_proc(struct work_struct *);
@@ -37,9 +51,9 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		WBERR();
 		goto bad_init_rambuf_pool;
 	}
+
 	/*
-	 * Select arbitrary one
-	 * as the initial rambuffer
+	 * Select arbitrary one as the initial rambuffer.
 	 */
 	cache->current_rambuf = cache->rambuf_pool + 0;
 
@@ -55,12 +69,20 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		goto bad_alloc_ht;
 	}
 
+	/*
+	 * All in-core structures are allocated and
+	 * initialized.
+	 * Next, read metadata from the cache device.
+	 */
+
 	r = recover_cache(cache);
 	if (r) {
 		WBERR();
 		goto bad_recover;
 	}
 
+
+	/* Data structures for Migration */
 	cache->migrate_buffer = vmalloc(NR_CACHES_INSEG << 12);
 	if (!cache->migrate_buffer) {
 		WBERR();
@@ -100,9 +122,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 
 	/* Deferred ACK for barrier writes */
-	/*
-	 * barrier_deadline_proc schedules barrier_deadline_work.
-	 */
 	setup_timer(&cache->barrier_deadline_timer,
 		    barrier_deadline_proc, (unsigned long) cache);
 	bio_list_init(&cache->barrier_ios);
@@ -119,8 +138,8 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 
 	/* Flush Daemon */
-	spin_lock_init(&cache->flush_queue_lock);
 	INIT_WORK(&cache->flush_work, flush_proc);
+	spin_lock_init(&cache->flush_queue_lock);
 	INIT_LIST_HEAD(&cache->flush_queue);
 	init_waitqueue_head(&cache->flush_wait_queue);
 	queue_work(cache->flush_wq, &cache->flush_work);
@@ -136,7 +155,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	schedule_work(&cache->recorder_work);
 
 
-	/* Cache Synchronizer */
+	/* Dirty Synchronizer */
 	INIT_WORK(&cache->sync_work, sync_proc);
 	schedule_work(&cache->sync_work);
 

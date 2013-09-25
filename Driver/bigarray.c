@@ -1,15 +1,22 @@
-#include "writeboost.h"
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
 
 /*
- * struct bigarray
  * A array like structure
  * that can contain million of elements.
- * The aim of this class is the same as flex_array.
+ * The aim of this class is the same as
+ * flex_array.
  * The reason we don't use flex_array is
  * that the class trades the performance
  * to get the resizability.
  * struct arr is fast and light-weighted.
  */
+
+#include "writeboost.h"
+
 struct part {
 	void *memory;
 };

@@ -7,6 +7,24 @@ PWD := $(shell pwd)
 # EXTRA_CFLAGS += -O2 -UCONFIG_DM_DEBUG
 
 obj-m := dm-writeboost.o
+dm-writeboost-objs := \
+	target.o \
+	handle-io.o \
+	queue-flush-job.o \
+	flush-daemon.o \
+	migrate-daemon.o \
+	migrate-modulator.o \
+	defer-barrier.o \
+	superblock-recorder.o \
+	cache-sync.o \
+	bigarray.o \
+	segment.o \
+	hashtable.o \
+	cache-alloc.o \
+	format-cache.o \
+	recover.o \
+	rambuf.o \
+	util.o
 
 all:
 	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) modules

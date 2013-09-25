@@ -21,8 +21,7 @@ dm-writeboost-objs := \
 	segment.o \
 	hashtable.o \
 	cache-alloc.o \
-	format-segment.o \
-	format-superblock.o \
+	format-cache.o \
 	recover.o \
 	rambuf.o \
 	util.o

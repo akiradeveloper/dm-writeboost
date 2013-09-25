@@ -7,8 +7,7 @@
 
 #include "writeboost.h"
 
-int read_superblock_header(struct superblock_header_device *, struct dm_dev *);
-int audit_superblock_header(struct superblock_header_device *);
+int audit_cache_device(struct dm_dev *, bool *cache_valid);
 int format_cache_device(struct dm_dev *);
 
 int __must_check resume_cache(struct wb_cache *, struct dm_dev *);
@@ -32,10 +31,10 @@ int writeboost_end_io(struct dm_target *, struct bio *, int error
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r = 0;
+	bool cache_valid;
 	struct wb_device *wb;
 	struct wb_cache *cache;
 	struct dm_dev *origdev, *cachedev;
-	struct superblock_header_device sup;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	r = dm_set_target_max_io_len(ti, (1 << 3));
@@ -77,14 +76,20 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_get_device_cache;
 	}
 
-	r = read_superblock_header(&sup, cachedev);
+	r = audit_cache_device(cachedev, &cache_valid);
 	if (r) {
 		WBERR("%d", r);
-		goto bad_read_sup;
+		/*
+		 * If something happens in auditing the cache
+		 * such as read io error,
+		 * either go formatting or
+		 * resume it trusting the cache is valid
+		 * are dangerous. So we quit.
+		 */
+		goto bad_audit_cache;
 	}
 
-	r = audit_superblock_header(&sup);
-	if (r) {
+	if (!cache_valid) {
 		r = format_cache_device(cachedev);
 		if (r) {
 			WBERR("%d", r);
@@ -130,7 +135,7 @@ bad_resume_cache:
 	kfree(cache);
 bad_alloc_cache:
 bad_format_cache:
-bad_read_sup:
+bad_audit_cache:
 	dm_put_device(ti, cachedev);
 bad_get_device_cache:
 	dm_put_device(ti, origdev);

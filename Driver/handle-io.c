@@ -287,7 +287,7 @@ int writeboost_map(struct dm_target *ti, struct bio *bio
 	};
 
 	k = ht_hash(cache, &key);
-	head = arr_at(cache->htable, k);
+	head = bigarray_at(cache->htable, k);
 
 	/*
 	 * (Locking)

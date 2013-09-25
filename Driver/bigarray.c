@@ -1,8 +1,7 @@
 #include "writeboost.h"
 
-/* TODO rename */
 /*
- * struct arr
+ * struct bigarray
  * A array like structure
  * that can contain million of elements.
  * The aim of this class is the same as flex_array.
@@ -15,29 +14,29 @@ struct part {
 	void *memory;
 };
 
-struct arr {
+struct bigarray {
 	struct part *parts;
 	size_t nr_elems;
 	size_t elemsize;
 };
 
 #define ALLOC_SIZE (1 << 16)
-static size_t nr_elems_in_part(struct arr *arr)
+static size_t nr_elems_in_part(struct bigarray *arr)
 {
 	return ALLOC_SIZE / arr->elemsize;
 };
 
-static size_t nr_parts(struct arr *arr)
+static size_t nr_parts(struct bigarray *arr)
 {
 	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
 }
 
-struct arr *make_arr(size_t elemsize, size_t nr_elems)
+struct bigarray *make_bigarray(size_t elemsize, size_t nr_elems)
 {
 	size_t i, j;
 	struct part *part;
 
-	struct arr *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
+	struct bigarray *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
 		WBERR();
 		return NULL;
@@ -72,7 +71,7 @@ bad_alloc_parts:
 	return NULL;
 }
 
-void kill_arr(struct arr *arr)
+void kill_bigarray(struct bigarray *arr)
 {
 	size_t i;
 	for (i = 0; i < nr_parts(arr); i++) {
@@ -83,7 +82,7 @@ void kill_arr(struct arr *arr)
 	kfree(arr);
 }
 
-void *arr_at(struct arr *arr, size_t i)
+void *bigarray_at(struct bigarray *arr, size_t i)
 {
 	size_t n = nr_elems_in_part(arr);
 	size_t j = i / n;

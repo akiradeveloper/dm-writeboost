@@ -7,7 +7,7 @@ struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 {
 	u64 seg_idx = idx / NR_CACHES_INSEG;
 	struct segment_header *seg =
-		arr_at(cache->segment_header_array, seg_idx);
+		bigarray_at(cache->segment_header_array, seg_idx);
 	cache_nr idx_inseg = idx % NR_CACHES_INSEG;
 	return seg->mb_array + idx_inseg;
 }
@@ -28,7 +28,7 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 {
 	u64 segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
-		make_arr(sizeof(struct segment_header), nr_segments);
+		make_bigarray(sizeof(struct segment_header), nr_segments);
 	if (!cache->segment_header_array) {
 		WBERR();
 		return -ENOMEM;
@@ -36,7 +36,7 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 
 	for (segment_idx = 0; segment_idx < nr_segments; segment_idx++) {
 		struct segment_header *seg =
-			arr_at(cache->segment_header_array, segment_idx);
+			bigarray_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = NR_CACHES_INSEG * segment_idx;
 		seg->start_sector =
 			((segment_idx % nr_segments) + 1) *
@@ -68,7 +68,7 @@ struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
 						       size_t segment_id)
 {
 	struct segment_header *r =
-		arr_at(cache->segment_header_array,
+		bigarray_at(cache->segment_header_array,
 		       (segment_id - 1) % cache->nr_segments);
 	return r;
 }

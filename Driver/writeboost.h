@@ -234,7 +234,7 @@ struct wb_cache {
 	struct mutex io_lock;
 	cache_nr nr_caches; /* Const */
 	u64 nr_segments; /* Const */
-	struct arr *segment_header_array;
+	struct bigarray *segment_header_array;
 
 	/*
 	 * Chained hashtable
@@ -244,7 +244,7 @@ struct wb_cache {
 	 * Cache discarding often happedns
 	 * This structure fits our needs.
 	 */
-	struct arr *htable;
+	struct bigarray *htable;
 	size_t htsize;
 	struct ht_head *null_head;
 
@@ -377,10 +377,10 @@ struct per_bio_data {
 #endif
 
 
-struct arr;
-struct arr *make_arr(size_t elemsize, size_t nr_elems);
-void kill_arr(struct arr *);
-void *arr_at(struct arr *, size_t i);
+struct bigarray;
+struct bigarray *make_bigarray(size_t elemsize, size_t nr_elems);
+void kill_bigarray(struct bigarray *);
+void *bigarray_at(struct bigarray *, size_t i);
 
 void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno);
 #define kmalloc_retry(size, flags) \

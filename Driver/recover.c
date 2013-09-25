@@ -114,7 +114,7 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 		};
 
 		k = ht_hash(cache, &key);
-		head = arr_at(cache->htable, k);
+		head = bigarray_at(cache->htable, k);
 
 		found = ht_lookup(cache, head, &key);
 		if (found)

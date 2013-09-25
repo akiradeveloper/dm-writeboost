@@ -8,11 +8,11 @@ int __must_check ht_empty_init(struct wb_cache *cache)
 	cache_nr idx;
 	size_t i;
 	size_t nr_heads;
-	struct arr *arr;
+	struct bigarray *arr;
 
 	cache->htsize = cache->nr_caches;
 	nr_heads = cache->htsize + 1;
-	arr = make_arr(sizeof(struct ht_head), nr_heads);
+	arr = make_bigarray(sizeof(struct ht_head), nr_heads);
 	if (!arr) {
 		WBERR();
 		return -ENOMEM;
@@ -21,7 +21,7 @@ int __must_check ht_empty_init(struct wb_cache *cache)
 	cache->htable = arr;
 
 	for (i = 0; i < nr_heads; i++) {
-		struct ht_head *hd = arr_at(arr, i);
+		struct ht_head *hd = bigarray_at(arr, i);
 		INIT_HLIST_HEAD(&hd->ht_list);
 	}
 
@@ -29,7 +29,7 @@ int __must_check ht_empty_init(struct wb_cache *cache)
 	 * Our hashtable has one special bucket called null head.
 	 * Orphan metablocks are linked to the null head.
 	 */
-	cache->null_head = arr_at(cache->htable, cache->htsize);
+	cache->null_head = bigarray_at(cache->htable, cache->htsize);
 
 	for (idx = 0; idx < cache->nr_caches; idx++) {
 		struct metablock *mb = mb_at(cache, idx);

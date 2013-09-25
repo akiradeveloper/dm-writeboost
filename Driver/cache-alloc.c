@@ -155,9 +155,9 @@ bad_alloc_dirtiness_snapshot:
 	vfree(cache->migrate_buffer);
 bad_alloc_migrate_buffer:
 bad_recover:
-	kill_arr(cache->htable);
+	kill_bigarray(cache->htable);
 bad_alloc_ht:
-	kill_arr(cache->segment_header_array);
+	kill_bigarray(cache->segment_header_array);
 bad_alloc_segment_header_array:
 	free_rambuf_pool(cache);
 bad_init_rambuf_pool:
@@ -185,8 +185,8 @@ void free_cache(struct wb_cache *cache)
 	vfree(cache->migrate_buffer);
 
 	/* Destroy in-core structures */
-	kill_arr(cache->htable);
-	kill_arr(cache->segment_header_array);
+	kill_bigarray(cache->htable);
+	kill_bigarray(cache->segment_header_array);
 
 	free_rambuf_pool(cache);
 }

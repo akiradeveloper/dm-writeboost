@@ -1,22 +1,20 @@
 #!/bin/sh
 
-mkfs.xfs -f /dev/mapper/perflv 
+mkfs.xfs -f /dev/mapper/writeboost-vol
 #OPTIONS="-o nobarrier"
-mount ${OPTIONS} /dev/mapper/perflv /mnt/perflv
-rm -rf /mnt/perflv/*
+mount ${OPTIONS} /dev/mapper/writeboost-vol /mnt/writeboost-vol
+rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362
-cp ${RUBY}.tar.gz /mnt/perflv
-cd /mnt/perflv
+cp ${RUBY}.tar.gz /mnt/writeboost-vol
+cd /mnt/writeboost-vol
 tar xvfz ${RUBY}.tar.gz
 cd ${RUBY}
 
-dmsetup message writeboost-mgr 0 switch_to 3
-dmsetup message writeboost-mgr 0 clear_stat
 ./configure
 
 make -j 8
 echo 3 > /proc/sys/vm/drop_caches
 make test
 
-fuser -muv /mnt/perflv
-umount -l /mnt/perflv
+fuser -muv /mnt/writeboost-vol
+umount -l /mnt/writeboost-vol

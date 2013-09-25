@@ -1,5 +1,5 @@
 [global]
-filename=/dev/mapper/perflv
+filename=/dev/mapper/writeboost-vol
 randrepeat=1
 ioengine=libaio
 bs=4k

@@ -57,7 +57,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 * initialized.
 	 * Next, read metadata from the cache device.
 	 */
-
 	r = recover_cache(cache);
 	if (r) {
 		WBERR();

@@ -43,7 +43,7 @@ static void prepare_segment_header_device(struct segment_header_device *dest,
 		struct metablock_device *mbdev = &dest->mbarr[i];
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->lap = cpu_to_le32(dest->lap);
+		mbdev->lap = dest->lap;
 	}
 }
 

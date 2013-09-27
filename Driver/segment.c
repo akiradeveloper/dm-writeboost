@@ -34,9 +34,7 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 {
 	u64 segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
-		make_bigarray(sizeof(struct segment_header) +
-			      sizeof(struct metablock) * cache->nr_caches_inseg,
-			      nr_segments);
+		make_bigarray(sizeof_segment_header(cache), nr_segments);
 	if (!cache->segment_header_array) {
 		WBERR();
 		return -ENOMEM;

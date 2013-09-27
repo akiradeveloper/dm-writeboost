@@ -250,7 +250,7 @@ void migrate_proc(struct work_struct *work)
 		size_t i, nr_mig_candidates, nr_mig;
 		struct segment_header *seg, *tmp;
 
-		WBINFO();
+		/* WBINFO(); */
 
 		if (cache->on_terminate)
 			return;
@@ -319,10 +319,6 @@ void migrate_proc(struct work_struct *work)
 		 * last_migrate_segment_id during runtime.
 		 */
 		cache->last_migrated_segment_id += nr_mig;
-
-		WBINFO("%lu : %lu", cache->last_migrated_segment_id, nr_mig);
-		BUG_ON(cache->last_migrated_segment_id >
-		       cache->last_flushed_segment_id);
 
 		list_for_each_entry_safe(seg, tmp,
 					 &cache->migrate_list,

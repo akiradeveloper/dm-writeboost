@@ -80,7 +80,7 @@ read_segment_header_device(struct segment_header_device *dest,
 		return r;
 	}
 
-	memcpy(dest, buf, sizeof(*dest));
+	memcpy(dest, buf, sizeof_segment_header_device(cache));
 
 	return r;
 }
@@ -138,6 +138,7 @@ static void update_by_segment_header_device(struct wb_cache *cache,
  */
 static bool checkup_atomicity(struct segment_header_device *header)
 {
+	WBINFO("checkup atomicity");
 	u8 i;
 	u32 a = le32_to_cpu(header->lap), b;
 	for (i = 0; i < header->length; i++) {
@@ -170,9 +171,7 @@ int __must_check recover_cache(struct wb_cache *cache)
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
 	WBINFO("%llu", record_id);
 
-	header = kmalloc(sizeof(*header) + sizeof(struct metablock_device) *
-					   cache->nr_caches_inseg,
-			 GFP_KERNEL);
+	header = kmalloc(sizeof_segment_header_device(cache), GFP_KERNEL);
 	if (!header) {
 		WBERR();
 		return -ENOMEM;

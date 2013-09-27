@@ -30,8 +30,8 @@ static void submit_migrate_io(struct wb_cache *cache,
 			      struct segment_header *seg, size_t k)
 {
 	u8 i, j;
-	size_t a = NR_CACHES_INSEG * k;
-	void *p = cache->migrate_buffer + (NR_CACHES_INSEG << 12) * k;
+	size_t a = cache->nr_caches_inseg * k;
+	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
 
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
@@ -99,8 +99,8 @@ static void memorize_dirty_state(struct wb_cache *cache,
 				 size_t *migrate_io_count)
 {
 	u8 i, j;
-	size_t a = NR_CACHES_INSEG * k;
-	void *p = cache->migrate_buffer + (NR_CACHES_INSEG << 12) * k;
+	size_t a = cache->nr_caches_inseg * k;
+	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
 	struct metablock *mb;
 
 	struct dm_io_request io_req_r = {
@@ -283,10 +283,10 @@ void migrate_proc(struct work_struct *work)
 				cache->nr_max_batched_migration;
 			cache->migrate_buffer =
 				vmalloc(cache->nr_cur_batched_migration *
-					(NR_CACHES_INSEG << 12));
+					(cache->nr_caches_inseg << 12));
 			cache->dirtiness_snapshot =
 				kmalloc_retry(cache->nr_cur_batched_migration *
-					      NR_CACHES_INSEG,
+					      cache->nr_caches_inseg,
 					      GFP_NOIO);
 
 			BUG_ON(!cache->migrate_buffer);

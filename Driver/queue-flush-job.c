@@ -35,7 +35,7 @@ static void prepare_segment_header_device(struct segment_header_device *dest,
 	dest->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
 
 	left = src->length - 1;
-	right = (cache->cursor) % NR_CACHES_INSEG;
+	right = (cache->cursor) % cache->nr_caches_inseg;
 	BUG_ON(left != right);
 
 	for (i = 0; i < src->length; i++) {
@@ -115,10 +115,10 @@ static void queue_flushing(struct wb_cache *cache)
 	/*
 	 * Set the cursor to the last of the flushed segment.
 	 */
-	cache->cursor = current_seg->start_idx + (NR_CACHES_INSEG - 1);
+	cache->cursor = current_seg->start_idx + (cache->nr_caches_inseg - 1);
 	new_seg->length = 0;
 
-	next_rambuf = cache->rambuf_pool + (next_id % NR_RAMBUF_POOL);
+	next_rambuf = cache->rambuf_pool + (next_id % cache->nr_rambuf_pool);
 	wait_for_completion(&next_rambuf->done);
 	INIT_COMPLETION(next_rambuf->done);
 

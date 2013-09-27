@@ -66,10 +66,12 @@ All the operations are via dmsetup command.
 
 Constructor
 -----------
-writeboost <backing dev> <cache dev>
+writeboost <backing dev> <cache dev> <segment size order>
 
-backing dev : slow device holding original data blocks.
-cache dev   : fast device holding cached data and its metadata.
+backing dev        : slow device holding original data blocks.
+cache dev          : fast device holding cached data and its metadata.
+segment size order : the size of RAM buffer
+                     1 << n (sectors), 4 <= n <= 11
 
 Note that cache device is re-formatted
 if the first sector of the cache device is zeroed out.

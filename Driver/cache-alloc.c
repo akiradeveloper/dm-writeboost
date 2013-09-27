@@ -18,8 +18,8 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	int r = 0;
 
 	cache->device = dev;
-	cache->nr_segments = calc_nr_segments(cache->device);
-	cache->nr_caches = cache->nr_segments * NR_CACHES_INSEG;
+	cache->nr_segments = calc_nr_segments(cache->device, cache);
+	cache->nr_caches = cache->nr_segments * cache->nr_caches_inseg;
 	cache->on_terminate = false;
 	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
@@ -66,14 +66,14 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 
 	/* Data structures for Migration */
-	cache->migrate_buffer = vmalloc(NR_CACHES_INSEG << 12);
+	cache->migrate_buffer = vmalloc(cache->nr_caches_inseg << 12);
 	if (!cache->migrate_buffer) {
 		WBERR();
 		goto bad_alloc_migrate_buffer;
 	}
 
 	cache->dirtiness_snapshot = kmalloc(
-			NR_CACHES_INSEG,
+			cache->nr_caches_inseg,
 			GFP_KERNEL);
 	if (!cache->dirtiness_snapshot) {
 		WBERR();

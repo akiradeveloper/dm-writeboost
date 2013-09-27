@@ -10,7 +10,7 @@
 #include "target.h"
 
 /*
- * <backing dev> <cache dev>
+ * <backing dev> <cache dev> <segment size order>
  */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
@@ -19,6 +19,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	struct wb_device *wb;
 	struct wb_cache *cache;
 	struct dm_dev *origdev, *cachedev;
+	unsigned long tmp;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	r = dm_set_target_max_io_len(ti, (1 << 3));
@@ -35,6 +36,13 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		WBERR();
 		return -ENOMEM;
 	}
+
+	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
+	if (!cache) {
+		WBERR();
+		goto bad_alloc_cache;
+	}
+	wb->cache = cache;
 
 	/*
 	 * EMC's textbook on storage system says
@@ -53,15 +61,30 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	wb->device = origdev;
 
-	wb->cache = NULL;
-
 	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
 			  &cachedev)) {
 		WBERR();
 		goto bad_get_device_cache;
 	}
 
-	r = audit_cache_device(cachedev, &cache_valid);
+	if (kstrtoul(argv[2], 10, &tmp)) {
+		WBERR();
+		goto bad_segment_size_order;
+	}
+
+	if (tmp < 4 || 11 < tmp) {
+		WBERR();
+		goto bad_segment_size_order;
+	}
+
+	cache->segment_size_order = tmp;
+	/*
+	 * The first 4KB (1<<3 sectors) in segment
+	 * is for metadata.
+	 */
+	cache->nr_caches_inseg = (1 << (tmp - 3)) - 1;
+
+	r = audit_cache_device(cachedev, cache, &cache_valid);
 	if (r) {
 		WBERR("%d", r);
 		/*
@@ -74,18 +97,14 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	if (!cache_valid) {
-		r = format_cache_device(cachedev);
+		r = format_cache_device(cachedev, cache);
 		if (r) {
 			WBERR("%d", r);
 			goto bad_format_cache;
 		}
 	}
 
-	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
-	if (!cache) {
-		WBERR();
-		goto bad_alloc_cache;
-	}
+
 
 	wb->cache = cache;
 	wb->cache->wb = wb;
@@ -116,14 +135,15 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	return 0;
 
 bad_resume_cache:
-	kfree(cache);
-bad_alloc_cache:
 bad_format_cache:
 bad_audit_cache:
+bad_segment_size_order:
 	dm_put_device(ti, cachedev);
 bad_get_device_cache:
 	dm_put_device(ti, origdev);
 bad_get_device_orig:
+	kfree(cache);
+bad_alloc_cache:
 	kfree(wb);
 	return r;
 }

@@ -68,7 +68,7 @@ read_segment_header_device(struct segment_header_device *dest,
 	};
 	region = (struct dm_io_region) {
 		.bdev = cache->device->bdev,
-		.sector = calc_segment_header_start(segment_idx),
+		.sector = calc_segment_header_start(cache, segment_idx),
 		.count = (1 << 3),
 	};
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
@@ -170,7 +170,9 @@ int __must_check recover_cache(struct wb_cache *cache)
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
 	WBINFO("%llu", record_id);
 
-	header = kmalloc(sizeof(*header), GFP_KERNEL);
+	header = kmalloc(sizeof(*header) + sizeof(struct metablock_device) *
+					   cache->nr_caches_inseg,
+			 GFP_KERNEL);
 	if (!header) {
 		WBERR();
 		return -ENOMEM;

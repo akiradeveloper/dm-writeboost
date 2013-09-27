@@ -102,7 +102,7 @@ void discard_caches_inseg(struct wb_cache *cache,
 			  struct segment_header *seg)
 {
 	u8 i;
-	for (i = 0; i < NR_CACHES_INSEG; i++) {
+	for (i = 0; i < cache->nr_caches_inseg; i++) {
 		struct metablock *mb = seg->mb_array + i;
 		ht_del(cache, mb);
 	}

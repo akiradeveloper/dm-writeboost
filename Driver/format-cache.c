@@ -45,12 +45,18 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	return 0;
 }
 
-static int audit_superblock_header(struct superblock_header_device *sup)
+static int audit_superblock_header(struct superblock_header_device *sup,
+				   struct wb_cache *cache)
 {
 	u32 magic = le32_to_cpu(sup->magic);
 
 	if (magic != WRITEBOOST_MAGIC) {
-		WBERR();
+		WBERR("superblock header: magic number invalid.");
+		return -EINVAL;
+	}
+
+	if (sup->segment_size_order != cache->segment_size_order) {
+		WBERR("superblock header: segment_size_order not same.");
 		return -EINVAL;
 	}
 
@@ -63,7 +69,7 @@ static int audit_superblock_header(struct superblock_header_device *sup)
  * cache_valid is stored true iff the cache device
  * is formatted and needs not to be re-fomatted.
  */
-int __must_check audit_cache_device(struct dm_dev *dev,
+int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 				    bool *cache_valid)
 {
 	int r = 0;
@@ -72,11 +78,11 @@ int __must_check audit_cache_device(struct dm_dev *dev,
 	if (r)
 		return r;
 
-	*cache_valid = audit_superblock_header(&sup) ? false : true;
+	*cache_valid = audit_superblock_header(&sup, cache) ? false : true;
 	return r;
 }
 
-static int format_superblock_header(struct dm_dev *dev)
+static int format_superblock_header(struct dm_dev *dev, struct wb_cache *cache)
 {
 	int r = 0;
 	struct dm_io_request io_req_sup;
@@ -84,6 +90,7 @@ static int format_superblock_header(struct dm_dev *dev)
 
 	struct superblock_header_device sup = {
 		.magic = cpu_to_le32(WRITEBOOST_MAGIC),
+		.segment_size_order = cache->segment_size_order,
 	};
 
 	void *buf = kzalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
@@ -134,9 +141,9 @@ static void format_segmd_endio(unsigned long error, void *__context)
  * Format superblock header and
  * all the metadata regions over the cache device.
  */
-int __must_check format_cache_device(struct dm_dev *dev)
+int __must_check format_cache_device(struct dm_dev *dev, struct wb_cache *cache)
 {
-	u64 i, nr_segments = calc_nr_segments(dev);
+	u64 i, nr_segments = calc_nr_segments(dev, cache);
 	struct format_segmd_context context;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
@@ -173,7 +180,7 @@ int __must_check format_cache_device(struct dm_dev *dev)
 		return r;
 	}
 
-	format_superblock_header(dev);
+	format_superblock_header(dev, cache);
 
 	/* Format the metadata regions */
 
@@ -203,7 +210,7 @@ int __must_check format_cache_device(struct dm_dev *dev)
 		};
 		struct dm_io_region region_seg = {
 			.bdev = dev->bdev,
-			.sector = calc_segment_header_start(i),
+			.sector = calc_segment_header_start(cache, i),
 			.count = (1 << 3),
 		};
 		r = dm_safe_io(&io_req_seg, 1, &region_seg, NULL, false);

@@ -102,7 +102,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 		};
 		region_r = (struct dm_io_region) {
 			.bdev = cache->device->bdev,
-			.sector = calc_mb_start_sector(seg, mb->idx),
+			.sector = calc_mb_start_sector(cache, seg, mb->idx),
 			.count = (1 << 3),
 		};
 
@@ -143,7 +143,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 				.mem.ptr.addr = buf,
 			};
 			/* A tmp variable just to avoid 80 cols rule */
-			src = calc_mb_start_sector(seg, mb->idx) + i;
+			src = calc_mb_start_sector(cache, seg, mb->idx) + i;
 			region_r = (struct dm_io_region) {
 				.bdev = cache->device->bdev,
 				.sector = src,
@@ -178,7 +178,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 {
 	struct wb_device *wb = cache->wb;
 
-	u8 i, k = 1 + (mb->idx % NR_CACHES_INSEG);
+	u8 i, k = 1 + (mb->idx % cache->nr_caches_inseg);
 	sector_t offset = (k << 3);
 
 	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
@@ -319,8 +319,9 @@ int writeboost_map(struct dm_target *ti, struct bio *bio
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if (mb) {
-		seg = ((void *) mb) - (mb->idx % NR_CACHES_INSEG) *
-				      sizeof(struct metablock);
+		seg = ((void *) mb) - (mb->idx % cache->nr_caches_inseg) *
+				      sizeof(struct metablock)
+				    - sizeof(struct segment_header);
 		atomic_inc(&seg->nr_inflight_ios);
 	}
 
@@ -380,7 +381,7 @@ int writeboost_map(struct dm_target *ti, struct bio *bio
 		if (likely(dirty_bits == 255)) {
 			bio_remap(bio,
 				  cache->device,
-				  calc_mb_start_sector(seg, mb->idx)
+				  calc_mb_start_sector(cache, seg, mb->idx)
 				  + bio_offset);
 			map_context->ptr = seg;
 		} else {
@@ -453,7 +454,7 @@ write_not_found:
 	 * We must flush the current segment and
 	 * get the new one.
 	 */
-	refresh_segment = !((cache->cursor + 1) % NR_CACHES_INSEG);
+	refresh_segment = !((cache->cursor + 1) % cache->nr_caches_inseg);
 
 	if (refresh_segment)
 		queue_current_buffer(cache);
@@ -468,7 +469,7 @@ write_not_found:
 	seg = cache->current_seg;
 	atomic_inc(&seg->nr_inflight_ios);
 
-	new_mb = seg->mb_array + (update_mb_idx % NR_CACHES_INSEG);
+	new_mb = seg->mb_array + (update_mb_idx % cache->nr_caches_inseg);
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
 	mutex_unlock(&cache->io_lock);
@@ -477,14 +478,14 @@ write_not_found:
 
 write_on_buffer:
 	;
-	idx_inseg = update_mb_idx % NR_CACHES_INSEG;
+	idx_inseg = update_mb_idx % cache->nr_caches_inseg;
 	s = (idx_inseg + 1) << 3;
 
 	b = false;
 	lockseg(seg, flags);
 	if (!mb->dirty_bits) {
 		seg->length++;
-		BUG_ON(seg->length >  NR_CACHES_INSEG);
+		BUG_ON(seg->length > cache->nr_caches_inseg);
 		b = true;
 	}
 

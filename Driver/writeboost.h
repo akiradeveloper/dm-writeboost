@@ -26,28 +26,10 @@
 #define WBINFO(f, args...) \
 	DMINFO("info@%d " f, __LINE__, ## args)
 
-
 /*
- * (1 << x) sector.
- * 4 <= x <= 11
- * dm-writeboost supports segment size up to 1MB.
- *
- * All the comments are if
- * the segment size is the maximum 1MB.
+ * The amount of RAM buffer pool to pre-allocated.
  */
-#define WB_SEGMENTSIZE_ORDER 11
-
-/*
- * By default,
- * we allocate 64 * 1MB RAM buffers statically.
- */
-#define NR_RAMBUF_POOL 64
-
-/*
- * The first 4KB (1<<3 sectors) in segment
- * is for metadata.
- */
-#define NR_CACHES_INSEG ((1 << (WB_SEGMENTSIZE_ORDER - 3)) - 1)
+#define RAMBUF_POOL_ALLOCATED 64 /* MB */
 
 /*
  * The Detail of the Disk Format
@@ -61,7 +43,7 @@
  * superblock header(512B) ... superblock record(512B)
  *
  * Segment(1MB):
- * segment_header_device(4KB) metablock_device(4KB) * NR_CACHES_INSEG
+ * segment_header_device(4KB) metablock_device(4KB) * nr_caches_inseg
  */
 
 /*
@@ -77,6 +59,7 @@
 #define WRITEBOOST_MAGIC 0x57427374
 struct superblock_header_device {
 	__le32 magic;
+	u8 segment_size_order;
 } __packed;
 
 /*
@@ -136,8 +119,6 @@ struct metablock_device {
 
 #define SZ_MAX (~(size_t)0)
 struct segment_header {
-	struct metablock mb_array[NR_CACHES_INSEG];
-
 	/*
 	 * ID uniformly increases.
 	 * ID 0 is used to tell that the segment is invalid
@@ -175,6 +156,8 @@ struct segment_header {
 	spinlock_t lock;
 
 	atomic_t nr_inflight_ios;
+
+	struct metablock mb_array[0];
 };
 
 /*
@@ -208,7 +191,7 @@ struct segment_header_device {
 	__le32 lap;
 	/* - TO -------------------------------------- */
 	/* This array must locate at the tail */
-	struct metablock_device mbarr[NR_CACHES_INSEG];
+	struct metablock_device mbarr[0];
 } __packed;
 
 struct rambuffer {
@@ -240,6 +223,8 @@ struct wb_cache {
 	struct mutex io_lock;
 	cache_nr nr_caches; /* Const */
 	u64 nr_segments; /* Const */
+	u8 segment_size_order; /* Const */
+	u8 nr_caches_inseg; /* Const */
 	struct bigarray *segment_header_array;
 
 	/*
@@ -256,7 +241,9 @@ struct wb_cache {
 
 	cache_nr cursor; /* Index that has been written the most lately */
 	struct segment_header *current_seg;
+
 	struct rambuffer *current_rambuf;
+	size_t nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 
 	u64 last_migrated_segment_id;

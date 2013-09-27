@@ -77,6 +77,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_segment_size_order;
 	}
 
+	WBINFO("segment_size_order: %u", tmp);
 	cache->segment_size_order = tmp;
 	/*
 	 * The first 4KB (1<<3 sectors) in segment

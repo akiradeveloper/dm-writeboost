@@ -29,15 +29,17 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->update_record_interval = 60;
 	cache->sync_interval = 60;
 
+
+	/*
+	 * (i) Harmless Initializations
+	 */
 	r = init_rambuf_pool(cache);
 	if (r) {
 		WBERR();
 		goto bad_init_rambuf_pool;
 	}
 
-	/*
-	 * Select arbitrary one as the initial rambuffer.
-	 */
+	/* Select arbitrary one as the initial rambuffer. */
 	cache->current_rambuf = cache->rambuf_pool + 0;
 
 	r = init_segment_header_array(cache);
@@ -52,18 +54,17 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		goto bad_alloc_ht;
 	}
 
+
 	/*
-	 * All in-core structures are allocated and
-	 * initialized.
-	 * Next, read metadata from the cache device.
+	 * (2) Recovering Metadata
+	 * Recovering the cache metadata
+	 * prerequires the migration daemon working.
 	 */
-
-	r = recover_cache(cache);
-	if (r) {
+	cache->migrate_wq = create_singlethread_workqueue("migratewq");
+	if (!cache->migrate_wq) {
 		WBERR();
-		goto bad_recover;
+		goto bad_migratewq;
 	}
-
 
 	/* Data structures for Migration */
 	cache->migrate_buffer = vmalloc(cache->nr_caches_inseg << 12);
@@ -80,19 +81,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		goto bad_alloc_dirtiness_snapshot;
 	}
 
-	cache->migrate_wq = create_singlethread_workqueue("migratewq");
-	if (!cache->migrate_wq) {
-		WBERR();
-		goto bad_migratewq;
-	}
-
-	cache->flush_wq = create_singlethread_workqueue("flushwq");
-	if (!cache->flush_wq) {
-		WBERR();
-		goto bad_flushwq;
-	}
-
-
 	/* Migration Daemon */
 	INIT_WORK(&cache->migrate_work, migrate_proc);
 	init_waitqueue_head(&cache->migrate_wait_queue);
@@ -103,6 +91,30 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->nr_cur_batched_migration = 1;
 	queue_work(cache->migrate_wq, &cache->migrate_work);
 
+	r = recover_cache(cache);
+	if (r) {
+		WBERR();
+		goto bad_recover;
+	}
+
+
+	/*
+	 * (3) Misc Initializations
+	 * These are only working
+	 * after the logical device created.
+	 */
+	cache->flush_wq = create_singlethread_workqueue("flushwq");
+	if (!cache->flush_wq) {
+		WBERR();
+		goto bad_flushwq;
+	}
+
+	/* Flush Daemon */
+	INIT_WORK(&cache->flush_work, flush_proc);
+	spin_lock_init(&cache->flush_queue_lock);
+	INIT_LIST_HEAD(&cache->flush_queue);
+	init_waitqueue_head(&cache->flush_wait_queue);
+	queue_work(cache->flush_wq, &cache->flush_work);
 
 	/* Deferred ACK for barrier writes */
 	setup_timer(&cache->barrier_deadline_timer,
@@ -119,42 +131,32 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->barrier_deadline_ms = 3;
 	INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
-
-	/* Flush Daemon */
-	INIT_WORK(&cache->flush_work, flush_proc);
-	spin_lock_init(&cache->flush_queue_lock);
-	INIT_LIST_HEAD(&cache->flush_queue);
-	init_waitqueue_head(&cache->flush_wait_queue);
-	queue_work(cache->flush_wq, &cache->flush_work);
-
-
 	/* Migartion Modulator */
 	INIT_WORK(&cache->modulator_work, modulator_proc);
 	schedule_work(&cache->modulator_work);
-
 
 	/* Superblock Recorder */
 	INIT_WORK(&cache->recorder_work, recorder_proc);
 	schedule_work(&cache->recorder_work);
 
-
 	/* Dirty Synchronizer */
 	INIT_WORK(&cache->sync_work, sync_proc);
 	schedule_work(&cache->sync_work);
-
 
 	clear_stat(cache);
 
 	return 0;
 
 bad_flushwq:
-	destroy_workqueue(cache->migrate_wq);
-bad_migratewq:
+bad_recover:
+	cache->on_terminate = true;
+	cancel_work_sync(&cache->migrate_work);
 	kfree(cache->dirtiness_snapshot);
 bad_alloc_dirtiness_snapshot:
 	vfree(cache->migrate_buffer);
 bad_alloc_migrate_buffer:
-bad_recover:
+	destroy_workqueue(cache->migrate_wq);
+bad_migratewq:
 	kill_bigarray(cache->htable);
 bad_alloc_ht:
 	kill_bigarray(cache->segment_header_array);

@@ -55,6 +55,12 @@ static int audit_superblock_header(struct superblock_header_device *sup,
 		return -EINVAL;
 	}
 
+	/*
+	 * FIXME
+	 * If one input wrong segment size order
+	 * with a validate cache device
+	 * should not reformat the cache device.
+	 */
 	if (sup->segment_size_order != cache->segment_size_order) {
 		WBERR("superblock header: segment_size_order not same.");
 		return -EINVAL;
@@ -233,7 +239,7 @@ int __must_check format_cache_device(struct dm_dev *dev, struct wb_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(100));
 
 	if (context.err) {
-		WBERR();
+		WBERR("formatting io failed error=%d", context.err);
 		return -EIO;
 	}
 

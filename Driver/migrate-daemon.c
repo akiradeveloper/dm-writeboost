@@ -250,7 +250,7 @@ void migrate_proc(struct work_struct *work)
 		size_t i, nr_mig_candidates, nr_mig;
 		struct segment_header *seg, *tmp;
 
-		WBINFO();
+		/* WBINFO(); */
 
 		if (cache->on_terminate)
 			return;

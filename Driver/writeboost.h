@@ -35,15 +35,18 @@
  * The Detail of the Disk Format
  *
  * Whole:
- * Superblock(1MB) Segment(1MB) Segment(1MB) ...
- * We reserve the first segment (1MB) as the superblock.
+ * Superblock (1MB) + Segment + Segment ...
+ * We reserve the first 1MB as the superblock.
  *
- * Superblock(1MB):
- * head <----                               ----> tail
- * superblock header(512B) ... superblock record(512B)
+ * Superblock:
+ * head <----                                     ----> tail
+ * superblock header (512B) + ... + superblock record (512B)
  *
- * Segment(1MB):
- * segment_header_device(4KB) metablock_device(4KB) * nr_caches_inseg
+ * Segment:
+ * segment_header_device +
+ * metablock_device * nr_caches_inseg +
+ * (aligned first 4KB region)
+ * data[0] (4KB) + data{1] + ... + data{nr_cache_inseg - 1]
  */
 
 /*

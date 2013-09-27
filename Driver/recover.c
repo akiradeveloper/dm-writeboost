@@ -253,6 +253,14 @@ int __must_check recover_cache(struct wb_cache *cache)
 			break;
 
 		if (!checkup_atomicity(header)) {
+			/*
+			 * FIXME
+			 * This header is not valid
+			 * and following metadata discarded.
+			 * Other information such as
+			 * last_migrated_segment_id
+			 * should be adjusted.
+			 */
 			WBWARN("header atomicity broken id %llu",
 			       header_id);
 			break;

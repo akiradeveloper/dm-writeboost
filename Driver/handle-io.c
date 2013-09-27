@@ -479,6 +479,11 @@ write_not_found:
 write_on_buffer:
 	;
 	idx_inseg = update_mb_idx % cache->nr_caches_inseg;
+
+	/*
+	 * The first 4KB of the segment is
+	 * used for metadata.
+	 */
 	s = (idx_inseg + 1) << 3;
 
 	b = false;

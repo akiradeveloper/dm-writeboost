@@ -233,7 +233,7 @@ int __must_check format_cache_device(struct dm_dev *dev, struct wb_cache *cache)
 		schedule_timeout_interruptible(msecs_to_jiffies(100));
 
 	if (context.err) {
-		WBERR();
+		WBERR("formatting io failed error=%d", context.err);
 		return -EIO;
 	}
 

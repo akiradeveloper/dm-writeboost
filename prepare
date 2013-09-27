@@ -11,11 +11,11 @@ blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
 # Zeroing the first sector in the cache device
 # triggers formatting the cache device
 echo destory cache ... 
-dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
+#dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 
 echo create writeboost-vol ...
 sz=`blockdev --getsize ${BACKING}`
-dmsetup create writeboost-vol --table "0 ${sz} writeboost ${BACKING} ${CACHE} 11"
+dmsetup create writeboost-vol --table "0 ${sz} writeboost ${BACKING} ${CACHE} 7"
 
 echo configure things for tests ...
 dmsetup message writeboost-vol 0 enable_migration_modulator 1

@@ -47,8 +47,7 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 			bigarray_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = cache->nr_caches_inseg * segment_idx;
 		seg->start_sector =
-			((segment_idx % nr_segments) + 1) *
-			(1 << cache->segment_size_order);
+			calc_segment_header_start(cache, segment_idx);
 
 		seg->length = 0;
 
@@ -75,7 +74,7 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
  * The Index of the segment is calculated from the segment id.
  */
 struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
-						       size_t segment_id)
+						u64 segment_id)
 {
 	struct segment_header *r =
 		bigarray_at(cache->segment_header_array,
@@ -83,7 +82,7 @@ struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
 	return r;
 }
 
-u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id)
+u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
 {
 	u32 a = (segment_id - 1) / cache->nr_segments;
 	return a + 1;
@@ -97,15 +96,15 @@ sector_t calc_mb_start_sector(struct wb_cache *cache,
 	return seg->start_sector + (k << 3);
 }
 
-sector_t calc_segment_header_start(struct wb_cache *cache, size_t segment_idx)
+sector_t calc_segment_header_start(struct wb_cache *cache, u64 segment_idx)
 {
-	return (1 << cache->segment_size_order) * (segment_idx + 1);
+	return (1 << 11) + (1 << cache->segment_size_order) * (segment_idx);
 }
 
 u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
 {
 	sector_t devsize = dm_devsize(dev);
-	return devsize / (1 << cache->segment_size_order) - 1;
+	return (devsize - (1 << 11)) / (1 << cache->segment_size_order);
 }
 
 bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)

@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ *
+ * This file is released under the GPL.
+ */
+
 #include "dm-writeboost.h"
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
@@ -25,7 +31,7 @@ static size_t nr_parts(struct bigarray *arr)
 	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
 }
 
-struct bigarray *make_bigarray(size_t elemsize, size_t nr_elems)
+static struct bigarray *make_bigarray(size_t elemsize, size_t nr_elems)
 {
 	size_t i, j;
 	struct part *part;
@@ -65,7 +71,7 @@ bad_alloc_parts:
 	return NULL;
 }
 
-void kill_bigarray(struct bigarray *arr)
+static void kill_bigarray(struct bigarray *arr)
 {
 	size_t i;
 	for (i = 0; i < nr_parts(arr); i++) {
@@ -76,7 +82,7 @@ void kill_bigarray(struct bigarray *arr)
 	kfree(arr);
 }
 
-void *bigarray_at(struct bigarray *arr, size_t i)
+static void *bigarray_at(struct bigarray *arr, size_t i)
 {
 	size_t n = nr_elems_in_part(arr);
 	size_t j = i / n;
@@ -98,7 +104,7 @@ void *bigarray_at(struct bigarray *arr, size_t i)
 /*
  * Get the in-core metablock of the given index.
  */
-struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
+static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 {
 	u64 seg_idx = idx / cache->nr_caches_inseg;
 	struct segment_header *seg =
@@ -119,9 +125,42 @@ static void mb_array_empty_init(struct wb_cache *cache)
 	}
 }
 
-static sector_t calc_segment_header_start(struct wb_cache *cache, u64 segment_idx)
+static sector_t calc_segment_header_start(struct wb_cache *cache,
+					  u64 segment_idx)
 {
 	return (1 << 11) + (1 << cache->segment_size_order) * (segment_idx);
+}
+
+static u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
+{
+	u32 a = (segment_id - 1) / cache->nr_segments;
+	return a + 1;
+};
+
+static u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
+{
+	sector_t devsize = dm_devsize(dev);
+	return (devsize - (1 << 11)) / (1 << cache->segment_size_order);
+}
+
+sector_t calc_mb_start_sector(struct wb_cache *cache,
+			      struct segment_header *seg,
+			      cache_nr mb_idx)
+{
+	size_t k = 1 + (mb_idx % cache->nr_caches_inseg);
+	return seg->start_sector + (k << 3);
+}
+
+bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
+{
+	cache_nr start = cache->current_seg->start_idx;
+	if (mb_idx < start)
+		return false;
+
+	if (mb_idx >= (start + cache->nr_caches_inseg))
+		return false;
+
+	return true;
 }
 
 /*
@@ -137,39 +176,7 @@ struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
 	return r;
 }
 
-u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
-{
-	u32 a = (segment_id - 1) / cache->nr_segments;
-	return a + 1;
-};
-
-sector_t calc_mb_start_sector(struct wb_cache *cache,
-			      struct segment_header *seg,
-			      cache_nr mb_idx)
-{
-	size_t k = 1 + (mb_idx % cache->nr_caches_inseg);
-	return seg->start_sector + (k << 3);
-}
-
-u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
-{
-	sector_t devsize = dm_devsize(dev);
-	return (devsize - (1 << 11)) / (1 << cache->segment_size_order);
-}
-
-bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
-{
-	cache_nr start = cache->current_seg->start_idx;
-	if (mb_idx < start)
-		return false;
-
-	if (mb_idx >= (start + cache->nr_caches_inseg))
-		return false;
-
-	return true;
-}
-
-int __must_check init_segment_header_array(struct wb_cache *cache)
+static int __must_check init_segment_header_array(struct wb_cache *cache)
 {
 	u64 segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
@@ -206,7 +213,7 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 	return 0;
 }
 
-void free_segment_header_array(struct wb_cache *cache)
+static void free_segment_header_array(struct wb_cache *cache)
 {
 	kill_bigarray(cache->segment_header_array);
 }
@@ -216,7 +223,7 @@ void free_segment_header_array(struct wb_cache *cache)
 /*
  * Initialize the Hash Table.
  */
-int __must_check ht_empty_init(struct wb_cache *cache)
+static int __must_check ht_empty_init(struct wb_cache *cache)
 {
 	cache_nr idx;
 	size_t i;
@@ -252,7 +259,7 @@ int __must_check ht_empty_init(struct wb_cache *cache)
 	return 0;
 }
 
-void free_ht(struct wb_cache *cache)
+static void free_ht(struct wb_cache *cache)
 {
 	kill_bigarray(cache->htable);
 }
@@ -735,7 +742,7 @@ static bool checkup_atomicity(struct segment_header_device *header)
 	return true;
 }
 
-int __must_check recover_cache(struct wb_cache *cache)
+static int __must_check recover_cache(struct wb_cache *cache)
 {
 	int r = 0;
 	struct segment_header_device *header;
@@ -751,9 +758,7 @@ int __must_check recover_cache(struct wb_cache *cache)
 		WBERR();
 		return r;
 	}
-	WBINFO("%llu", record.last_migrated_segment_id);
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
-	WBINFO("%llu", record_id);
 
 	header = kmalloc(sizeof_segment_header_device(cache), GFP_KERNEL);
 	if (!header) {
@@ -883,7 +888,6 @@ setup_init_segment:
 	if (record_id > cache->last_migrated_segment_id)
 		cache->last_migrated_segment_id = record_id;
 
-	WBINFO("%llu", cache->last_migrated_segment_id);
 	wait_for_migration(cache, seg->global_id);
 
 	discard_caches_inseg(cache, seg);
@@ -1097,7 +1101,7 @@ bad_alloc_migrate_buffer:
 bad_migratewq:
 	free_ht(cache);
 bad_alloc_ht:
-	free_segment_header_array(cache);	
+	free_segment_header_array(cache);
 bad_alloc_segment_header_array:
 	free_rambuf_pool(cache);
 bad_init_rambuf_pool:

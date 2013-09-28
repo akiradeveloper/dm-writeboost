@@ -7,6 +7,8 @@
 #ifndef DM_WRITEBOOST_H
 #define DM_WRITEBOOST_H
 
+/*----------------------------------------------------------------*/
+
 #define DM_MSG_PREFIX "writeboost"
 
 #include <linux/module.h>
@@ -373,13 +375,17 @@ struct per_bio_data {
 #endif
 #endif
 
-/* ---------------------------------------------------------------------------- */
+/*----------------------------------------------------------------*/
 
-//void queue_current_buffer(struct wb_cache *);
 void flush_current_buffer(struct wb_cache *);
 void inc_nr_dirty_caches(struct wb_device *);
+void cleanup_mb_if_dirty(struct wb_cache *,
+			 struct segment_header *,
+			 struct metablock *);
+u8 atomic_read_mb_dirtiness(struct segment_header *,
+			    struct metablock *);
 
-/* ---------------------------------------------------------------------------- */
+/*----------------------------------------------------------------*/
 
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;

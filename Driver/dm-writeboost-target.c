@@ -227,7 +227,7 @@ static void queue_flushing(struct wb_cache *cache)
 	cache->current_seg = new_seg;
 }
 
-void queue_current_buffer(struct wb_cache *cache)
+static void queue_current_buffer(struct wb_cache *cache)
 {
 	/*
 	 * Before we get the next segment
@@ -332,7 +332,7 @@ static void inc_stat(struct wb_cache *cache,
 	atomic64_inc(v);
 }
 
-void clear_stat(struct wb_cache *cache)
+static void clear_stat(struct wb_cache *cache)
 {
 	int i;
 	for (i = 0; i < STATLEN; i++) {
@@ -494,7 +494,7 @@ static sector_t calc_cache_alignment(struct wb_cache *cache,
 
 static int writeboost_map(struct dm_target *ti, struct bio *bio
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-		 , union map_info *map_context
+			, union map_info *map_context
 #endif
 		  )
 {
@@ -803,7 +803,7 @@ write_on_buffer:
 
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 #if LINUX_VERSION_CODE < PER_BIO_VERSION
-		    , union map_info *map_context
+			   , union map_info *map_context
 #endif
 		     )
 {

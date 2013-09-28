@@ -510,7 +510,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 	int rw;
 	struct lookup_key key;
 	struct ht_head *head;
-	cache_nr update_mb_idx, idx_inseg, k;
+	cache_nr update_mb_idx, idx_inseg;
 	size_t start;
 	void *data;
 
@@ -827,7 +827,7 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r = 0;
-	bool cache_valid;
+	bool need_format, allow_format;
 	struct wb_device *wb;
 	struct wb_cache *cache;
 	struct dm_dev *origdev, *cachedev;
@@ -896,9 +896,9 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	cache->nr_caches_inseg = (1 << (tmp - 3)) - 1;
 
-	r = audit_cache_device(cachedev, cache, &cache_valid);
+	r = audit_cache_device(cachedev, cache, &need_format, &allow_format);
 	if (r) {
-		WBERR("%d", r);
+		DMERR("audit cache device fails");
 		/*
 		 * If something happens in auditing the cache
 		 * such as read io error either go formatting
@@ -908,15 +908,18 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_audit_cache;
 	}
 
-	if (!cache_valid) {
-		r = format_cache_device(cachedev, cache);
-		if (r) {
-			WBERR("%d", r);
-			goto bad_format_cache;
+	if (need_format) {
+		if (allow_format) {
+			r = format_cache_device(cachedev, cache);
+			if (r) {
+				DMERR("format cache device fails");
+				goto bad_format_cache;
+			}
+		} else {
+			DMERR("cache device not allowed to format");
+			goto bad_audit_cache;
 		}
 	}
-
-
 
 	wb->cache = cache;
 	wb->cache->wb = wb;

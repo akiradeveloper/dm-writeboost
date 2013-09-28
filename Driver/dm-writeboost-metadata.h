@@ -26,7 +26,8 @@ void discard_caches_inseg(struct wb_cache *,
 
 /*----------------------------------------------------------------*/
 
-int __must_check audit_cache_device(struct dm_dev *, struct wb_cache *, bool *cache_valid);
+int __must_check audit_cache_device(struct dm_dev *, struct wb_cache *,
+				    bool *need_format, bool *allow_format);
 int __must_check format_cache_device(struct dm_dev *, struct wb_cache *);
 
 /*----------------------------------------------------------------*/

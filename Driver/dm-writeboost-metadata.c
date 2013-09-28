@@ -368,30 +368,6 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	return 0;
 }
 
-static int audit_superblock_header(struct superblock_header_device *sup,
-				   struct wb_cache *cache)
-{
-	u32 magic = le32_to_cpu(sup->magic);
-
-	if (magic != WRITEBOOST_MAGIC) {
-		WBERR("superblock header: magic number invalid.");
-		return -EINVAL;
-	}
-
-	/*
-	 * FIXME
-	 * If one input wrong segment size order
-	 * with a validate cache device
-	 * should not reformat the cache device.
-	 */
-	if (sup->segment_size_order != cache->segment_size_order) {
-		WBERR("superblock header: segment_size_order not same.");
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
 /*
  * Check if the cache device is already formatted.
  * Returns 0 iff this routine runs without failure.
@@ -399,15 +375,33 @@ static int audit_superblock_header(struct superblock_header_device *sup,
  * is formatted and needs not to be re-fomatted.
  */
 int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
-				    bool *cache_valid)
+				    bool *need_format, bool *allow_format)
 {
 	int r = 0;
 	struct superblock_header_device sup;
 	r = read_superblock_header(&sup, dev);
-	if (r)
+	if (r) {
+		DMERR("read superblock header failed");
 		return r;
+	}
 
-	*cache_valid = audit_superblock_header(&sup, cache) ? false : true;
+	*need_format = true;
+	*allow_format = false;
+
+	if (le32_to_cpu(sup.magic) != WRITEBOOST_MAGIC) {
+		DMERR("superblock header: magic number invalid.");
+		*allow_format = true;
+		return 0;
+	}
+
+	if (sup.segment_size_order != cache->segment_size_order) {
+		DMERR("superblock header: segment order not same %u != %u",
+		      sup.segment_size_order,				
+		      cache->segment_size_order);
+	} else {
+		*need_format = false;
+	}
+
 	return r;
 }
 
@@ -694,7 +688,6 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 	INIT_COMPLETION(seg->migrate_done);
 
 	for (i = 0 ; i < src->length; i++) {
-		cache_nr k;
 		struct lookup_key key;
 		struct ht_head *head;
 		struct metablock *found, *mb = seg->mb_array + i;

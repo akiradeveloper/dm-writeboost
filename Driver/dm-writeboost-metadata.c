@@ -841,7 +841,7 @@ static int __must_check recover_cache(struct wb_cache *cache)
 		if (header_id <= last_flushed_id)
 			break;
 
-		if (!checkup_atomicity(header)) {
+		if (unlikely(!checkup_atomicity(header))) {
 			/*
 			 * FIXME
 			 * This header is not valid

@@ -4,7 +4,122 @@
  * This file is released under the GPL.
  */
 
-#include "migrate-daemon.h"
+#include "dm-writeboost.h"
+#include "dm-writeboost-metadata.h"
+#include "dm-writeboost-daemon.h"
+
+/*----------------------------------------------------------------*/
+
+void flush_proc(struct work_struct *work)
+{
+	unsigned long flags;
+
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, flush_work);
+
+	while (true) {
+		struct flush_job *job;
+		struct segment_header *seg;
+		struct dm_io_request io_req;
+		struct dm_io_region region;
+
+		WBINFO();
+
+		spin_lock_irqsave(&cache->flush_queue_lock, flags);
+		while (list_empty(&cache->flush_queue)) {
+			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+			wait_event_interruptible_timeout(
+				cache->flush_wait_queue,
+				(!list_empty(&cache->flush_queue)),
+				msecs_to_jiffies(100));
+			spin_lock_irqsave(&cache->flush_queue_lock, flags);
+
+			if (cache->on_terminate)
+				return;
+		}
+
+		/*
+		 * Pop a fluch_context from a list
+		 * and flush it.
+		 */
+		job = list_first_entry(
+			&cache->flush_queue, struct flush_job, flush_queue);
+		list_del(&job->flush_queue);
+		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+
+		seg = job->seg;
+
+		io_req = (struct dm_io_request) {
+			.client = wb_io_client,
+			.bi_rw = WRITE,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = job->rambuf->data,
+		};
+
+		region = (struct dm_io_region) {
+			.bdev = cache->device->bdev,
+			.sector = seg->start_sector,
+			.count = (seg->length + 1) << 3,
+		};
+
+		dm_safe_io_retry(&io_req, 1, &region, false);
+
+		cache->last_flushed_segment_id = seg->global_id;
+
+		complete_all(&seg->flush_done);
+
+		complete_all(&job->rambuf->done);
+
+		/*
+		 * Deferred ACK
+		 */
+		if (!bio_list_empty(&job->barrier_ios)) {
+			struct bio *bio;
+			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
+			while ((bio = bio_list_pop(&job->barrier_ios)))
+				bio_endio(bio, 0);
+
+			mod_timer(&cache->barrier_deadline_timer,
+				  msecs_to_jiffies(cache->barrier_deadline_ms));
+		}
+
+		kfree(job);
+	}
+}
+
+/*----------------------------------------------------------------*/
+
+void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
+{
+	mutex_lock(&cache->io_lock);
+	bio_list_add(&cache->barrier_ios, bio);
+	mutex_unlock(&cache->io_lock);
+
+	if (!timer_pending(&cache->barrier_deadline_timer))
+		mod_timer(&cache->barrier_deadline_timer,
+			  msecs_to_jiffies(cache->barrier_deadline_ms));
+}
+
+void barrier_deadline_proc(unsigned long data)
+{
+	struct wb_cache *cache = (struct wb_cache *) data;
+	schedule_work(&cache->barrier_deadline_work);
+}
+
+void flush_barrier_ios(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache,
+			     barrier_deadline_work);
+
+	if (bio_list_empty(&cache->barrier_ios))
+		return;
+
+	flush_current_buffer(cache);
+}
+
+/*----------------------------------------------------------------*/
 
 static void migrate_endio(unsigned long error, void *context)
 {
@@ -342,4 +457,124 @@ void wait_for_migration(struct wb_cache *cache, size_t id)
 	cache->reserving_segment_id = id;
 	wait_for_completion(&seg->migrate_done);
 	cache->reserving_segment_id = 0;
+}
+
+/*----------------------------------------------------------------*/
+
+void modulator_proc(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, modulator_work);
+	struct wb_device *wb = cache->wb;
+
+	struct hd_struct *hd = wb->device->bdev->bd_part;
+	unsigned long old = 0, new, util;
+	unsigned long intvl = 1000;
+
+	while (true) {
+		if (cache->on_terminate)
+			return;
+
+		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
+
+		if (!cache->enable_migration_modulator)
+			goto modulator_update;
+
+		util = (100 * (new - old)) / 1000;
+
+		WBINFO("%u", (unsigned) util);
+		if (util < wb->migrate_threshold)
+			cache->allow_migrate = true;
+		else
+			cache->allow_migrate = false;
+
+modulator_update:
+		old = new;
+
+		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
+	}
+}
+
+/*----------------------------------------------------------------*/
+
+static void update_superblock_record(struct wb_cache *cache)
+{
+	struct superblock_record_device o;
+	void *buf;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
+	o.last_migrated_segment_id =
+		cpu_to_le64(cache->last_migrated_segment_id);
+
+	buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO | __GFP_ZERO);
+	memcpy(buf, &o, sizeof(o));
+
+	io_req = (struct dm_io_request) {
+		.client = wb_io_client,
+		.bi_rw = WRITE_FUA,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	region = (struct dm_io_region) {
+		.bdev = cache->device->bdev,
+		.sector = (1 << 11) - 1,
+		.count = 1,
+	};
+	dm_safe_io_retry(&io_req, 1, &region, true);
+	kfree(buf);
+}
+
+void recorder_proc(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, recorder_work);
+	unsigned long intvl;
+
+	while (true) {
+		if (cache->on_terminate)
+			return;
+
+		/* sec -> ms */
+		intvl = cache->update_record_interval * 1000;
+
+		if (!intvl) {
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
+			continue;
+		}
+
+		WBINFO();
+		update_superblock_record(cache);
+
+		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
+	}
+}
+
+/*----------------------------------------------------------------*/
+
+void sync_proc(struct work_struct *work)
+{
+	struct wb_cache *cache =
+		container_of(work, struct wb_cache, sync_work);
+	unsigned long intvl;
+
+	while (true) {
+		if (cache->on_terminate)
+			return;
+
+		/* sec -> ms */
+		intvl = cache->sync_interval * 1000;
+
+		if (!intvl) {
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
+			continue;
+		}
+
+		WBINFO();
+		flush_current_buffer(cache);
+		blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
+
+		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
+	}
 }

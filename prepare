@@ -11,7 +11,7 @@ blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
 # Zeroing the first sector in the cache device
 # triggers formatting the cache device
 echo destory cache ... 
-#dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 
 echo create writeboost-vol ...
 sz=`blockdev --getsize ${BACKING}`

@@ -23,8 +23,6 @@ void flush_proc(struct work_struct *work)
 		struct dm_io_request io_req;
 		struct dm_io_region region;
 
-		WBINFO();
-
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while (list_empty(&cache->flush_queue)) {
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
@@ -365,8 +363,6 @@ void migrate_proc(struct work_struct *work)
 		size_t i, nr_mig_candidates, nr_mig;
 		struct segment_header *seg, *tmp;
 
-		/* WBINFO(); */
-
 		if (cache->on_terminate)
 			return;
 
@@ -444,7 +440,11 @@ void migrate_proc(struct work_struct *work)
 	}
 }
 
-void wait_for_migration(struct wb_cache *cache, size_t id)
+/*
+ * Wait for a segment of given ID
+ * finishes its migration.
+ */
+void wait_for_migration(struct wb_cache *cache, u64 id)
 {
 	struct segment_header *seg = get_segment_header_by_id(cache, id);
 
@@ -482,7 +482,6 @@ void modulator_proc(struct work_struct *work)
 
 		util = (100 * (new - old)) / 1000;
 
-		WBINFO("%u", (unsigned) util);
 		if (util < wb->migrate_threshold)
 			cache->allow_migrate = true;
 		else
@@ -544,7 +543,6 @@ void recorder_proc(struct work_struct *work)
 			continue;
 		}
 
-		WBINFO();
 		update_superblock_record(cache);
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
@@ -571,7 +569,6 @@ void sync_proc(struct work_struct *work)
 			continue;
 		}
 
-		WBINFO();
 		flush_current_buffer(cache);
 		blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
 

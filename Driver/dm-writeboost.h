@@ -375,10 +375,9 @@ struct per_bio_data {
 
 /* ---------------------------------------------------------------------------- */
 
-void queue_current_buffer(struct wb_cache *);
+//void queue_current_buffer(struct wb_cache *);
 void flush_current_buffer(struct wb_cache *);
 void inc_nr_dirty_caches(struct wb_device *);
-void clear_stat(struct wb_cache *);
 
 /* ---------------------------------------------------------------------------- */
 

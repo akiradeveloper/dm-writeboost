@@ -25,7 +25,7 @@ void cleanup_mb_if_dirty(struct wb_cache *,
 			 struct segment_header *,
 			 struct metablock *);
 void migrate_proc(struct work_struct *);
-void wait_for_migration(struct wb_cache *, size_t id);
+void wait_for_migration(struct wb_cache *, u64 id);
 
 /*----------------------------------------------------------------*/
 

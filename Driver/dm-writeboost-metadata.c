@@ -87,6 +87,14 @@ void *bigarray_at(struct bigarray *arr, size_t i)
 
 /*----------------------------------------------------------------*/
 
+#define sizeof_segment_header(cache) \
+	(sizeof(struct segment_header) + \
+	 sizeof(struct metablock) * (cache)->nr_caches_inseg)
+
+#define sizeof_segment_header_device(cache) \
+	(sizeof(struct segment_header_device) + \
+	 sizeof(struct metablock_device) * (cache)->nr_caches_inseg)
+
 /*
  * Get the in-core metablock of the given index.
  */
@@ -109,6 +117,56 @@ static void mb_array_empty_init(struct wb_cache *cache)
 		mb->idx = i;
 		mb->dirty_bits = 0;
 	}
+}
+
+static sector_t calc_segment_header_start(struct wb_cache *cache, u64 segment_idx)
+{
+	return (1 << 11) + (1 << cache->segment_size_order) * (segment_idx);
+}
+
+/*
+ * Get the segment from the segment id.
+ * The Index of the segment is calculated from the segment id.
+ */
+struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
+						u64 segment_id)
+{
+	struct segment_header *r =
+		bigarray_at(cache->segment_header_array,
+		       (segment_id - 1) % cache->nr_segments);
+	return r;
+}
+
+u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
+{
+	u32 a = (segment_id - 1) / cache->nr_segments;
+	return a + 1;
+};
+
+sector_t calc_mb_start_sector(struct wb_cache *cache,
+			      struct segment_header *seg,
+			      cache_nr mb_idx)
+{
+	size_t k = 1 + (mb_idx % cache->nr_caches_inseg);
+	return seg->start_sector + (k << 3);
+}
+
+u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
+{
+	sector_t devsize = dm_devsize(dev);
+	return (devsize - (1 << 11)) / (1 << cache->segment_size_order);
+}
+
+bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
+{
+	cache_nr start = cache->current_seg->start_idx;
+	if (mb_idx < start)
+		return false;
+
+	if (mb_idx >= (start + cache->nr_caches_inseg))
+		return false;
+
+	return true;
 }
 
 int __must_check init_segment_header_array(struct wb_cache *cache)
@@ -148,54 +206,9 @@ int __must_check init_segment_header_array(struct wb_cache *cache)
 	return 0;
 }
 
-/*
- * Get the segment from the segment id.
- * The Index of the segment is calculated from the segment id.
- */
-struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
-						u64 segment_id)
+void free_segment_header_array(struct wb_cache *cache)
 {
-	struct segment_header *r =
-		bigarray_at(cache->segment_header_array,
-		       (segment_id - 1) % cache->nr_segments);
-	return r;
-}
-
-u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
-{
-	u32 a = (segment_id - 1) / cache->nr_segments;
-	return a + 1;
-};
-
-sector_t calc_mb_start_sector(struct wb_cache *cache,
-			      struct segment_header *seg,
-			      cache_nr mb_idx)
-{
-	size_t k = 1 + (mb_idx % cache->nr_caches_inseg);
-	return seg->start_sector + (k << 3);
-}
-
-sector_t calc_segment_header_start(struct wb_cache *cache, u64 segment_idx)
-{
-	return (1 << 11) + (1 << cache->segment_size_order) * (segment_idx);
-}
-
-u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
-{
-	sector_t devsize = dm_devsize(dev);
-	return (devsize - (1 << 11)) / (1 << cache->segment_size_order);
-}
-
-bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
-{
-	cache_nr start = cache->current_seg->start_idx;
-	if (mb_idx < start)
-		return false;
-
-	if (mb_idx >= (start + cache->nr_caches_inseg))
-		return false;
-
-	return true;
+	kill_bigarray(cache->segment_header_array);
 }
 
 /*----------------------------------------------------------------*/
@@ -239,9 +252,14 @@ int __must_check ht_empty_init(struct wb_cache *cache)
 	return 0;
 }
 
-cache_nr ht_hash(struct wb_cache *cache, struct lookup_key *key)
+void free_ht(struct wb_cache *cache)
 {
-	return key->sector % cache->htsize;
+	kill_bigarray(cache->htable);
+}
+
+struct ht_head *ht_get_head(struct wb_cache *cache, struct lookup_key *key)
+{
+	return bigarray_at(cache->htable, key->sector % cache->htsize);
 }
 
 static bool mb_hit(struct metablock *mb, struct lookup_key *key)
@@ -626,6 +644,34 @@ read_segment_header_device(struct segment_header_device *dest,
 }
 
 /*
+ * Make a metadata in segment data to flush.
+ * @dest The metadata part of the segment to flush
+ */
+void prepare_segment_header_device(struct segment_header_device *dest,
+				   struct wb_cache *cache,
+				   struct segment_header *src)
+{
+	cache_nr i;
+	u8 left, right;
+
+	dest->global_id = cpu_to_le64(src->global_id);
+	dest->length = src->length;
+	dest->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
+
+	left = src->length - 1;
+	right = (cache->cursor) % cache->nr_caches_inseg;
+	BUG_ON(left != right);
+
+	for (i = 0; i < src->length; i++) {
+		struct metablock *mb = src->mb_array + i;
+		struct metablock_device *mbdev = &dest->mbarr[i];
+		mbdev->sector = cpu_to_le64(mb->sector);
+		mbdev->dirty_bits = mb->dirty_bits;
+		mbdev->lap = dest->lap;
+	}
+}
+
+/*
  * Read the on-disk metadata of the segment
  * and update the in-core cache metadata structure
  * like Hash Table.
@@ -659,8 +705,7 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 			.sector = mb->sector,
 		};
 
-		k = ht_hash(cache, &key);
-		head = bigarray_at(cache->htable, k);
+		head = ht_get_head(cache, &key);
 
 		found = ht_lookup(cache, head, &key);
 		if (found)
@@ -853,4 +898,235 @@ setup_init_segment:
 	cache->current_seg = seg;
 
 	return 0;
+}
+
+/*----------------------------------------------------------------*/
+
+static int __must_check init_rambuf_pool(struct wb_cache *cache)
+{
+	size_t i, j;
+	struct rambuffer *rambuf;
+
+	/* tmp var to avoid 80 cols */
+	size_t nr = (RAMBUF_POOL_ALLOCATED * 1000000) /
+		    (1 << (cache->segment_size_order + SECTOR_SHIFT));
+	cache->nr_rambuf_pool = nr;
+	cache->rambuf_pool = kmalloc(sizeof(struct rambuffer) * nr,
+				     GFP_KERNEL);
+	if (!cache->rambuf_pool) {
+		WBERR();
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < cache->nr_rambuf_pool; i++) {
+		rambuf = cache->rambuf_pool + i;
+		init_completion(&rambuf->done);
+		complete_all(&rambuf->done);
+
+		rambuf->data = kmalloc(
+			1 << (cache->segment_size_order + SECTOR_SHIFT),
+			GFP_KERNEL);
+		if (!rambuf->data) {
+			WBERR();
+			for (j = 0; j < i; j++) {
+				rambuf = cache->rambuf_pool + j;
+				kfree(rambuf->data);
+			}
+			kfree(cache->rambuf_pool);
+			return -ENOMEM;
+		}
+	}
+
+	return 0;
+}
+
+static void free_rambuf_pool(struct wb_cache *cache)
+{
+	struct rambuffer *rambuf;
+	size_t i;
+	for (i = 0; i < cache->nr_rambuf_pool; i++) {
+		rambuf = cache->rambuf_pool + i;
+		kfree(rambuf->data);
+	}
+	kfree(cache->rambuf_pool);
+}
+
+/*----------------------------------------------------------------*/
+
+int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
+{
+	int r = 0;
+
+	cache->device = dev;
+	cache->nr_segments = calc_nr_segments(cache->device, cache);
+	cache->nr_caches = cache->nr_segments * cache->nr_caches_inseg;
+	cache->on_terminate = false;
+	cache->allow_migrate = true;
+	cache->reserving_segment_id = 0;
+	mutex_init(&cache->io_lock);
+
+	cache->enable_migration_modulator = true;
+	cache->update_record_interval = 60;
+	cache->sync_interval = 60;
+
+
+	/*
+	 * (i) Harmless Initializations
+	 */
+	r = init_rambuf_pool(cache);
+	if (r) {
+		WBERR();
+		goto bad_init_rambuf_pool;
+	}
+
+	/* Select arbitrary one as the initial rambuffer. */
+	cache->current_rambuf = cache->rambuf_pool + 0;
+
+	r = init_segment_header_array(cache);
+	if (r) {
+		WBERR();
+		goto bad_alloc_segment_header_array;
+	}
+
+	r = ht_empty_init(cache);
+	if (r) {
+		WBERR();
+		goto bad_alloc_ht;
+	}
+
+
+	/*
+	 * (2) Recovering Metadata
+	 * Recovering the cache metadata
+	 * prerequires the migration daemon working.
+	 */
+	cache->migrate_wq = create_singlethread_workqueue("migratewq");
+	if (!cache->migrate_wq) {
+		WBERR();
+		goto bad_migratewq;
+	}
+
+	/* Data structures for Migration */
+	cache->migrate_buffer = vmalloc(cache->nr_caches_inseg << 12);
+	if (!cache->migrate_buffer) {
+		WBERR();
+		goto bad_alloc_migrate_buffer;
+	}
+
+	cache->dirtiness_snapshot = kmalloc(
+			cache->nr_caches_inseg,
+			GFP_KERNEL);
+	if (!cache->dirtiness_snapshot) {
+		WBERR();
+		goto bad_alloc_dirtiness_snapshot;
+	}
+
+	/* Migration Daemon */
+	INIT_WORK(&cache->migrate_work, migrate_proc);
+	init_waitqueue_head(&cache->migrate_wait_queue);
+	INIT_LIST_HEAD(&cache->migrate_list);
+	atomic_set(&cache->migrate_fail_count, 0);
+	atomic_set(&cache->migrate_io_count, 0);
+	cache->nr_max_batched_migration = 1;
+	cache->nr_cur_batched_migration = 1;
+	queue_work(cache->migrate_wq, &cache->migrate_work);
+
+	r = recover_cache(cache);
+	if (r) {
+		WBERR();
+		goto bad_recover;
+	}
+
+
+	/*
+	 * (3) Misc Initializations
+	 * These are only working
+	 * after the logical device created.
+	 */
+	cache->flush_wq = create_singlethread_workqueue("flushwq");
+	if (!cache->flush_wq) {
+		WBERR();
+		goto bad_flushwq;
+	}
+
+	/* Flush Daemon */
+	INIT_WORK(&cache->flush_work, flush_proc);
+	spin_lock_init(&cache->flush_queue_lock);
+	INIT_LIST_HEAD(&cache->flush_queue);
+	init_waitqueue_head(&cache->flush_wait_queue);
+	queue_work(cache->flush_wq, &cache->flush_work);
+
+	/* Deferred ACK for barrier writes */
+	setup_timer(&cache->barrier_deadline_timer,
+		    barrier_deadline_proc, (unsigned long) cache);
+	bio_list_init(&cache->barrier_ios);
+	/*
+	 * Deadline is 3 ms by default.
+	 * 2.5 us to process on bio
+	 * and 3 ms is enough long to process 255 bios.
+	 * If the buffer doesn't get full within 3 ms,
+	 * we can doubt write starves
+	 * by waiting formerly submitted barrier to be complete.
+	 */
+	cache->barrier_deadline_ms = 3;
+	INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
+
+	/* Migartion Modulator */
+	INIT_WORK(&cache->modulator_work, modulator_proc);
+	schedule_work(&cache->modulator_work);
+
+	/* Superblock Recorder */
+	INIT_WORK(&cache->recorder_work, recorder_proc);
+	schedule_work(&cache->recorder_work);
+
+	/* Dirty Synchronizer */
+	INIT_WORK(&cache->sync_work, sync_proc);
+	schedule_work(&cache->sync_work);
+
+	return 0;
+
+bad_flushwq:
+bad_recover:
+	cache->on_terminate = true;
+	cancel_work_sync(&cache->migrate_work);
+	kfree(cache->dirtiness_snapshot);
+bad_alloc_dirtiness_snapshot:
+	vfree(cache->migrate_buffer);
+bad_alloc_migrate_buffer:
+	destroy_workqueue(cache->migrate_wq);
+bad_migratewq:
+	free_ht(cache);
+bad_alloc_ht:
+	free_segment_header_array(cache);	
+bad_alloc_segment_header_array:
+	free_rambuf_pool(cache);
+bad_init_rambuf_pool:
+	kfree(cache);
+	return r;
+}
+
+void free_cache(struct wb_cache *cache)
+{
+	cache->on_terminate = true;
+
+	/* Kill in-kernel daemons */
+	cancel_work_sync(&cache->sync_work);
+	cancel_work_sync(&cache->recorder_work);
+	cancel_work_sync(&cache->modulator_work);
+
+	cancel_work_sync(&cache->flush_work);
+	destroy_workqueue(cache->flush_wq);
+
+	cancel_work_sync(&cache->barrier_deadline_work);
+
+	cancel_work_sync(&cache->migrate_work);
+	destroy_workqueue(cache->migrate_wq);
+	kfree(cache->dirtiness_snapshot);
+	vfree(cache->migrate_buffer);
+
+	/* Destroy in-core structures */
+	free_ht(cache);
+	free_segment_header_array(cache);
+
+	free_rambuf_pool(cache);
 }

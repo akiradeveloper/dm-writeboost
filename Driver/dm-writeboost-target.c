@@ -134,239 +134,6 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 /*----------------------------------------------------------------*/
 
-static int __must_check init_rambuf_pool(struct wb_cache *cache)
-{
-	size_t i, j;
-	struct rambuffer *rambuf;
-
-	/* tmp var to avoid 80 cols */
-	size_t nr = (RAMBUF_POOL_ALLOCATED * 1000000) /
-		    (1 << (cache->segment_size_order + SECTOR_SHIFT));
-	cache->nr_rambuf_pool = nr;
-	cache->rambuf_pool = kmalloc(sizeof(struct rambuffer) * nr,
-				     GFP_KERNEL);
-	if (!cache->rambuf_pool) {
-		WBERR();
-		return -ENOMEM;
-	}
-
-	for (i = 0; i < cache->nr_rambuf_pool; i++) {
-		rambuf = cache->rambuf_pool + i;
-		init_completion(&rambuf->done);
-		complete_all(&rambuf->done);
-
-		rambuf->data = kmalloc(
-			1 << (cache->segment_size_order + SECTOR_SHIFT),
-			GFP_KERNEL);
-		if (!rambuf->data) {
-			WBERR();
-			for (j = 0; j < i; j++) {
-				rambuf = cache->rambuf_pool + j;
-				kfree(rambuf->data);
-			}
-			kfree(cache->rambuf_pool);
-			return -ENOMEM;
-		}
-	}
-
-	return 0;
-}
-
-static void free_rambuf_pool(struct wb_cache *cache)
-{
-	struct rambuffer *rambuf;
-	size_t i;
-	for (i = 0; i < cache->nr_rambuf_pool; i++) {
-		rambuf = cache->rambuf_pool + i;
-		kfree(rambuf->data);
-	}
-	kfree(cache->rambuf_pool);
-}
-
-/*----------------------------------------------------------------*/
-
-static int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
-{
-	int r = 0;
-
-	cache->device = dev;
-	cache->nr_segments = calc_nr_segments(cache->device, cache);
-	cache->nr_caches = cache->nr_segments * cache->nr_caches_inseg;
-	cache->on_terminate = false;
-	cache->allow_migrate = true;
-	cache->reserving_segment_id = 0;
-	mutex_init(&cache->io_lock);
-
-	cache->enable_migration_modulator = true;
-	cache->update_record_interval = 60;
-	cache->sync_interval = 60;
-
-
-	/*
-	 * (i) Harmless Initializations
-	 */
-	r = init_rambuf_pool(cache);
-	if (r) {
-		WBERR();
-		goto bad_init_rambuf_pool;
-	}
-
-	/* Select arbitrary one as the initial rambuffer. */
-	cache->current_rambuf = cache->rambuf_pool + 0;
-
-	r = init_segment_header_array(cache);
-	if (r) {
-		WBERR();
-		goto bad_alloc_segment_header_array;
-	}
-
-	r = ht_empty_init(cache);
-	if (r) {
-		WBERR();
-		goto bad_alloc_ht;
-	}
-
-
-	/*
-	 * (2) Recovering Metadata
-	 * Recovering the cache metadata
-	 * prerequires the migration daemon working.
-	 */
-	cache->migrate_wq = create_singlethread_workqueue("migratewq");
-	if (!cache->migrate_wq) {
-		WBERR();
-		goto bad_migratewq;
-	}
-
-	/* Data structures for Migration */
-	cache->migrate_buffer = vmalloc(cache->nr_caches_inseg << 12);
-	if (!cache->migrate_buffer) {
-		WBERR();
-		goto bad_alloc_migrate_buffer;
-	}
-
-	cache->dirtiness_snapshot = kmalloc(
-			cache->nr_caches_inseg,
-			GFP_KERNEL);
-	if (!cache->dirtiness_snapshot) {
-		WBERR();
-		goto bad_alloc_dirtiness_snapshot;
-	}
-
-	/* Migration Daemon */
-	INIT_WORK(&cache->migrate_work, migrate_proc);
-	init_waitqueue_head(&cache->migrate_wait_queue);
-	INIT_LIST_HEAD(&cache->migrate_list);
-	atomic_set(&cache->migrate_fail_count, 0);
-	atomic_set(&cache->migrate_io_count, 0);
-	cache->nr_max_batched_migration = 1;
-	cache->nr_cur_batched_migration = 1;
-	queue_work(cache->migrate_wq, &cache->migrate_work);
-
-	r = recover_cache(cache);
-	if (r) {
-		WBERR();
-		goto bad_recover;
-	}
-
-
-	/*
-	 * (3) Misc Initializations
-	 * These are only working
-	 * after the logical device created.
-	 */
-	cache->flush_wq = create_singlethread_workqueue("flushwq");
-	if (!cache->flush_wq) {
-		WBERR();
-		goto bad_flushwq;
-	}
-
-	/* Flush Daemon */
-	INIT_WORK(&cache->flush_work, flush_proc);
-	spin_lock_init(&cache->flush_queue_lock);
-	INIT_LIST_HEAD(&cache->flush_queue);
-	init_waitqueue_head(&cache->flush_wait_queue);
-	queue_work(cache->flush_wq, &cache->flush_work);
-
-	/* Deferred ACK for barrier writes */
-	setup_timer(&cache->barrier_deadline_timer,
-		    barrier_deadline_proc, (unsigned long) cache);
-	bio_list_init(&cache->barrier_ios);
-	/*
-	 * Deadline is 3 ms by default.
-	 * 2.5 us to process on bio
-	 * and 3 ms is enough long to process 255 bios.
-	 * If the buffer doesn't get full within 3 ms,
-	 * we can doubt write starves
-	 * by waiting formerly submitted barrier to be complete.
-	 */
-	cache->barrier_deadline_ms = 3;
-	INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
-
-	/* Migartion Modulator */
-	INIT_WORK(&cache->modulator_work, modulator_proc);
-	schedule_work(&cache->modulator_work);
-
-	/* Superblock Recorder */
-	INIT_WORK(&cache->recorder_work, recorder_proc);
-	schedule_work(&cache->recorder_work);
-
-	/* Dirty Synchronizer */
-	INIT_WORK(&cache->sync_work, sync_proc);
-	schedule_work(&cache->sync_work);
-
-	clear_stat(cache);
-
-	return 0;
-
-bad_flushwq:
-bad_recover:
-	cache->on_terminate = true;
-	cancel_work_sync(&cache->migrate_work);
-	kfree(cache->dirtiness_snapshot);
-bad_alloc_dirtiness_snapshot:
-	vfree(cache->migrate_buffer);
-bad_alloc_migrate_buffer:
-	destroy_workqueue(cache->migrate_wq);
-bad_migratewq:
-	kill_bigarray(cache->htable);
-bad_alloc_ht:
-	kill_bigarray(cache->segment_header_array);
-bad_alloc_segment_header_array:
-	free_rambuf_pool(cache);
-bad_init_rambuf_pool:
-	kfree(cache);
-	return r;
-}
-
-static void free_cache(struct wb_cache *cache)
-{
-	cache->on_terminate = true;
-
-	/* Kill in-kernel daemons */
-	cancel_work_sync(&cache->sync_work);
-	cancel_work_sync(&cache->recorder_work);
-	cancel_work_sync(&cache->modulator_work);
-
-	cancel_work_sync(&cache->flush_work);
-	destroy_workqueue(cache->flush_wq);
-
-	cancel_work_sync(&cache->barrier_deadline_work);
-
-	cancel_work_sync(&cache->migrate_work);
-	destroy_workqueue(cache->migrate_wq);
-	kfree(cache->dirtiness_snapshot);
-	vfree(cache->migrate_buffer);
-
-	/* Destroy in-core structures */
-	kill_bigarray(cache->htable);
-	kill_bigarray(cache->segment_header_array);
-
-	free_rambuf_pool(cache);
-}
-
-/*----------------------------------------------------------------*/
-
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {
 	u8 i, count = 0;
@@ -378,34 +145,6 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 			count++;
 	}
 	return count;
-}
-
-/*
- * Make a metadata in segment data to flush.
- * @dest The metadata part of the segment to flush
- */
-static void prepare_segment_header_device(struct segment_header_device *dest,
-					  struct wb_cache *cache,
-					  struct segment_header *src)
-{
-	cache_nr i;
-	u8 left, right;
-
-	dest->global_id = cpu_to_le64(src->global_id);
-	dest->length = src->length;
-	dest->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
-
-	left = src->length - 1;
-	right = (cache->cursor) % cache->nr_caches_inseg;
-	BUG_ON(left != right);
-
-	for (i = 0; i < src->length; i++) {
-		struct metablock *mb = src->mb_array + i;
-		struct metablock_device *mbdev = &dest->mbarr[i];
-		mbdev->sector = cpu_to_le64(mb->sector);
-		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->lap = dest->lap;
-	}
 }
 
 static void prepare_meta_rambuffer(void *rambuffer,
@@ -823,8 +562,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 		.sector = calc_cache_alignment(cache, bio->bi_sector),
 	};
 
-	k = ht_hash(cache, &key);
-	head = bigarray_at(cache->htable, k);
+	head = ht_get_head(cache, &key);
 
 	/*
 	 * (Locking)
@@ -1188,6 +926,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		WBERR("%d", r);
 		goto bad_resume_cache;
 	}
+	clear_stat(cache);
 
 	wb->ti = ti;
 	ti->private = wb;

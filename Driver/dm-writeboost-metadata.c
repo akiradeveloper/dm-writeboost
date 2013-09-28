@@ -396,7 +396,7 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 
 	if (sup.segment_size_order != cache->segment_size_order) {
 		DMERR("superblock header: segment order not same %u != %u",
-		      sup.segment_size_order,				
+		      sup.segment_size_order,
 		      cache->segment_size_order);
 	} else {
 		*need_format = false;

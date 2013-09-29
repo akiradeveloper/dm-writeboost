@@ -846,6 +846,14 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		WBERR("couldn't allocate wb");
 		return -ENOMEM;
 	}
+	atomic64_set(&wb->nr_dirty_caches, 0);
+	/*
+	 * EMC's textbook on storage system says
+	 * storage should keep its disk util less
+	 * than 70%.
+	 */
+	wb->migrate_threshold = 70;
+
 
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 	if (!cache) {
@@ -854,15 +862,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_alloc_cache;
 	}
 	wb->cache = cache;
+	wb->cache->wb = wb;
 
-	/*
-	 * EMC's textbook on storage system says
-	 * storage should keep its disk util less
-	 * than 70%.
-	 */
-	wb->migrate_threshold = 70;
-
-	atomic64_set(&wb->nr_dirty_caches, 0);
 
 	r = dm_get_device(ti, argv[0], dm_table_get_mode(ti->table),
 			  &origdev);
@@ -917,9 +918,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 			goto bad_audit_cache;
 		}
 	}
-
-	wb->cache = cache;
-	wb->cache->wb = wb;
 
 
 	r = resume_cache(cache, cachedev);

@@ -1001,16 +1001,16 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	cache->device = dev;
 	cache->nr_segments = calc_nr_segments(cache->device, cache);
+	/*
+	 * The first 4KB (1<<3 sectors) in segment
+	 * is for metadata.
+	 */
+	cache->nr_caches_inseg = (1 << (cache->segment_size_order - 3)) - 1;
 	cache->nr_caches = cache->nr_segments * cache->nr_caches_inseg;
-	cache->on_terminate = false;
-	cache->allow_migrate = true;
-	cache->reserving_segment_id = 0;
+
 	mutex_init(&cache->io_lock);
 
-	cache->enable_migration_modulator = true;
-	cache->update_record_interval = 60;
-	cache->sync_interval = 60;
-
+	cache->on_terminate = false;
 
 	/*
 	 * (i) Harmless Initializations
@@ -1068,6 +1068,8 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	init_waitqueue_head(&cache->migrate_wait_queue);
 	INIT_LIST_HEAD(&cache->migrate_list);
 
+	cache->allow_migrate = true;
+	cache->reserving_segment_id = 0;
 	INIT_WORK(&cache->migrate_work, migrate_proc);
 	queue_work(cache->migrate_wq, &cache->migrate_work);
 
@@ -1099,9 +1101,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	queue_work(cache->flush_wq, &cache->flush_work);
 
 	/* Deferred ACK for barrier writes */
-	setup_timer(&cache->barrier_deadline_timer,
-		    barrier_deadline_proc, (unsigned long) cache);
-	bio_list_init(&cache->barrier_ios);
+
 	/*
 	 * Deadline is 3 ms by default.
 	 * 2.5 us to process on bio
@@ -1111,17 +1111,23 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 * by waiting formerly submitted barrier to be complete.
 	 */
 	cache->barrier_deadline_ms = 3;
+	setup_timer(&cache->barrier_deadline_timer,
+		    barrier_deadline_proc, (unsigned long) cache);
+	bio_list_init(&cache->barrier_ios);
 	INIT_WORK(&cache->barrier_deadline_work, flush_barrier_ios);
 
 	/* Migartion Modulator */
+	cache->enable_migration_modulator = true;
 	INIT_WORK(&cache->modulator_work, modulator_proc);
 	schedule_work(&cache->modulator_work);
 
 	/* Superblock Recorder */
+	cache->update_record_interval = 60;
 	INIT_WORK(&cache->recorder_work, recorder_proc);
 	schedule_work(&cache->recorder_work);
 
 	/* Dirty Synchronizer */
+	cache->sync_interval = 60;
 	INIT_WORK(&cache->sync_work, sync_proc);
 	schedule_work(&cache->sync_work);
 

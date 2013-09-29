@@ -891,11 +891,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	cache->segment_size_order = tmp;
-	/*
-	 * The first 4KB (1<<3 sectors) in segment
-	 * is for metadata.
-	 */
-	cache->nr_caches_inseg = (1 << (tmp - 3)) - 1;
 
 	r = audit_cache_device(cachedev, cache, &need_format, &allow_format);
 	if (r) {

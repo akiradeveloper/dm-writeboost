@@ -382,8 +382,7 @@ void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_cache *,
 			 struct segment_header *,
 			 struct metablock *);
-u8 atomic_read_mb_dirtiness(struct segment_header *,
-			    struct metablock *);
+u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
 
 /*----------------------------------------------------------------*/
 

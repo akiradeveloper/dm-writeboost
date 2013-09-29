@@ -300,8 +300,7 @@ void cleanup_mb_if_dirty(struct wb_cache *cache,
 		dec_nr_dirty_caches(cache->wb);
 }
 
-u8 atomic_read_mb_dirtiness(struct segment_header *seg,
-			    struct metablock *mb)
+u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
 {
 	unsigned long flags;
 	u8 r;

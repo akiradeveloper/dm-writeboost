@@ -317,8 +317,7 @@ struct metablock *ht_lookup(struct wb_cache *cache,
 /*
  * Discard all the metablock in a segment.
  */
-void discard_caches_inseg(struct wb_cache *cache,
-			  struct segment_header *seg)
+void discard_caches_inseg(struct wb_cache *cache, struct segment_header *seg)
 {
 	u8 i;
 	for (i = 0; i < cache->nr_caches_inseg; i++) {

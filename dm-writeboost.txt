@@ -102,16 +102,18 @@ Set to 1 to start migration.
 
 * enable_migration_modulator (bool) and
   migrate_threshold (%)
-Default: 1
+Default: 1 and 70
 Set to 1 to run migration modulator.
 Migration modulator surveils the load of backing store
 and set the migration started when the load is
 lower than the migrate_threshold.
 
 * nr_max_batched_migration (int)
-Default: 1
+Default: 1MB / segment size
 Number of segments to migrate simultaneously and atomically.
 Set higher value to fully exploit the capacily of the backing store.
+Single HDD is capable of processing 1MB/sec random writes so
+the default value is set to 1MB / segment size.
 
 * sync_interval (sec)
 Default: 60

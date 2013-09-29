@@ -997,6 +997,7 @@ void free_migration_buffer(struct wb_cache *cache)
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 {
 	int r = 0;
+	size_t nr_batch;
 
 	cache->device = dev;
 	cache->nr_segments = calc_nr_segments(cache->device, cache);
@@ -1051,8 +1052,15 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	/* Migration Daemon */
 	atomic_set(&cache->migrate_fail_count, 0);
 	atomic_set(&cache->migrate_io_count, 0);
-	cache->nr_max_batched_migration = 1;
-	if (alloc_migration_buffer(cache, 1)) {
+
+	/*
+	 * default number of batched migration
+	 * is 1MB / segment size
+	 * Single HDD can consume nearly 1MB/sec writes.
+	 */
+	nr_batch = 1 << (11 - cache->segment_size_order);
+	cache->nr_max_batched_migration = nr_batch;
+	if (alloc_migration_buffer(cache, nr_batch)) {
 		r = -ENOMEM;
 		goto bad_alloc_migrate_buffer;
 	}

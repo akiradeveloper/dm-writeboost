@@ -841,7 +841,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->split_io = (1 << 3);
 #endif
 
-	wbdebug();
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
 		WBERR("couldn't allocate wb");
@@ -927,7 +926,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	wb->cache = cache;
 	wb->cache->wb = wb;
 
-	wbdebug();
 
 	r = resume_cache(cache, cachedev);
 	if (r) {

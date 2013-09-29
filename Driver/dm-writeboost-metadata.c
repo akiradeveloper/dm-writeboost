@@ -380,7 +380,7 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 	struct superblock_header_device sup;
 	r = read_superblock_header(&sup, dev);
 	if (r) {
-		DMERR("read superblock header failed");
+		WBERR("read superblock header failed");
 		return r;
 	}
 
@@ -388,13 +388,13 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 	*allow_format = false;
 
 	if (le32_to_cpu(sup.magic) != WRITEBOOST_MAGIC) {
-		DMERR("superblock header: magic number invalid.");
+		WBERR("superblock header: magic number invalid");
 		*allow_format = true;
 		return 0;
 	}
 
 	if (sup.segment_size_order != cache->segment_size_order) {
-		DMERR("superblock header: segment order not same %u != %u",
+		WBERR("superblock header: segment order not same %u != %u",
 		      sup.segment_size_order,
 		      cache->segment_size_order);
 	} else {
@@ -963,13 +963,14 @@ int alloc_migration_buffer(struct wb_cache *cache, size_t nr_batch)
 
 	buf = vmalloc(nr_batch * (cache->nr_caches_inseg << 12));
 	if (!buf) {
-		WBERR();
+		WBERR("couldn't allocate migration buffer");
 		return -ENOMEM;
 	}
 
 	snapshot = kmalloc(nr_batch * cache->nr_caches_inseg, GFP_KERNEL);
 	if (!snapshot) {
 		vfree(buf);
+		WBERR("couldn't allocate dirty snapshot");
 		return -ENOMEM;
 	}
 
@@ -1042,6 +1043,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 */
 	cache->migrate_wq = create_singlethread_workqueue("migratewq");
 	if (!cache->migrate_wq) {
+		r = -ENOMEM;
 		WBERR();
 		goto bad_migratewq;
 	}
@@ -1050,14 +1052,17 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	atomic_set(&cache->migrate_fail_count, 0);
 	atomic_set(&cache->migrate_io_count, 0);
 	cache->nr_max_batched_migration = 1;
-	if (alloc_migration_buffer(cache, 1))
+	if (alloc_migration_buffer(cache, 1)) {
+		r = -ENOMEM;
 		goto bad_alloc_migrate_buffer;
+	}
 
 	init_waitqueue_head(&cache->migrate_wait_queue);
 	INIT_LIST_HEAD(&cache->migrate_list);
 
 	INIT_WORK(&cache->migrate_work, migrate_proc);
 	queue_work(cache->migrate_wq, &cache->migrate_work);
+
 
 	r = recover_cache(cache);
 	if (r) {
@@ -1073,6 +1078,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 */
 	cache->flush_wq = create_singlethread_workqueue("flushwq");
 	if (!cache->flush_wq) {
+		r = -ENOMEM;
 		WBERR();
 		goto bad_flushwq;
 	}

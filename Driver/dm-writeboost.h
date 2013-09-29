@@ -21,12 +21,15 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+#define wbdebug(f, args...) \
+	DMINFO("debug@%s() L.%d" f, __func__, __LINE__, ## args)
+
 #define WBERR(f, args...) \
-	DMERR("err@%d " f, __LINE__, ## args)
+	DMERR("err@%s() " f, __func__, ## args)
 #define WBWARN(f, args...) \
-	DMWARN("warn@%d " f, __LINE__, ## args)
+	DMWARN("warn@%s() " f, __func__, ## args)
 #define WBINFO(f, args...) \
-	DMINFO("info@%d " f, __LINE__, ## args)
+	DMINFO("info@%s() " f, __func__, ## args)
 
 /*
  * The amount of RAM buffer pool to pre-allocated.
@@ -389,24 +392,24 @@ u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
 
-void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno);
+void *do_kmalloc_retry(size_t size, gfp_t flags, const char *caller);
 #define kmalloc_retry(size, flags) \
-	do_kmalloc_retry((size), (flags), __LINE__)
+	do_kmalloc_retry((size), (flags), __func__)
 
 int dm_safe_io_internal(
 		struct dm_io_request *,
 		unsigned num_regions, struct dm_io_region *,
-		unsigned long *err_bits, bool thread, int lineno);
+		unsigned long *err_bits, bool thread, const char *caller);
 #define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
 	dm_safe_io_internal((io_req), (num_regions), (regions), \
-			    (err_bits), (thread), __LINE__)
+			    (err_bits), (thread), __func__)
 
 void dm_safe_io_retry_internal(
 		struct dm_io_request *,
 		unsigned num_regions, struct dm_io_region *,
-		bool thread, int lineno);
+		bool thread, const char *caller);
 #define dm_safe_io_retry(io_req, num_regions, regions, thread) \
 	dm_safe_io_retry_internal((io_req), (num_regions), (regions), \
-				  (thread), __LINE__)
+				  (thread), __func__)
 
 sector_t dm_devsize(struct dm_dev *);

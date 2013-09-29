@@ -13,7 +13,7 @@
 
 /*----------------------------------------------------------------*/
 
-void *do_kmalloc_retry(size_t size, gfp_t flags, int lineno)
+void *do_kmalloc_retry(size_t size, gfp_t flags, const char *caller)
 {
 	size_t count = 0;
 	void *p;
@@ -22,8 +22,8 @@ retry_alloc:
 	p = kmalloc(size, flags);
 	if (!p) {
 		count++;
-		WBWARN("L%d size:%lu, count:%lu",
-		       lineno, size, count);
+		WBWARN("%s() allocation failed size:%lu, count:%lu",
+		       caller, size, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 		goto retry_alloc;
 	}
@@ -54,7 +54,7 @@ static void safe_io_proc(struct work_struct *work)
 int dm_safe_io_internal(
 		struct dm_io_request *io_req,
 		unsigned num_regions, struct dm_io_region *regions,
-		unsigned long *err_bits, bool thread, int lineno)
+		unsigned long *err_bits, bool thread, const char *caller)
 {
 	int err;
 	dev_t dev;
@@ -87,8 +87,8 @@ int dm_safe_io_internal(
 			eb = (~(unsigned long)0);
 		else
 			eb = *err_bits;
-		WBERR("L%d err(%d, %lu), rw(%d), sector(%lu), dev(%u:%u)",
-		      lineno, err, eb,
+		WBERR("%s() io error err(%d, %lu), rw(%d), sector(%lu), dev(%u:%u)",
+		      caller, err, eb,
 		      io_req->bi_rw, regions->sector,
 		      MAJOR(dev), MINOR(dev));
 	}
@@ -99,7 +99,7 @@ int dm_safe_io_internal(
 void dm_safe_io_retry_internal(
 		struct dm_io_request *io_req,
 		unsigned num_regions, struct dm_io_region *regions,
-		bool thread, int lineno)
+		bool thread, const char *caller)
 {
 	int err, count = 0;
 	unsigned long err_bits;
@@ -108,20 +108,19 @@ void dm_safe_io_retry_internal(
 retry_io:
 	err_bits = 0;
 	err = dm_safe_io_internal(io_req, num_regions, regions, &err_bits,
-				  thread, lineno);
+				  thread, caller);
 
 	dev = regions->bdev->bd_dev;
 	if (err || err_bits) {
 		count++;
-		WBWARN("L%d count(%d)", lineno, count);
-
+		WBWARN("%s() io error count(%d)", caller, count);
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		goto retry_io;
 	}
 
 	if (count) {
-		WBWARN("L%d rw(%d), sector(%lu), dev(%u:%u)",
-		       lineno,
+		WBWARN("%s() recover from io error rw(%d), sector(%lu), dev(%u:%u)",
+		       caller,
 		       io_req->bi_rw, regions->sector,
 		       MAJOR(dev), MINOR(dev));
 	}
@@ -842,15 +841,17 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->split_io = (1 << 3);
 #endif
 
+	wbdebug();
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
-		WBERR();
+		WBERR("couldn't allocate wb");
 		return -ENOMEM;
 	}
 
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 	if (!cache) {
-		WBERR();
+		r = -ENOMEM;
+		WBERR("couldn'T allocate cache");
 		goto bad_alloc_cache;
 	}
 	wb->cache = cache;
@@ -867,24 +868,26 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	r = dm_get_device(ti, argv[0], dm_table_get_mode(ti->table),
 			  &origdev);
 	if (r) {
-		WBERR("%d", r);
+		WBERR("couldn't get backing dev err(%d)", r);
 		goto bad_get_device_orig;
 	}
 	wb->device = origdev;
 
-	if (dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
-			  &cachedev)) {
-		WBERR();
+	r = dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+			  &cachedev);
+	if (r) {
+		WBERR("couldn't get cache dev err(%d)", r);
 		goto bad_get_device_cache;
 	}
 
 	if (kstrtoul(argv[2], 10, &tmp)) {
-		WBERR();
+		r = -EINVAL;
 		goto bad_segment_size_order;
 	}
 
 	if (tmp < 4 || 11 < tmp) {
-		WBERR();
+		r = -EINVAL;
+		WBERR("segment size order out of range. not 4 <= %lu <= 11", tmp);
 		goto bad_segment_size_order;
 	}
 
@@ -897,7 +900,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	r = audit_cache_device(cachedev, cache, &need_format, &allow_format);
 	if (r) {
-		DMERR("audit cache device fails");
+		WBERR("audit cache device fails err(%d)", r);
 		/*
 		 * If something happens in auditing the cache
 		 * such as read io error either go formatting
@@ -911,17 +914,20 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		if (allow_format) {
 			r = format_cache_device(cachedev, cache);
 			if (r) {
-				DMERR("format cache device fails");
+				WBERR("format cache device fails err(%d)", r);
 				goto bad_format_cache;
 			}
 		} else {
-			DMERR("cache device not allowed to format");
+			r = -EINVAL;
+			WBERR("cache device not allowed to format");
 			goto bad_audit_cache;
 		}
 	}
 
 	wb->cache = cache;
 	wb->cache->wb = wb;
+
+	wbdebug();
 
 	r = resume_cache(cache, cachedev);
 	if (r) {

@@ -360,7 +360,7 @@ void migrate_proc(struct work_struct *work)
 
 	while (true) {
 		bool allow_migrate;
-		size_t i, nr_mig_candidates, nr_mig;
+		size_t i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
 
 		if (cache->on_terminate)
@@ -386,22 +386,14 @@ void migrate_proc(struct work_struct *work)
 			continue;
 		}
 
-		if (cache->nr_cur_batched_migration !=
-		    cache->nr_max_batched_migration){
-			vfree(cache->migrate_buffer);
-			kfree(cache->dirtiness_snapshot);
-			cache->nr_cur_batched_migration =
-				cache->nr_max_batched_migration;
-			cache->migrate_buffer =
-				vmalloc(cache->nr_cur_batched_migration *
-					(cache->nr_caches_inseg << 12));
-			cache->dirtiness_snapshot =
-				kmalloc_retry(cache->nr_cur_batched_migration *
-					      cache->nr_caches_inseg,
-					      GFP_NOIO);
-
-			BUG_ON(!cache->migrate_buffer);
-			BUG_ON(!cache->dirtiness_snapshot);
+		nr_max_batch = cache->nr_max_batched_migration;
+		if (cache->nr_cur_batched_migration != nr_max_batch) {
+			/*
+			 * Request buffer for nr_max_batch size.
+			 * If the allocation fails
+			 * continue to use the current buffer.
+			 */
+			alloc_migration_buffer(cache, nr_max_batch);
 		}
 
 		/*

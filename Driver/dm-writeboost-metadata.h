@@ -38,6 +38,11 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 
 /*----------------------------------------------------------------*/
 
+int alloc_migration_buffer(struct wb_cache *cache, size_t nr_batch);
+void free_migration_buffer(struct wb_cache *cache);
+
+/*----------------------------------------------------------------*/
+
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev);
 void free_cache(struct wb_cache *cache);
 

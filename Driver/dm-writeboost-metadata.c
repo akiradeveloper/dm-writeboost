@@ -950,6 +950,50 @@ static void free_rambuf_pool(struct wb_cache *cache)
 
 /*----------------------------------------------------------------*/
 
+/*
+ * Allocate new migration buffer by the nr_batch size.
+ * On success, it frees the old buffer.
+ *
+ * User may set # of batches
+ * that can hardly allocate the memory spaces.
+ * This function is safe for that case.
+ */
+int alloc_migration_buffer(struct wb_cache *cache, size_t nr_batch)
+{
+	void *buf, *snapshot;
+
+	buf = vmalloc(nr_batch * (cache->nr_caches_inseg << 12));
+	if (!buf) {
+		WBERR();
+		return -ENOMEM;
+	}
+
+	snapshot = kmalloc(nr_batch * cache->nr_caches_inseg, GFP_KERNEL);
+	if (!snapshot) {
+		vfree(buf);
+		return -ENOMEM;
+	}
+
+	if (cache->migrate_buffer)
+		vfree(cache->migrate_buffer);
+
+	kfree(cache->dirtiness_snapshot); /* kfree(NULL) is safe */
+
+	cache->migrate_buffer = buf;
+	cache->dirtiness_snapshot = snapshot;
+	cache->nr_cur_batched_migration = nr_batch;
+
+	return 0;
+}
+
+void free_migration_buffer(struct wb_cache *cache)
+{
+	vfree(cache->migrate_buffer);
+	kfree(cache->dirtiness_snapshot);
+}
+
+/*----------------------------------------------------------------*/
+
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 {
 	int r = 0;
@@ -1003,29 +1047,17 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 		goto bad_migratewq;
 	}
 
-	/* Data structures for Migration */
-	cache->migrate_buffer = vmalloc(cache->nr_caches_inseg << 12);
-	if (!cache->migrate_buffer) {
-		WBERR();
-		goto bad_alloc_migrate_buffer;
-	}
-
-	cache->dirtiness_snapshot = kmalloc(
-			cache->nr_caches_inseg,
-			GFP_KERNEL);
-	if (!cache->dirtiness_snapshot) {
-		WBERR();
-		goto bad_alloc_dirtiness_snapshot;
-	}
-
 	/* Migration Daemon */
-	INIT_WORK(&cache->migrate_work, migrate_proc);
-	init_waitqueue_head(&cache->migrate_wait_queue);
-	INIT_LIST_HEAD(&cache->migrate_list);
 	atomic_set(&cache->migrate_fail_count, 0);
 	atomic_set(&cache->migrate_io_count, 0);
 	cache->nr_max_batched_migration = 1;
-	cache->nr_cur_batched_migration = 1;
+	if (alloc_migration_buffer(cache, 1))
+		goto bad_alloc_migrate_buffer;
+
+	init_waitqueue_head(&cache->migrate_wait_queue);
+	INIT_LIST_HEAD(&cache->migrate_list);
+
+	INIT_WORK(&cache->migrate_work, migrate_proc);
 	queue_work(cache->migrate_wq, &cache->migrate_work);
 
 	r = recover_cache(cache);
@@ -1086,9 +1118,7 @@ bad_flushwq:
 bad_recover:
 	cache->on_terminate = true;
 	cancel_work_sync(&cache->migrate_work);
-	kfree(cache->dirtiness_snapshot);
-bad_alloc_dirtiness_snapshot:
-	vfree(cache->migrate_buffer);
+	free_migration_buffer(cache);
 bad_alloc_migrate_buffer:
 	destroy_workqueue(cache->migrate_wq);
 bad_migratewq:
@@ -1118,8 +1148,7 @@ void free_cache(struct wb_cache *cache)
 
 	cancel_work_sync(&cache->migrate_work);
 	destroy_workqueue(cache->migrate_wq);
-	kfree(cache->dirtiness_snapshot);
-	vfree(cache->migrate_buffer);
+	free_migration_buffer(cache);
 
 	/* Destroy in-core structures */
 	free_ht(cache);

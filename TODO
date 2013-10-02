@@ -4,9 +4,10 @@ TODO:
     - Audit userspace interfaces to make sure they are sane.
       Should use the same approach that is proven successful.
     - Fix document.
-    - Add more comments inline
-      to explain what it does and how it works.
+    - Add more comments inline to explain what it does and how it works.
     - Rename struct arr
+    -- Renamed to bigarray. I don't know if it's appropriate.
+    - Refactor recover_cache() to make it readable.
 
 Please send patches to Greg Kroah-Hartman <gregkh@linuxfoundation.org> and Cc:
 Akira Hayakawa <ruby.wktk@gmail.com>

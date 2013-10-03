@@ -1106,11 +1106,7 @@ writeboost_status(
 		       (unsigned int) cache->cursor);
 
 		for (i = 0; i < STATLEN; i++) {
-			atomic64_t *v;
-			if (i == (STATLEN-1))
-				break;
-
-			v = &cache->stat[i];
+			atomic64_t *v = &cache->stat[i];
 			DMEMIT("%lu ", atomic64_read(v));
 		}
 

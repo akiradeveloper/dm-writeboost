@@ -688,6 +688,14 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 			bool needs_cleanup_prev_cache =
 				!bio_fullsize || !(dirty_bits == 255);
 
+			/*
+			 * Migration works in background
+			 * and may have cleaned up the metablock.
+			 * If the metablock is clean we need not to migrate.
+			 */
+			if (!dirty_bits)
+				needs_cleanup_prev_cache = false;
+
 			if (unlikely(needs_cleanup_prev_cache)) {
 				wait_for_completion(&seg->flush_done);
 				migrate_mb(cache, seg, mb, dirty_bits, true);

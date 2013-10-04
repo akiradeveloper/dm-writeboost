@@ -1,4 +1,4 @@
 #!/bin/sh
 
-echo remove perflv ...
-dmsetup remove perflv
+echo remove writeboost-vol ...
+dmsetup remove writeboost-vol

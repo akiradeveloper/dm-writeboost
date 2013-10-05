@@ -333,7 +333,7 @@ struct wb_cache {
 	 * Sync the dirty writes
 	 * periodically.
 	 */
-	struct work_struct sync_work;
+	struct task_struct *sync_thread;
 	unsigned long sync_interval; /* param */
 
 	/*

@@ -1136,8 +1136,11 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	/* Dirty Synchronizer */
 	cache->sync_interval = 60;
-	INIT_WORK(&cache->sync_work, sync_proc);
-	schedule_work(&cache->sync_work);
+	cache->sync_thread = kthread_create(sync_proc, cache,
+					    "sync_daemon");
+	if (IS_ERR(cache->sync_thread)) {
+		BUG();
+	}
 
 	return 0;
 
@@ -1164,7 +1167,7 @@ void free_cache(struct wb_cache *cache)
 	cache->on_terminate = true;
 
 	/* Kill in-kernel daemons */
-	cancel_work_sync(&cache->sync_work);
+	kthread_stop(cache->sync_thread);
 	kthread_stop(cache->recorder_thread);
 	kthread_stop(cache->modulator_thread);
 

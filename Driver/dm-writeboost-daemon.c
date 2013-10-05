@@ -463,8 +463,6 @@ int modulator_proc(void *data)
 	unsigned long intvl = 1000;
 
 	while (!kthread_should_stop()) {
-		if (cache->on_terminate)
-			return;
 
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
@@ -540,16 +538,12 @@ int recorder_proc(void *data)
 
 /*----------------------------------------------------------------*/
 
-void sync_proc(struct work_struct *work)
+int sync_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, sync_work);
+	struct wb_cache *cache = data;
 	unsigned long intvl;
 
-	while (true) {
-		if (cache->on_terminate)
-			return;
-
+	while (!kthread_should_stop()) {
 		/* sec -> ms */
 		intvl = cache->sync_interval * 1000;
 
@@ -563,4 +557,5 @@ void sync_proc(struct work_struct *work)
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
+	return 0;
 }

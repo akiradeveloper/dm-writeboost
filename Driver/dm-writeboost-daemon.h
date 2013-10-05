@@ -9,7 +9,7 @@
 
 /*----------------------------------------------------------------*/
 
-void flush_proc(struct work_struct *);
+int flush_proc(void *);
 
 /*----------------------------------------------------------------*/
 
@@ -19,20 +19,20 @@ void flush_barrier_ios(struct work_struct *);
 
 /*----------------------------------------------------------------*/
 
-void migrate_proc(struct work_struct *);
+int migrate_proc(void *);
 void wait_for_migration(struct wb_cache *, u64 id);
 
 /*----------------------------------------------------------------*/
 
-void modulator_proc(struct work_struct *);
+int modulator_proc(void *);
 
 /*----------------------------------------------------------------*/
 
-void sync_proc(struct work_struct *);
+int sync_proc(void *);
 
 /*----------------------------------------------------------------*/
 
-void recorder_proc(struct work_struct *);
+int recorder_proc(void *);
 
 /*----------------------------------------------------------------*/
 

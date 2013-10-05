@@ -16,6 +16,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
+#include <linux/kthread.h>
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/device-mapper.h>
@@ -265,8 +266,7 @@ struct wb_cache {
 	 * and flush daemon asynchronously
 	 * flush them to the cache device.
 	 */
-	struct work_struct flush_work;
-	struct workqueue_struct *flush_wq;
+	struct task_struct *flush_daemon;
 	spinlock_t flush_queue_lock;
 	struct list_head flush_queue;
 	wait_queue_head_t flush_wait_queue;
@@ -288,8 +288,7 @@ struct wb_cache {
 	 * migrate daemon goes into migration
 	 * if they are segments to migrate.
 	 */
-	struct work_struct migrate_work;
-	struct workqueue_struct *migrate_wq;
+	struct task_struct *migrate_daemon;
 	bool allow_migrate; /* param */
 
 	/*
@@ -314,7 +313,7 @@ struct wb_cache {
 	 * the migration
 	 * according to the load of backing store.
 	 */
-	struct work_struct modulator_work;
+	struct task_struct *modulator_daemon;
 	bool enable_migration_modulator; /* param */
 
 	/*
@@ -323,7 +322,7 @@ struct wb_cache {
 	 * Update the superblock record
 	 * periodically.
 	 */
-	struct work_struct recorder_work;
+	struct task_struct *recorder_daemon;
 	unsigned long update_record_interval; /* param */
 
 	/*
@@ -332,15 +331,8 @@ struct wb_cache {
 	 * Sync the dirty writes
 	 * periodically.
 	 */
-	struct work_struct sync_work;
+	struct task_struct *sync_daemon;
 	unsigned long sync_interval; /* param */
-
-	/*
-	 * on_terminate is true
-	 * to notify all the background daemons to
-	 * stop their operations.
-	 */
-	bool on_terminate;
 
 	atomic64_t stat[STATLEN];
 };

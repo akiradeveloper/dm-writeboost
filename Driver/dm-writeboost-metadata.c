@@ -994,6 +994,17 @@ void free_migration_buffer(struct wb_cache *cache)
 
 /*----------------------------------------------------------------*/
 
+#define CREATE_DAEMON(name)\
+	cache->name##_daemon = kthread_create(name##_proc, cache,\
+					      #name "_daemon");\
+	if (IS_ERR(cache->name##_daemon)) {\
+		r = PTR_ERR(cache->name##_daemon);\
+		cache->name##_daemon = NULL;\
+		WBERR("couldn't spawn" #name "daemon");\
+		goto bad_##name##_daemon;\
+	}\
+	wake_up_process(cache->name##_daemon);
+
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 {
 	int r = 0;
@@ -1009,8 +1020,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->nr_caches = cache->nr_segments * cache->nr_caches_inseg;
 
 	mutex_init(&cache->io_lock);
-
-	cache->on_terminate = false;
 
 	/*
 	 * (i) Harmless Initializations
@@ -1042,12 +1051,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 * Recovering the cache metadata
 	 * prerequires the migration daemon working.
 	 */
-	cache->migrate_wq = create_singlethread_workqueue("migratewq");
-	if (!cache->migrate_wq) {
-		r = -ENOMEM;
-		WBERR();
-		goto bad_migratewq;
-	}
 
 	/* Migration Daemon */
 	atomic_set(&cache->migrate_fail_count, 0);
@@ -1070,9 +1073,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
-	INIT_WORK(&cache->migrate_work, migrate_proc);
-	queue_work(cache->migrate_wq, &cache->migrate_work);
-
+	CREATE_DAEMON(migrate);
 
 	r = recover_cache(cache);
 	if (r) {
@@ -1086,19 +1087,12 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 * These are only working
 	 * after the logical device created.
 	 */
-	cache->flush_wq = create_singlethread_workqueue("flushwq");
-	if (!cache->flush_wq) {
-		r = -ENOMEM;
-		WBERR();
-		goto bad_flushwq;
-	}
 
 	/* Flush Daemon */
-	INIT_WORK(&cache->flush_work, flush_proc);
 	spin_lock_init(&cache->flush_queue_lock);
 	INIT_LIST_HEAD(&cache->flush_queue);
 	init_waitqueue_head(&cache->flush_wait_queue);
-	queue_work(cache->flush_wq, &cache->flush_work);
+	CREATE_DAEMON(flush);
 
 	/* Deferred ACK for barrier writes */
 
@@ -1118,29 +1112,30 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	/* Migartion Modulator */
 	cache->enable_migration_modulator = true;
-	INIT_WORK(&cache->modulator_work, modulator_proc);
-	schedule_work(&cache->modulator_work);
+	CREATE_DAEMON(modulator);
 
 	/* Superblock Recorder */
 	cache->update_record_interval = 60;
-	INIT_WORK(&cache->recorder_work, recorder_proc);
-	schedule_work(&cache->recorder_work);
+	CREATE_DAEMON(recorder);
 
 	/* Dirty Synchronizer */
 	cache->sync_interval = 60;
-	INIT_WORK(&cache->sync_work, sync_proc);
-	schedule_work(&cache->sync_work);
+	CREATE_DAEMON(sync);
 
 	return 0;
 
-bad_flushwq:
+bad_sync_daemon:
+	kthread_stop(cache->recorder_daemon);
+bad_recorder_daemon:
+	kthread_stop(cache->modulator_daemon);
+bad_modulator_daemon:
+	kthread_stop(cache->flush_daemon);
+bad_flush_daemon:
 bad_recover:
-	cache->on_terminate = true;
-	cancel_work_sync(&cache->migrate_work);
+	kthread_stop(cache->migrate_daemon);
+bad_migrate_daemon:
 	free_migration_buffer(cache);
 bad_alloc_migrate_buffer:
-	destroy_workqueue(cache->migrate_wq);
-bad_migratewq:
 	free_ht(cache);
 bad_alloc_ht:
 	free_segment_header_array(cache);
@@ -1153,20 +1148,16 @@ bad_init_rambuf_pool:
 
 void free_cache(struct wb_cache *cache)
 {
-	cache->on_terminate = true;
-
 	/* Kill in-kernel daemons */
-	cancel_work_sync(&cache->sync_work);
-	cancel_work_sync(&cache->recorder_work);
-	cancel_work_sync(&cache->modulator_work);
+	kthread_stop(cache->sync_daemon);
+	kthread_stop(cache->recorder_daemon);
+	kthread_stop(cache->modulator_daemon);
 
-	cancel_work_sync(&cache->flush_work);
-	destroy_workqueue(cache->flush_wq);
+	kthread_stop(cache->flush_daemon);
 
 	cancel_work_sync(&cache->barrier_deadline_work);
 
-	cancel_work_sync(&cache->migrate_work);
-	destroy_workqueue(cache->migrate_wq);
+	kthread_stop(cache->migrate_daemon);
 	free_migration_buffer(cache);
 
 	/* Destroy in-core structures */

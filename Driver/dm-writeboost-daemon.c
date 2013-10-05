@@ -10,14 +10,13 @@
 
 /*----------------------------------------------------------------*/
 
-void flush_proc(struct work_struct *work)
+int flush_proc(void *data)
 {
 	unsigned long flags;
 
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, flush_work);
+	struct wb_cache *cache = data;
 
-	while (true) {
+	while (!kthread_should_stop()) {
 		struct flush_job *job;
 		struct segment_header *seg;
 		struct dm_io_request io_req;
@@ -32,8 +31,8 @@ void flush_proc(struct work_struct *work)
 				msecs_to_jiffies(100));
 			spin_lock_irqsave(&cache->flush_queue_lock, flags);
 
-			if (cache->on_terminate)
-				return;
+			if (kthread_should_stop())
+				return 0;
 		}
 
 		/*
@@ -84,6 +83,7 @@ void flush_proc(struct work_struct *work)
 
 		kfree(job);
 	}
+	return 0;
 }
 
 /*----------------------------------------------------------------*/
@@ -353,18 +353,14 @@ migrate_write:
 	}
 }
 
-void migrate_proc(struct work_struct *work)
+int migrate_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, migrate_work);
+	struct wb_cache *cache = data;
 
-	while (true) {
+	while (!kthread_should_stop()) {
 		bool allow_migrate;
 		size_t i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
-
-		if (cache->on_terminate)
-			return;
 
 		/*
 		 * If reserving_id > 0
@@ -430,6 +426,7 @@ void migrate_proc(struct work_struct *work)
 			list_del(&seg->migrate_list);
 		}
 	}
+	return 0;
 }
 
 /*
@@ -453,19 +450,16 @@ void wait_for_migration(struct wb_cache *cache, u64 id)
 
 /*----------------------------------------------------------------*/
 
-void modulator_proc(struct work_struct *work)
+int modulator_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, modulator_work);
+	struct wb_cache *cache = data;
 	struct wb_device *wb = cache->wb;
 
 	struct hd_struct *hd = wb->device->bdev->bd_part;
 	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 
-	while (true) {
-		if (cache->on_terminate)
-			return;
+	while (!kthread_should_stop()) {
 
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
@@ -484,6 +478,7 @@ modulator_update:
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
+	return 0;
 }
 
 /*----------------------------------------------------------------*/
@@ -517,16 +512,12 @@ static void update_superblock_record(struct wb_cache *cache)
 	kfree(buf);
 }
 
-void recorder_proc(struct work_struct *work)
+int recorder_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, recorder_work);
+	struct wb_cache *cache = data;
 	unsigned long intvl;
 
-	while (true) {
-		if (cache->on_terminate)
-			return;
-
+	while (!kthread_should_stop()) {
 		/* sec -> ms */
 		intvl = cache->update_record_interval * 1000;
 
@@ -539,20 +530,17 @@ void recorder_proc(struct work_struct *work)
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
+	return 0;
 }
 
 /*----------------------------------------------------------------*/
 
-void sync_proc(struct work_struct *work)
+int sync_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, sync_work);
+	struct wb_cache *cache = data;
 	unsigned long intvl;
 
-	while (true) {
-		if (cache->on_terminate)
-			return;
-
+	while (!kthread_should_stop()) {
 		/* sec -> ms */
 		intvl = cache->sync_interval * 1000;
 
@@ -566,4 +554,5 @@ void sync_proc(struct work_struct *work)
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
+	return 0;
 }

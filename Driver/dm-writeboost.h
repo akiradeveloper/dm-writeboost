@@ -289,8 +289,7 @@ struct wb_cache {
 	 * migrate daemon goes into migration
 	 * if they are segments to migrate.
 	 */
-	struct work_struct migrate_work;
-	struct workqueue_struct *migrate_wq;
+	struct task_struct *migrate_thread;
 	bool allow_migrate; /* param */
 
 	/*

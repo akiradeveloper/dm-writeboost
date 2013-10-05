@@ -1042,12 +1042,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 * Recovering the cache metadata
 	 * prerequires the migration daemon working.
 	 */
-	cache->migrate_wq = create_singlethread_workqueue("migratewq");
-	if (!cache->migrate_wq) {
-		r = -ENOMEM;
-		WBERR();
-		goto bad_migratewq;
-	}
 
 	/* Migration Daemon */
 	atomic_set(&cache->migrate_fail_count, 0);
@@ -1070,9 +1064,13 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
-	INIT_WORK(&cache->migrate_work, migrate_proc);
-	queue_work(cache->migrate_wq, &cache->migrate_work);
-
+	cache->migrate_thread = kthread_create(migrate_proc, cache,
+					       "migrate_daemon");
+	if (IS_ERR(cache->migrate_thread)) {
+		BUG();
+		goto bad_migrate_daemon;
+	}
+	wake_up_process(cache->migrate_thread);
 
 	r = recover_cache(cache);
 	if (r) {
@@ -1122,6 +1120,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 						 "modulator_daemon");
 	if (IS_ERR(cache->modulator_thread)) {
 		BUG();
+		goto bad_modulator_daemon;
 	}
 	wake_up_process(cache->modulator_thread);
 
@@ -1131,6 +1130,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 						"recorder_daemon");
 	if (IS_ERR(cache->recorder_thread)) {
 		BUG();
+		goto bad_recorder_daemon;
 	}
 	wake_up_process(cache->recorder_thread);
 
@@ -1140,18 +1140,23 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 					    "sync_daemon");
 	if (IS_ERR(cache->sync_thread)) {
 		BUG();
+		goto bad_sync_daemon;
 	}
+	wake_up_process(cache->sync_thread);
 
 	return 0;
 
+bad_sync_daemon:
+	kthread_stop(cache->recorder_thread);
+bad_recorder_daemon:
+	kthread_stop(cache->modulator_thread);
+bad_modulator_daemon:
 bad_flushwq:
 bad_recover:
-	cache->on_terminate = true;
-	cancel_work_sync(&cache->migrate_work);
+	kthread_stop(cache->migrate_thread);
+bad_migrate_daemon:
 	free_migration_buffer(cache);
 bad_alloc_migrate_buffer:
-	destroy_workqueue(cache->migrate_wq);
-bad_migratewq:
 	free_ht(cache);
 bad_alloc_ht:
 	free_segment_header_array(cache);
@@ -1174,10 +1179,10 @@ void free_cache(struct wb_cache *cache)
 	cancel_work_sync(&cache->flush_work);
 	destroy_workqueue(cache->flush_wq);
 
+	/* FIXME? */
 	cancel_work_sync(&cache->barrier_deadline_work);
 
-	cancel_work_sync(&cache->migrate_work);
-	destroy_workqueue(cache->migrate_wq);
+	kthread_stop(cache->migrate_thread);
 	free_migration_buffer(cache);
 
 	/* Destroy in-core structures */

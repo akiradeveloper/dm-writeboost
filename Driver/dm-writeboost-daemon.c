@@ -353,18 +353,14 @@ migrate_write:
 	}
 }
 
-void migrate_proc(struct work_struct *work)
+int migrate_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, migrate_work);
+	struct wb_cache *cache = data;
 
-	while (true) {
+	while (!kthread_should_stop()) {
 		bool allow_migrate;
 		size_t i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
-
-		if (cache->on_terminate)
-			return;
 
 		/*
 		 * If reserving_id > 0
@@ -430,6 +426,7 @@ void migrate_proc(struct work_struct *work)
 			list_del(&seg->migrate_list);
 		}
 	}
+	return 0;
 }
 
 /*

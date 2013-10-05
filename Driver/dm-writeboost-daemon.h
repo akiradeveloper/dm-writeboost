@@ -19,7 +19,7 @@ void flush_barrier_ios(struct work_struct *);
 
 /*----------------------------------------------------------------*/
 
-void migrate_proc(struct work_struct *);
+int migrate_proc(void *);
 void wait_for_migration(struct wb_cache *, u64 id);
 
 /*----------------------------------------------------------------*/

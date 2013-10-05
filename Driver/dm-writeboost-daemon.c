@@ -10,14 +10,13 @@
 
 /*----------------------------------------------------------------*/
 
-void flush_proc(struct work_struct *work)
+int flush_proc(void *data)
 {
 	unsigned long flags;
 
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, flush_work);
+	struct wb_cache *cache = data;
 
-	while (true) {
+	while (!kthread_should_stop()) {
 		struct flush_job *job;
 		struct segment_header *seg;
 		struct dm_io_request io_req;
@@ -32,8 +31,8 @@ void flush_proc(struct work_struct *work)
 				msecs_to_jiffies(100));
 			spin_lock_irqsave(&cache->flush_queue_lock, flags);
 
-			if (cache->on_terminate)
-				return;
+			if (kthread_should_stop())
+				return 0;
 		}
 
 		/*
@@ -84,6 +83,7 @@ void flush_proc(struct work_struct *work)
 
 		kfree(job);
 	}
+	return 0;
 }
 
 /*----------------------------------------------------------------*/

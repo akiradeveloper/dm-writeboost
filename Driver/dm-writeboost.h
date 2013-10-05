@@ -266,8 +266,7 @@ struct wb_cache {
 	 * and flush daemon asynchronously
 	 * flush them to the cache device.
 	 */
-	struct work_struct flush_work;
-	struct workqueue_struct *flush_wq;
+	struct task_struct *flush_thread;
 	spinlock_t flush_queue_lock;
 	struct list_head flush_queue;
 	wait_queue_head_t flush_wait_queue;
@@ -334,13 +333,6 @@ struct wb_cache {
 	 */
 	struct task_struct *sync_thread;
 	unsigned long sync_interval; /* param */
-
-	/*
-	 * on_terminate is true
-	 * to notify all the background daemons to
-	 * stop their operations.
-	 */
-	bool on_terminate;
 
 	atomic64_t stat[STATLEN];
 };

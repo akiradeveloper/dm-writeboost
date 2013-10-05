@@ -1010,8 +1010,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	mutex_init(&cache->io_lock);
 
-	cache->on_terminate = false;
-
 	/*
 	 * (i) Harmless Initializations
 	 */
@@ -1084,19 +1082,18 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	 * These are only working
 	 * after the logical device created.
 	 */
-	cache->flush_wq = create_singlethread_workqueue("flushwq");
-	if (!cache->flush_wq) {
-		r = -ENOMEM;
-		WBERR();
-		goto bad_flushwq;
-	}
 
 	/* Flush Daemon */
-	INIT_WORK(&cache->flush_work, flush_proc);
 	spin_lock_init(&cache->flush_queue_lock);
 	INIT_LIST_HEAD(&cache->flush_queue);
 	init_waitqueue_head(&cache->flush_wait_queue);
-	queue_work(cache->flush_wq, &cache->flush_work);
+	cache->flush_thread = kthread_create(flush_proc, cache,
+					     "flush_daemon");
+	if (IS_ERR(cache->flush_thread)) {
+		BUG();
+		goto bad_flush_daemon;
+	}
+	wake_up_process(cache->flush_thread);
 
 	/* Deferred ACK for barrier writes */
 
@@ -1151,7 +1148,8 @@ bad_sync_daemon:
 bad_recorder_daemon:
 	kthread_stop(cache->modulator_thread);
 bad_modulator_daemon:
-bad_flushwq:
+	kthread_stop(cache->flush_thread);
+bad_flush_daemon:
 bad_recover:
 	kthread_stop(cache->migrate_thread);
 bad_migrate_daemon:
@@ -1169,17 +1167,13 @@ bad_init_rambuf_pool:
 
 void free_cache(struct wb_cache *cache)
 {
-	cache->on_terminate = true;
-
 	/* Kill in-kernel daemons */
 	kthread_stop(cache->sync_thread);
 	kthread_stop(cache->recorder_thread);
 	kthread_stop(cache->modulator_thread);
 
-	cancel_work_sync(&cache->flush_work);
-	destroy_workqueue(cache->flush_wq);
+	kthread_stop(cache->flush_thread);
 
-	/* FIXME? */
 	cancel_work_sync(&cache->barrier_deadline_work);
 
 	kthread_stop(cache->migrate_thread);

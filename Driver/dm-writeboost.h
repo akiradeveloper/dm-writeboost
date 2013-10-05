@@ -266,7 +266,7 @@ struct wb_cache {
 	 * and flush daemon asynchronously
 	 * flush them to the cache device.
 	 */
-	struct task_struct *flush_thread;
+	struct task_struct *flush_daemon;
 	spinlock_t flush_queue_lock;
 	struct list_head flush_queue;
 	wait_queue_head_t flush_wait_queue;
@@ -288,7 +288,7 @@ struct wb_cache {
 	 * migrate daemon goes into migration
 	 * if they are segments to migrate.
 	 */
-	struct task_struct *migrate_thread;
+	struct task_struct *migrate_daemon;
 	bool allow_migrate; /* param */
 
 	/*
@@ -313,7 +313,7 @@ struct wb_cache {
 	 * the migration
 	 * according to the load of backing store.
 	 */
-	struct task_struct *modulator_thread;
+	struct task_struct *modulator_daemon;
 	bool enable_migration_modulator; /* param */
 
 	/*
@@ -322,7 +322,7 @@ struct wb_cache {
 	 * Update the superblock record
 	 * periodically.
 	 */
-	struct task_struct *recorder_thread;
+	struct task_struct *recorder_daemon;
 	unsigned long update_record_interval; /* param */
 
 	/*
@@ -331,7 +331,7 @@ struct wb_cache {
 	 * Sync the dirty writes
 	 * periodically.
 	 */
-	struct task_struct *sync_thread;
+	struct task_struct *sync_daemon;
 	unsigned long sync_interval; /* param */
 
 	atomic64_t stat[STATLEN];

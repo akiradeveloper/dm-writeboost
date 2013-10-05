@@ -1062,13 +1062,13 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
-	cache->migrate_thread = kthread_create(migrate_proc, cache,
+	cache->migrate_daemon = kthread_create(migrate_proc, cache,
 					       "migrate_daemon");
-	if (IS_ERR(cache->migrate_thread)) {
+	if (IS_ERR(cache->migrate_daemon)) {
 		BUG();
 		goto bad_migrate_daemon;
 	}
-	wake_up_process(cache->migrate_thread);
+	wake_up_process(cache->migrate_daemon);
 
 	r = recover_cache(cache);
 	if (r) {
@@ -1087,13 +1087,13 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	spin_lock_init(&cache->flush_queue_lock);
 	INIT_LIST_HEAD(&cache->flush_queue);
 	init_waitqueue_head(&cache->flush_wait_queue);
-	cache->flush_thread = kthread_create(flush_proc, cache,
+	cache->flush_daemon = kthread_create(flush_proc, cache,
 					     "flush_daemon");
-	if (IS_ERR(cache->flush_thread)) {
+	if (IS_ERR(cache->flush_daemon)) {
 		BUG();
 		goto bad_flush_daemon;
 	}
-	wake_up_process(cache->flush_thread);
+	wake_up_process(cache->flush_daemon);
 
 	/* Deferred ACK for barrier writes */
 
@@ -1113,45 +1113,45 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	/* Migartion Modulator */
 	cache->enable_migration_modulator = true;
-	cache->modulator_thread = kthread_create(modulator_proc, cache,
+	cache->modulator_daemon = kthread_create(modulator_proc, cache,
 						 "modulator_daemon");
-	if (IS_ERR(cache->modulator_thread)) {
+	if (IS_ERR(cache->modulator_daemon)) {
 		BUG();
 		goto bad_modulator_daemon;
 	}
-	wake_up_process(cache->modulator_thread);
+	wake_up_process(cache->modulator_daemon);
 
 	/* Superblock Recorder */
 	cache->update_record_interval = 60;
-	cache->recorder_thread = kthread_create(recorder_proc, cache,
+	cache->recorder_daemon = kthread_create(recorder_proc, cache,
 						"recorder_daemon");
-	if (IS_ERR(cache->recorder_thread)) {
+	if (IS_ERR(cache->recorder_daemon)) {
 		BUG();
 		goto bad_recorder_daemon;
 	}
-	wake_up_process(cache->recorder_thread);
+	wake_up_process(cache->recorder_daemon);
 
 	/* Dirty Synchronizer */
 	cache->sync_interval = 60;
-	cache->sync_thread = kthread_create(sync_proc, cache,
+	cache->sync_daemon = kthread_create(sync_proc, cache,
 					    "sync_daemon");
-	if (IS_ERR(cache->sync_thread)) {
+	if (IS_ERR(cache->sync_daemon)) {
 		BUG();
 		goto bad_sync_daemon;
 	}
-	wake_up_process(cache->sync_thread);
+	wake_up_process(cache->sync_daemon);
 
 	return 0;
 
 bad_sync_daemon:
-	kthread_stop(cache->recorder_thread);
+	kthread_stop(cache->recorder_daemon);
 bad_recorder_daemon:
-	kthread_stop(cache->modulator_thread);
+	kthread_stop(cache->modulator_daemon);
 bad_modulator_daemon:
-	kthread_stop(cache->flush_thread);
+	kthread_stop(cache->flush_daemon);
 bad_flush_daemon:
 bad_recover:
-	kthread_stop(cache->migrate_thread);
+	kthread_stop(cache->migrate_daemon);
 bad_migrate_daemon:
 	free_migration_buffer(cache);
 bad_alloc_migrate_buffer:
@@ -1168,15 +1168,15 @@ bad_init_rambuf_pool:
 void free_cache(struct wb_cache *cache)
 {
 	/* Kill in-kernel daemons */
-	kthread_stop(cache->sync_thread);
-	kthread_stop(cache->recorder_thread);
-	kthread_stop(cache->modulator_thread);
+	kthread_stop(cache->sync_daemon);
+	kthread_stop(cache->recorder_daemon);
+	kthread_stop(cache->modulator_daemon);
 
-	kthread_stop(cache->flush_thread);
+	kthread_stop(cache->flush_daemon);
 
 	cancel_work_sync(&cache->barrier_deadline_work);
 
-	kthread_stop(cache->migrate_thread);
+	kthread_stop(cache->migrate_daemon);
 	free_migration_buffer(cache);
 
 	/* Destroy in-core structures */

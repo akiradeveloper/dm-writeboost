@@ -973,12 +973,6 @@ static void writeboost_dtr(struct dm_target *ti)
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 
-	/*
-	 * Synchronize all the dirty writes
-	 * before termination.
-	 */
-	cache->sync_interval = 1;
-
 	free_cache(cache);
 	kfree(cache);
 

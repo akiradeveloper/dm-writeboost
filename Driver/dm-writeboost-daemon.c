@@ -16,7 +16,7 @@ int flush_proc(void *data)
 
 	struct wb_cache *cache = data;
 
-	while (!kthread_should_stop()) {
+	while (true) {
 		struct flush_job *job;
 		struct segment_header *seg;
 		struct dm_io_request io_req;
@@ -31,6 +31,10 @@ int flush_proc(void *data)
 				msecs_to_jiffies(100));
 			spin_lock_irqsave(&cache->flush_queue_lock, flags);
 
+			/*
+			 * flush daemon can exit
+			 * only if no flush job is queued.
+			 */
 			if (kthread_should_stop())
 				return 0;
 		}

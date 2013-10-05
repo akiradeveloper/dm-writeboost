@@ -1148,7 +1148,12 @@ bad_init_rambuf_pool:
 
 void free_cache(struct wb_cache *cache)
 {
-	/* Kill in-kernel daemons */
+	/*
+	 * Must clean up all the volatile data
+	 * before termination.
+	 */
+	flush_current_buffer(cache);
+
 	kthread_stop(cache->sync_daemon);
 	kthread_stop(cache->recorder_daemon);
 	kthread_stop(cache->modulator_daemon);

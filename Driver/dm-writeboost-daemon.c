@@ -453,17 +453,16 @@ void wait_for_migration(struct wb_cache *cache, u64 id)
 
 /*----------------------------------------------------------------*/
 
-void modulator_proc(struct work_struct *work)
+int modulator_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, modulator_work);
+	struct wb_cache *cache = data;
 	struct wb_device *wb = cache->wb;
 
 	struct hd_struct *hd = wb->device->bdev->bd_part;
 	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 
-	while (true) {
+	while (!kthread_should_stop()) {
 		if (cache->on_terminate)
 			return;
 
@@ -484,6 +483,7 @@ modulator_update:
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
+	return 0;
 }
 
 /*----------------------------------------------------------------*/

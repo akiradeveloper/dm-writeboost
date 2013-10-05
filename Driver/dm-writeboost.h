@@ -315,7 +315,7 @@ struct wb_cache {
 	 * the migration
 	 * according to the load of backing store.
 	 */
-	struct work_struct modulator_work;
+	struct task_struct *modulator_thread;
 	bool enable_migration_modulator; /* param */
 
 	/*

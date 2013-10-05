@@ -24,7 +24,7 @@ void wait_for_migration(struct wb_cache *, u64 id);
 
 /*----------------------------------------------------------------*/
 
-void modulator_proc(struct work_struct *);
+int modulator_proc(void *);
 
 /*----------------------------------------------------------------*/
 

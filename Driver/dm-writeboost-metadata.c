@@ -1118,8 +1118,12 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	/* Migartion Modulator */
 	cache->enable_migration_modulator = true;
-	INIT_WORK(&cache->modulator_work, modulator_proc);
-	schedule_work(&cache->modulator_work);
+	cache->modulator_thread = kthread_create(modulator_proc, cache,
+						 "modulator_daemon");
+	if (IS_ERR(cache->modulator_thread)) {
+		BUG();
+	}
+	wake_up_process(cache->modulator_thread);
 
 	/* Superblock Recorder */
 	cache->update_record_interval = 60;
@@ -1162,7 +1166,7 @@ void free_cache(struct wb_cache *cache)
 	/* Kill in-kernel daemons */
 	cancel_work_sync(&cache->sync_work);
 	kthread_stop(cache->recorder_thread);
-	cancel_work_sync(&cache->modulator_work);
+	kthread_stop(cache->modulator_thread);
 
 	cancel_work_sync(&cache->flush_work);
 	destroy_workqueue(cache->flush_wq);

@@ -32,7 +32,7 @@ void sync_proc(struct work_struct *);
 
 /*----------------------------------------------------------------*/
 
-void recorder_proc(struct work_struct *);
+int recorder_proc(void *);
 
 /*----------------------------------------------------------------*/
 

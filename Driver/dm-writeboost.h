@@ -16,6 +16,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
+#include <linux/kthread.h>
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/device-mapper.h>
@@ -323,7 +324,7 @@ struct wb_cache {
 	 * Update the superblock record
 	 * periodically.
 	 */
-	struct work_struct recorder_work;
+	struct task_struct *recorder_thread;
 	unsigned long update_record_interval; /* param */
 
 	/*

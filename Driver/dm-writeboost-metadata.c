@@ -1123,8 +1123,12 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	/* Superblock Recorder */
 	cache->update_record_interval = 60;
-	INIT_WORK(&cache->recorder_work, recorder_proc);
-	schedule_work(&cache->recorder_work);
+	cache->recorder_thread = kthread_create(recorder_proc, cache,
+						"recorder_daemon");
+	if (IS_ERR(cache->recorder_thread)) {
+		BUG();
+	}
+	wake_up_process(cache->recorder_thread);
 
 	/* Dirty Synchronizer */
 	cache->sync_interval = 60;
@@ -1157,7 +1161,7 @@ void free_cache(struct wb_cache *cache)
 
 	/* Kill in-kernel daemons */
 	cancel_work_sync(&cache->sync_work);
-	cancel_work_sync(&cache->recorder_work);
+	kthread_stop(cache->recorder_thread);
 	cancel_work_sync(&cache->modulator_work);
 
 	cancel_work_sync(&cache->flush_work);

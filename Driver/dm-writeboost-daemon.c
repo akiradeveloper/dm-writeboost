@@ -517,16 +517,12 @@ static void update_superblock_record(struct wb_cache *cache)
 	kfree(buf);
 }
 
-void recorder_proc(struct work_struct *work)
+int recorder_proc(void *data)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache, recorder_work);
+	struct wb_cache *cache = data;
 	unsigned long intvl;
 
-	while (true) {
-		if (cache->on_terminate)
-			return;
-
+	while (!kthread_should_stop()) {
 		/* sec -> ms */
 		intvl = cache->update_record_interval * 1000;
 
@@ -539,6 +535,7 @@ void recorder_proc(struct work_struct *work)
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
+	return 0;
 }
 
 /*----------------------------------------------------------------*/

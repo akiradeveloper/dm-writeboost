@@ -994,6 +994,17 @@ void free_migration_buffer(struct wb_cache *cache)
 
 /*----------------------------------------------------------------*/
 
+#define CREATE_DAEMON(name)\
+	cache->name##_daemon = kthread_create(name##_proc, cache,\
+					      #name "_daemon");\
+	if (IS_ERR(cache->name##_daemon)) {\
+		r = PTR_ERR(cache->name##_daemon);\
+		cache->name##_daemon = NULL;\
+		WBERR("couldn't spawn" #name "daemon");\
+		goto bad_##name##_daemon;\
+	}\
+	wake_up_process(cache->name##_daemon);
+
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 {
 	int r = 0;
@@ -1062,15 +1073,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	cache->allow_migrate = true;
 	cache->reserving_segment_id = 0;
-	cache->migrate_daemon = kthread_create(migrate_proc, cache,
-					       "migrate_daemon");
-	if (IS_ERR(cache->migrate_daemon)) {
-		r = PTR_ERR(cache->migrate_daemon);
-		cache->migrate_daemon = NULL;
-		WBERR("couldn't spawn migrate daemon");
-		goto bad_migrate_daemon;
-	}
-	wake_up_process(cache->migrate_daemon);
+	CREATE_DAEMON(migrate);
 
 	r = recover_cache(cache);
 	if (r) {
@@ -1089,15 +1092,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	spin_lock_init(&cache->flush_queue_lock);
 	INIT_LIST_HEAD(&cache->flush_queue);
 	init_waitqueue_head(&cache->flush_wait_queue);
-	cache->flush_daemon = kthread_create(flush_proc, cache,
-					     "flush_daemon");
-	if (IS_ERR(cache->flush_daemon)) {
-		r = PTR_ERR(cache->flush_daemon);
-		cache->flush_daemon = NULL;
-		WBERR("couldn't spawn flush daemon");
-		goto bad_flush_daemon;
-	}
-	wake_up_process(cache->flush_daemon);
+	CREATE_DAEMON(flush);
 
 	/* Deferred ACK for barrier writes */
 
@@ -1117,39 +1112,15 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	/* Migartion Modulator */
 	cache->enable_migration_modulator = true;
-	cache->modulator_daemon = kthread_create(modulator_proc, cache,
-						 "modulator_daemon");
-	if (IS_ERR(cache->modulator_daemon)) {
-		r = PTR_ERR(cache->modulator_daemon);
-		cache->modulator_daemon = NULL;
-		WBERR("couldn't spawn modulator daemon");
-		goto bad_modulator_daemon;
-	}
-	wake_up_process(cache->modulator_daemon);
+	CREATE_DAEMON(modulator);
 
 	/* Superblock Recorder */
 	cache->update_record_interval = 60;
-	cache->recorder_daemon = kthread_create(recorder_proc, cache,
-						"recorder_daemon");
-	if (IS_ERR(cache->recorder_daemon)) {
-		r = PTR_ERR(cache->recorder_daemon);
-		cache->recorder_daemon = NULL;
-		WBERR("couldn't spawn recorder daemon");
-		goto bad_recorder_daemon;
-	}
-	wake_up_process(cache->recorder_daemon);
+	CREATE_DAEMON(recorder);
 
 	/* Dirty Synchronizer */
 	cache->sync_interval = 60;
-	cache->sync_daemon = kthread_create(sync_proc, cache,
-					    "sync_daemon");
-	if (IS_ERR(cache->sync_daemon)) {
-		r = PTR_ERR(cache->sync_daemon);
-		cache->sync_daemon = NULL;
-		WBERR("couldn't spawn sync daemon");
-		goto bad_sync_daemon;
-	}
-	wake_up_process(cache->sync_daemon);
+	CREATE_DAEMON(sync);
 
 	return 0;
 

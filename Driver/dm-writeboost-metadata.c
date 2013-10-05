@@ -1065,7 +1065,9 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->migrate_daemon = kthread_create(migrate_proc, cache,
 					       "migrate_daemon");
 	if (IS_ERR(cache->migrate_daemon)) {
-		BUG();
+		r = PTR_ERR(cache->migrate_daemon);
+		cache->migrate_daemon = NULL;
+		WBERR("couldn't spawn migrate daemon");
 		goto bad_migrate_daemon;
 	}
 	wake_up_process(cache->migrate_daemon);
@@ -1090,7 +1092,9 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->flush_daemon = kthread_create(flush_proc, cache,
 					     "flush_daemon");
 	if (IS_ERR(cache->flush_daemon)) {
-		BUG();
+		r = PTR_ERR(cache->flush_daemon);
+		cache->flush_daemon = NULL;
+		WBERR("couldn't spawn flush daemon");
 		goto bad_flush_daemon;
 	}
 	wake_up_process(cache->flush_daemon);
@@ -1116,7 +1120,9 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->modulator_daemon = kthread_create(modulator_proc, cache,
 						 "modulator_daemon");
 	if (IS_ERR(cache->modulator_daemon)) {
-		BUG();
+		r = PTR_ERR(cache->modulator_daemon);
+		cache->modulator_daemon = NULL;
+		WBERR("couldn't spawn modulator daemon");
 		goto bad_modulator_daemon;
 	}
 	wake_up_process(cache->modulator_daemon);
@@ -1126,7 +1132,9 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->recorder_daemon = kthread_create(recorder_proc, cache,
 						"recorder_daemon");
 	if (IS_ERR(cache->recorder_daemon)) {
-		BUG();
+		r = PTR_ERR(cache->recorder_daemon);
+		cache->recorder_daemon = NULL;
+		WBERR("couldn't spawn recorder daemon");
 		goto bad_recorder_daemon;
 	}
 	wake_up_process(cache->recorder_daemon);
@@ -1136,7 +1144,9 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	cache->sync_daemon = kthread_create(sync_proc, cache,
 					    "sync_daemon");
 	if (IS_ERR(cache->sync_daemon)) {
-		BUG();
+		r = PTR_ERR(cache->sync_daemon);
+		cache->sync_daemon = NULL;
+		WBERR("couldn't spawn sync daemon");
 		goto bad_sync_daemon;
 	}
 	wake_up_process(cache->sync_daemon);

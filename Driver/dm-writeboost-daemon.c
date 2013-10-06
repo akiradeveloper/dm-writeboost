@@ -29,7 +29,6 @@ int flush_proc(void *data)
 				cache->flush_wait_queue,
 				(!list_empty(&cache->flush_queue)),
 				msecs_to_jiffies(100));
-			spin_lock_irqsave(&cache->flush_queue_lock, flags);
 
 			/*
 			 * flush daemon can exit
@@ -37,6 +36,8 @@ int flush_proc(void *data)
 			 */
 			if (kthread_should_stop())
 				return 0;
+			else
+				spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		}
 
 		/*

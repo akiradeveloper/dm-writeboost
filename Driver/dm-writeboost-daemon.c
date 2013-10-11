@@ -67,7 +67,7 @@ int flush_proc(void *data)
 
 		dm_safe_io_retry(&io_req, 1, &region, false);
 
-		cache->last_flushed_segment_id = seg->global_id;
+		atomic64_set(&cache->last_flushed_segment_id, seg->global_id);
 
 		complete_all(&seg->flush_done);
 
@@ -379,8 +379,8 @@ int migrate_proc(void *data)
 			continue;
 		}
 
-		nr_mig_candidates = cache->last_flushed_segment_id -
-				    cache->last_migrated_segment_id;
+		nr_mig_candidates = atomic64_read(&cache->last_flushed_segment_id) -
+				    atomic64_read(&cache->last_migrated_segment_id);
 
 		if (!nr_mig_candidates) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -411,7 +411,7 @@ int migrate_proc(void *data)
 		for (i = 1; i <= nr_mig; i++) {
 			seg = get_segment_header_by_id(
 					cache,
-					cache->last_migrated_segment_id + i);
+					atomic64_read(&cache->last_migrated_segment_id) + i);
 			list_add_tail(&seg->migrate_list, &cache->migrate_list);
 		}
 
@@ -422,7 +422,7 @@ int migrate_proc(void *data)
 		 * Only line of code changes
 		 * last_migrate_segment_id during runtime.
 		 */
-		cache->last_migrated_segment_id += nr_mig;
+		atomic64_add(nr_mig, &cache->last_migrated_segment_id);
 
 		list_for_each_entry_safe(seg, tmp,
 					 &cache->migrate_list,
@@ -496,7 +496,7 @@ static void update_superblock_record(struct wb_cache *cache)
 	struct dm_io_region region;
 
 	o.last_migrated_segment_id =
-		cpu_to_le64(cache->last_migrated_segment_id);
+		cpu_to_le64(atomic64_read(&cache->last_migrated_segment_id));
 
 	buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO | __GFP_ZERO);
 	memcpy(buf, &o, sizeof(o));

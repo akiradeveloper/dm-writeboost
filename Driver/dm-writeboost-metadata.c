@@ -871,14 +871,15 @@ setup_init_segment:
 	seg->global_id = init_segment_id;
 	atomic_set(&seg->nr_inflight_ios, 0);
 
-	cache->last_flushed_segment_id = seg->global_id - 1;
+	atomic64_set(&cache->last_flushed_segment_id,
+		     seg->global_id - 1);
 
-	cache->last_migrated_segment_id =
-		cache->last_flushed_segment_id > cache->nr_segments ?
-		cache->last_flushed_segment_id - cache->nr_segments : 0;
+	atomic64_set(&cache->last_migrated_segment_id,
+		atomic64_read(&cache->last_flushed_segment_id) > cache->nr_segments ?
+		atomic64_read(&cache->last_flushed_segment_id) - cache->nr_segments : 0);
 
-	if (record_id > cache->last_migrated_segment_id)
-		cache->last_migrated_segment_id = record_id;
+	if (record_id > atomic64_read(&cache->last_migrated_segment_id))
+		atomic64_set(&cache->last_migrated_segment_id, record_id);
 
 	wait_for_migration(cache, seg->global_id);
 

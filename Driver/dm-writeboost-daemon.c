@@ -368,10 +368,10 @@ int migrate_proc(void *data)
 		struct segment_header *seg, *tmp;
 
 		/*
-		 * If reserving_id > 0
+		 * If urge_migrate is true
 		 * Migration should be immediate.
 		 */
-		allow_migrate = cache->reserving_segment_id ||
+		allow_migrate = cache->urge_migrate ||
 				cache->allow_migrate;
 
 		if (!allow_migrate) {
@@ -443,14 +443,14 @@ void wait_for_migration(struct wb_cache *cache, u64 id)
 	struct segment_header *seg = get_segment_header_by_id(cache, id);
 
 	/*
-	 * Set reserving_segment_id to non zero
+	 * Set urge_migrate to true
 	 * to force the migartion daemon
 	 * to complete migarate of this segment
 	 * immediately.
 	 */
-	cache->reserving_segment_id = id;
+	cache->urge_migrate = true;
 	wait_for_completion(&seg->migrate_done);
-	cache->reserving_segment_id = 0;
+	cache->urge_migrate = false;
 }
 
 /*----------------------------------------------------------------*/

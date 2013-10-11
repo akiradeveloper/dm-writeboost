@@ -1072,7 +1072,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	INIT_LIST_HEAD(&cache->migrate_list);
 
 	cache->allow_migrate = true;
-	cache->reserving_segment_id = 0;
+	cache->urge_migrate = false;
 	CREATE_DAEMON(migrate);
 
 	r = recover_cache(cache);

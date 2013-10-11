@@ -257,7 +257,7 @@ struct wb_cache {
 
 	u64 last_migrated_segment_id;
 	u64 last_flushed_segment_id;
-	u64 reserving_segment_id;
+	int urge_migrate;
 
 	/*
 	 * Flush daemon

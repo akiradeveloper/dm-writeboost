@@ -289,7 +289,7 @@ struct wb_cache {
 	 * if they are segments to migrate.
 	 */
 	struct task_struct *migrate_daemon;
-	bool allow_migrate; /* param */
+	int allow_migrate; /* param */
 
 	/*
 	 * Batched Migration
@@ -314,7 +314,7 @@ struct wb_cache {
 	 * according to the load of backing store.
 	 */
 	struct task_struct *modulator_daemon;
-	bool enable_migration_modulator; /* param */
+	int enable_migration_modulator; /* param */
 
 	/*
 	 * Superblock Recorder

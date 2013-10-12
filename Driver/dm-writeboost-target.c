@@ -13,23 +13,6 @@
 
 /*----------------------------------------------------------------*/
 
-void *do_kmalloc_retry(size_t size, gfp_t flags, const char *caller)
-{
-	size_t count = 0;
-	void *p;
-
-retry_alloc:
-	p = kmalloc(size, flags);
-	if (!p) {
-		count++;
-		WBWARN("%s() allocation failed size:%lu, count:%lu",
-		       caller, size, count);
-		schedule_timeout_interruptible(msecs_to_jiffies(1));
-		goto retry_alloc;
-	}
-	return p;
-}
-
 struct safe_io {
 	struct work_struct work;
 	int err;
@@ -180,7 +163,7 @@ static void queue_flushing(struct wb_cache *cache)
 	INIT_COMPLETION(current_seg->migrate_done);
 	INIT_COMPLETION(current_seg->flush_done);
 
-	job = kmalloc_retry(sizeof(*job), GFP_NOIO);
+	job = mempool_alloc(cache->flush_job_pool, GFP_NOIO);
 	INIT_LIST_HEAD(&job->flush_queue);
 	job->seg = current_seg;
 	job->rambuf = cache->current_rambuf;
@@ -351,7 +334,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 		return;
 
 	if (dirty_bits == 255) {
-		void *buf = kmalloc_retry(1 << 12, GFP_NOIO);
+		void *buf = mempool_alloc(cache->buf_8_pool, GFP_NOIO);
 		struct dm_io_request io_req_r, io_req_w;
 		struct dm_io_region region_r, region_w;
 
@@ -383,10 +366,9 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.count = (1 << 3),
 		};
 		dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
-
-		kfree(buf);
+		mempool_free(buf, cache->buf_8_pool);
 	} else {
-		void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+		void *buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO);
 		size_t i;
 		for (i = 0; i < 8; i++) {
 			bool bit_on = dirty_bits & (1 << i);
@@ -427,7 +409,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			};
 			dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
 		}
-		kfree(buf);
+		mempool_free(buf, cache->buf_1_pool);
 	}
 }
 
@@ -443,7 +425,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 	u8 i, k = 1 + (mb->idx % cache->nr_caches_inseg);
 	sector_t offset = (k << 3);
 
-	void *buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO);
+	void *buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO);
 	for (i = 0; i < 8; i++) {
 		struct dm_io_request io_req;
 		struct dm_io_region region;
@@ -475,7 +457,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 
 		dm_safe_io_retry(&io_req, 1, &region, true);
 	}
-	kfree(buf);
+	mempool_free(buf, cache->buf_1_pool);
 }
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)

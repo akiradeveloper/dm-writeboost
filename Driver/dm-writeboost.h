@@ -228,6 +228,10 @@ struct wb_device;
 struct wb_cache {
 	struct wb_device *wb;
 
+	mempool_t *buf_1_pool; /* 1 sector buffer pool */
+	mempool_t *buf_8_pool; /* 8 sector buffer pool */
+	mempool_t *flush_job_pool;
+
 	struct dm_dev *device;
 	struct mutex io_lock;
 	cache_nr nr_caches; /* Const */
@@ -383,10 +387,6 @@ u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
 
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
-
-void *do_kmalloc_retry(size_t size, gfp_t flags, const char *caller);
-#define kmalloc_retry(size, flags) \
-	do_kmalloc_retry((size), (flags), __func__)
 
 int dm_safe_io_internal(
 		struct dm_io_request *,

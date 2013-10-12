@@ -86,7 +86,7 @@ int flush_proc(void *data)
 				  msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
 		}
 
-		kfree(job);
+		mempool_free(job, cache->flush_job_pool);
 	}
 	return 0;
 }
@@ -498,7 +498,7 @@ static void update_superblock_record(struct wb_cache *cache)
 	o.last_migrated_segment_id =
 		cpu_to_le64(atomic64_read(&cache->last_migrated_segment_id));
 
-	buf = kmalloc_retry(1 << SECTOR_SHIFT, GFP_NOIO | __GFP_ZERO);
+	buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO | __GFP_ZERO);
 	memcpy(buf, &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
@@ -514,7 +514,7 @@ static void update_superblock_record(struct wb_cache *cache)
 		.count = 1,
 	};
 	dm_safe_io_retry(&io_req, 1, &region, true);
-	kfree(buf);
+	mempool_free(buf, cache->buf_1_pool);
 }
 
 int recorder_proc(void *data)

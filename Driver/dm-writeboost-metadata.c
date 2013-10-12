@@ -1025,10 +1025,30 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	/*
 	 * (i) Harmless Initializations
 	 */
+	cache->buf_1_pool = mempool_create_kmalloc_pool(16, 1 << SECTOR_SHIFT);
+	if (!cache->buf_1_pool) {
+		r = -ENOMEM;
+		WBERR("couldn't alloc 1 sector pool");
+		goto bad_buf_1_pool;
+	}
+	cache->buf_8_pool = mempool_create_kmalloc_pool(16, 8 << SECTOR_SHIFT);
+	if (!cache->buf_8_pool) {
+		r = -ENOMEM;
+		WBERR("couldn't alloc 8 sector pool");
+		goto bad_buf_8_pool;
+	}
+
 	r = init_rambuf_pool(cache);
 	if (r) {
-		WBERR();
+		WBERR("couldn't alloc rambuf pool");
 		goto bad_init_rambuf_pool;
+	}
+	cache->flush_job_pool = mempool_create_kmalloc_pool(cache->nr_rambuf_pool,
+							    sizeof(struct flush_job));
+	if (!cache->flush_job_pool) {
+		r = -ENOMEM;
+		WBERR("couldn't alloc flush job pool");
+		goto bad_flush_job_pool;
 	}
 
 	/* Select arbitrary one as the initial rambuffer. */
@@ -1036,13 +1056,13 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	r = init_segment_header_array(cache);
 	if (r) {
-		WBERR();
+		WBERR("couldn't alloc segment header array");
 		goto bad_alloc_segment_header_array;
 	}
 
 	r = ht_empty_init(cache);
 	if (r) {
-		WBERR();
+		WBERR("couldn't alloc hashtable");
 		goto bad_alloc_ht;
 	}
 
@@ -1078,7 +1098,7 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 
 	r = recover_cache(cache);
 	if (r) {
-		WBERR();
+		WBERR("recovering cache metadata failed");
 		goto bad_recover;
 	}
 
@@ -1141,9 +1161,14 @@ bad_alloc_migrate_buffer:
 bad_alloc_ht:
 	free_segment_header_array(cache);
 bad_alloc_segment_header_array:
+	mempool_destroy(cache->flush_job_pool);
+bad_flush_job_pool:
 	free_rambuf_pool(cache);
 bad_init_rambuf_pool:
-	kfree(cache);
+	mempool_destroy(cache->buf_8_pool);
+bad_buf_8_pool:
+	mempool_destroy(cache->buf_1_pool);
+bad_buf_1_pool:
 	return r;
 }
 

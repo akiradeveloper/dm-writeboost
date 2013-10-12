@@ -256,7 +256,7 @@ struct wb_cache {
 	struct segment_header *current_seg;
 
 	struct rambuffer *current_rambuf;
-	size_t nr_rambuf_pool; /* Const */
+	u64 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 
 	atomic64_t last_migrated_segment_id;

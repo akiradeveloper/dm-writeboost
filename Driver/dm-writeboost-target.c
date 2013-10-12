@@ -148,7 +148,7 @@ static void queue_flushing(struct wb_cache *cache)
 	bool empty;
 	struct rambuffer *next_rambuf;
 	size_t n1 = 0, n2 = 0;
-	u64 next_id;
+	u64 next_id, tmp64;
 
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
 		n1++;
@@ -200,7 +200,8 @@ static void queue_flushing(struct wb_cache *cache)
 	cache->cursor = current_seg->start_idx + (cache->nr_caches_inseg - 1);
 	new_seg->length = 0;
 
-	next_rambuf = cache->rambuf_pool + (next_id % cache->nr_rambuf_pool);
+	div64_u64_rem(next_id, cache->nr_rambuf_pool, &tmp64);
+	next_rambuf = cache->rambuf_pool + tmp64;
 	wait_for_completion(&next_rambuf->done);
 	INIT_COMPLETION(next_rambuf->done);
 
@@ -238,12 +239,14 @@ static void queue_current_buffer(struct wb_cache *cache)
 void flush_current_buffer(struct wb_cache *cache)
 {
 	struct segment_header *old_seg;
+	u32 tmp32;
 
 	mutex_lock(&cache->io_lock);
 	old_seg = cache->current_seg;
 
 	queue_current_buffer(cache);
-	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
+	div_u64_rem(cache->cursor + 1, cache->nr_caches, &tmp32);
+	cache->cursor = tmp32;
 	cache->current_seg->length = 1;
 	mutex_unlock(&cache->io_lock);
 
@@ -421,11 +424,15 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 				struct metablock *mb, u8 dirty_bits)
 {
 	struct wb_device *wb = cache->wb;
+	u8 i;
+	sector_t offset;
+	void *buf;
 
-	u8 i, k = 1 + (mb->idx % cache->nr_caches_inseg);
-	sector_t offset = (k << 3);
+	u32 k;
+	div_u64_rem(mb->idx, cache->nr_caches_inseg, &k);
+	offset = ((k + 1) << 3);
 
-	void *buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO);
+	buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO);
 	for (i = 0; i < 8; i++) {
 		struct dm_io_request io_req;
 		struct dm_io_region region;
@@ -469,7 +476,7 @@ static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 static sector_t calc_cache_alignment(struct wb_cache *cache,
 				     sector_t bio_sector)
 {
-	return (bio_sector / (1 << 3)) * (1 << 3);
+	return div_u64(bio_sector, 1 << 3) * (1 << 3);
 }
 
 static int writeboost_map(struct dm_target *ti, struct bio *bio
@@ -484,13 +491,15 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context;
 #endif
-	sector_t bio_count, bio_offset, s;
+	sector_t bio_count, s;
+	u8 bio_offset;
+	u32 tmp32;
 	bool bio_fullsize, found, on_buffer,
 	     refresh_segment, b;
 	int rw;
 	struct lookup_key key;
 	struct ht_head *head;
-	cache_nr update_mb_idx, idx_inseg;
+	cache_nr update_mb_idx;
 	size_t start;
 	void *data;
 
@@ -534,7 +543,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 
 	bio_count = bio->bi_size >> SECTOR_SHIFT;
 	bio_fullsize = (bio_count == (1 << 3));
-	bio_offset = bio->bi_sector % (1 << 3);
+	div_u64_rem(bio->bi_sector, 1 << 3, &tmp32);
+	bio_offset = tmp32;
 
 	rw = bio_data_dir(bio);
 
@@ -562,8 +572,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if (mb) {
-		seg = ((void *) mb) - (mb->idx % cache->nr_caches_inseg) *
-				      sizeof(struct metablock)
+		div_u64_rem(mb->idx, cache->nr_caches_inseg, &tmp32);
+		seg = ((void *) mb) - tmp32 * sizeof(struct metablock)
 				    - sizeof(struct segment_header);
 		atomic_inc(&seg->nr_inflight_ios);
 	}
@@ -705,12 +715,14 @@ write_not_found:
 	 * We must flush the current segment and
 	 * get the new one.
 	 */
-	refresh_segment = !((cache->cursor + 1) % cache->nr_caches_inseg);
+	div_u64_rem(cache->cursor + 1, cache->nr_caches_inseg, &tmp32);
+	refresh_segment = !tmp32;
 
 	if (refresh_segment)
 		queue_current_buffer(cache);
 
-	cache->cursor = (cache->cursor + 1) % cache->nr_caches;
+	div_u64_rem(cache->cursor + 1, cache->nr_caches, &tmp32);
+	cache->cursor = tmp32;
 
 	/*
 	 * update_mb_idx is the cache line index to update.
@@ -720,7 +732,8 @@ write_not_found:
 	seg = cache->current_seg;
 	atomic_inc(&seg->nr_inflight_ios);
 
-	new_mb = seg->mb_array + (update_mb_idx % cache->nr_caches_inseg);
+	div_u64_rem(update_mb_idx, cache->nr_caches_inseg, &tmp32);
+	new_mb = seg->mb_array + tmp32;
 	new_mb->dirty_bits = 0;
 	ht_register(cache, head, &key, new_mb);
 	mutex_unlock(&cache->io_lock);
@@ -729,13 +742,12 @@ write_not_found:
 
 write_on_buffer:
 	;
-	idx_inseg = update_mb_idx % cache->nr_caches_inseg;
-
 	/*
 	 * The first 4KB of the segment is
 	 * used for metadata.
 	 */
-	s = (idx_inseg + 1) << 3;
+	div_u64_rem(update_mb_idx, cache->nr_caches_inseg, &tmp32);
+	s = (tmp32 + 1) << 3;
 
 	b = false;
 	lockseg(seg, flags);
@@ -751,7 +763,7 @@ write_on_buffer:
 		u8 i;
 		u8 acc_bits = 0;
 		s += bio_offset;
-		for (i = bio_offset; i < (bio_offset+bio_count); i++)
+		for (i = bio_offset; i < (bio_offset + bio_count); i++)
 			acc_bits += (1 << i);
 
 		mb->dirty_bits |= acc_bits;

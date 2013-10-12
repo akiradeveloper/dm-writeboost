@@ -472,7 +472,7 @@ int modulator_proc(void *data)
 		if (!ACCESS_ONCE(cache->enable_migration_modulator))
 			goto modulator_update;
 
-		util = (100 * (new - old)) / 1000;
+		util = div_u64(100 * (new - old), 1000);
 
 		if (util < ACCESS_ONCE(wb->migrate_threshold))
 			cache->allow_migrate = true;

@@ -16,24 +16,24 @@ struct part {
 
 struct bigarray {
 	struct part *parts;
-	size_t nr_elems;
-	size_t elemsize;
+	u64 nr_elems;
+	u32 elemsize;
 };
 
 #define ALLOC_SIZE (1 << 16)
-static size_t nr_elems_in_part(struct bigarray *arr)
+static u32 nr_elems_in_part(struct bigarray *arr)
 {
-	return ALLOC_SIZE / arr->elemsize;
+	return div_u64(ALLOC_SIZE, arr->elemsize);
 };
 
-static size_t nr_parts(struct bigarray *arr)
+static u64 nr_parts(struct bigarray *arr)
 {
 	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
 }
 
-static struct bigarray *make_bigarray(size_t elemsize, size_t nr_elems)
+static struct bigarray *make_bigarray(u32 elemsize, u64 nr_elems)
 {
-	size_t i, j;
+	u64 i, j;
 	struct part *part;
 
 	struct bigarray *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
@@ -82,11 +82,11 @@ static void kill_bigarray(struct bigarray *arr)
 	kfree(arr);
 }
 
-static void *bigarray_at(struct bigarray *arr, size_t i)
+static void *bigarray_at(struct bigarray *arr, u64 i)
 {
-	size_t n = nr_elems_in_part(arr);
-	size_t j = i / n;
-	size_t k = i % n;
+	u32 n = nr_elems_in_part(arr);
+	u32 k;
+	u64 j = div_u64_rem(i, n, &k);
 	struct part *part = arr->parts + j;
 	return part->memory + (arr->elemsize * k);
 }
@@ -106,16 +106,16 @@ static void *bigarray_at(struct bigarray *arr, size_t i)
  */
 static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 {
-	u64 seg_idx = idx / cache->nr_caches_inseg;
+	u32 idx_inseg;
+	u64 seg_idx = div_u64_rem(idx, cache->nr_caches_inseg, &idx_inseg);
 	struct segment_header *seg =
 		bigarray_at(cache->segment_header_array, seg_idx);
-	cache_nr idx_inseg = idx % cache->nr_caches_inseg;
 	return seg->mb_array + idx_inseg;
 }
 
 static void mb_array_empty_init(struct wb_cache *cache)
 {
-	size_t i;
+	cache_nr i;
 	for (i = 0; i < cache->nr_caches; i++) {
 		struct metablock *mb = mb_at(cache, i);
 		INIT_HLIST_NODE(&mb->ht_list);
@@ -133,22 +133,23 @@ static sector_t calc_segment_header_start(struct wb_cache *cache,
 
 static u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
 {
-	u32 a = (segment_id - 1) / cache->nr_segments;
+	u64 a = div64_u64(segment_id - 1, cache->nr_segments);
 	return a + 1;
 };
 
 static u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
 {
 	sector_t devsize = dm_devsize(dev);
-	return (devsize - (1 << 11)) / (1 << cache->segment_size_order);
+	return div64_u64(devsize - (1 << 11), 1 << cache->segment_size_order);
 }
 
 sector_t calc_mb_start_sector(struct wb_cache *cache,
 			      struct segment_header *seg,
 			      cache_nr mb_idx)
 {
-	size_t k = 1 + (mb_idx % cache->nr_caches_inseg);
-	return seg->start_sector + (k << 3);
+	u32 idx;
+	div_u64_rem(mb_idx, cache->nr_caches_inseg, &idx);
+	return seg->start_sector + ((1 + idx) << 3);
 }
 
 bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
@@ -170,10 +171,9 @@ bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
 struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
 						u64 segment_id)
 {
-	struct segment_header *r =
-		bigarray_at(cache->segment_header_array,
-		       (segment_id - 1) % cache->nr_segments);
-	return r;
+	u64 idx;
+	div64_u64_rem(segment_id - 1, cache->nr_segments, &idx);
+	return bigarray_at(cache->segment_header_array, idx);
 }
 
 static int __must_check init_segment_header_array(struct wb_cache *cache)
@@ -226,8 +226,7 @@ static void free_segment_header_array(struct wb_cache *cache)
 static int __must_check ht_empty_init(struct wb_cache *cache)
 {
 	cache_nr idx;
-	size_t i;
-	size_t nr_heads;
+	size_t i, nr_heads;
 	struct bigarray *arr;
 
 	cache->htsize = cache->nr_caches;
@@ -266,7 +265,9 @@ static void free_ht(struct wb_cache *cache)
 
 struct ht_head *ht_get_head(struct wb_cache *cache, struct lookup_key *key)
 {
-	return bigarray_at(cache->htable, key->sector % cache->htsize);
+	u32 idx;
+	div_u64_rem(key->sector, cache->htsize, &idx);
+	return bigarray_at(cache->htable, idx);
 }
 
 static bool mb_hit(struct metablock *mb, struct lookup_key *key)
@@ -606,7 +607,7 @@ read_superblock_record(struct superblock_record_device *record,
 
 static int __must_check
 read_segment_header_device(struct segment_header_device *dest,
-			   struct wb_cache *cache, size_t segment_idx)
+			   struct wb_cache *cache, u64 segment_idx)
 {
 	int r = 0;
 	struct dm_io_request io_req;
@@ -652,6 +653,7 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 				   struct segment_header *src)
 {
 	cache_nr i;
+	u32 tmp32;
 	u8 left, right;
 
 	dest->global_id = cpu_to_le64(src->global_id);
@@ -659,7 +661,8 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 	dest->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
 
 	left = src->length - 1;
-	right = (cache->cursor) % cache->nr_caches_inseg;
+	div_u64_rem(cache->cursor, cache->nr_caches_inseg, &tmp32);
+	right = tmp32;
 	BUG_ON(left != right);
 
 	for (i = 0; i < src->length; i++) {
@@ -815,7 +818,7 @@ static int __must_check recover_cache(struct wb_cache *cache)
 	 *      last_flushed  init_seg  migrated  last_migrated  flushed
 	 */
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
-		j = i % nr_segments;
+		div64_u64_rem(i, nr_segments, &j);
 		r = read_segment_header_device(header, cache, j);
 		if (r) {
 			WBERR();
@@ -905,8 +908,8 @@ static int __must_check init_rambuf_pool(struct wb_cache *cache)
 	struct rambuffer *rambuf;
 
 	/* tmp var to avoid 80 cols */
-	size_t nr = (RAMBUF_POOL_ALLOCATED * 1000000) /
-		    (1 << (cache->segment_size_order + SECTOR_SHIFT));
+	u64 nr = div_u64(RAMBUF_POOL_ALLOCATED * 1000000,
+			 1 << (cache->segment_size_order + SECTOR_SHIFT));
 	cache->nr_rambuf_pool = nr;
 	cache->rambuf_pool = kmalloc(sizeof(struct rambuffer) * nr,
 				     GFP_KERNEL);

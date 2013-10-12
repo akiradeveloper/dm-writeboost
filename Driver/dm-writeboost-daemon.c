@@ -28,7 +28,7 @@ int flush_proc(void *data)
 			wait_event_interruptible_timeout(
 				cache->flush_wait_queue,
 				(!list_empty(&cache->flush_queue)),
-				msecs_to_jiffies(100));
+				msecs_to_jiffies(1000));
 
 			/*
 			 * flush daemon can exit

@@ -449,6 +449,7 @@ void wait_for_migration(struct wb_cache *cache, u64 id)
 	 * immediately.
 	 */
 	cache->urge_migrate = true;
+	wake_up_process(cache->migrate_daemon);
 	wait_for_completion(&seg->migrate_done);
 	cache->urge_migrate = false;
 }

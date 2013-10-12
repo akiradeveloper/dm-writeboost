@@ -255,8 +255,8 @@ struct wb_cache {
 	size_t nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 
-	u64 last_migrated_segment_id;
-	u64 last_flushed_segment_id;
+	atomic64_t last_migrated_segment_id;
+	atomic64_t last_flushed_segment_id;
 	int urge_migrate;
 
 	/*

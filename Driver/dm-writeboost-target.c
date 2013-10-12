@@ -1102,8 +1102,10 @@ writeboost_status(
 		       (long long unsigned int)
 		       atomic64_read(&wb->nr_dirty_caches),
 		       (long long unsigned int) cache->nr_segments,
-		       (long long unsigned int) cache->last_migrated_segment_id,
-		       (long long unsigned int) cache->last_flushed_segment_id,
+		       (long long unsigned int)
+		       atomic64_read(&cache->last_migrated_segment_id),
+		       (long long unsigned int)
+		       atomic64_read(&cache->last_flushed_segment_id),
 		       (long long unsigned int) cache->current_seg->global_id,
 		       (unsigned int) cache->cursor);
 

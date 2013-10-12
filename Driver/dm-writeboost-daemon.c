@@ -83,7 +83,7 @@ int flush_proc(void *data)
 				bio_endio(bio, 0);
 
 			mod_timer(&cache->barrier_deadline_timer,
-				  msecs_to_jiffies(cache->barrier_deadline_ms));
+				  msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
 		}
 
 		kfree(job);
@@ -101,7 +101,7 @@ void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
 
 	if (!timer_pending(&cache->barrier_deadline_timer))
 		mod_timer(&cache->barrier_deadline_timer,
-			  msecs_to_jiffies(cache->barrier_deadline_ms));
+			  msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
 }
 
 void barrier_deadline_proc(unsigned long data)
@@ -371,8 +371,8 @@ int migrate_proc(void *data)
 		 * If urge_migrate is true
 		 * Migration should be immediate.
 		 */
-		allow_migrate = cache->urge_migrate ||
-				cache->allow_migrate;
+		allow_migrate = ACCESS_ONCE(cache->urge_migrate) ||
+				ACCESS_ONCE(cache->allow_migrate);
 
 		if (!allow_migrate) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -387,7 +387,7 @@ int migrate_proc(void *data)
 			continue;
 		}
 
-		nr_max_batch = cache->nr_max_batched_migration;
+		nr_max_batch = ACCESS_ONCE(cache->nr_max_batched_migration);
 		if (cache->nr_cur_batched_migration != nr_max_batch) {
 			/*
 			 * Request buffer for nr_max_batch size.
@@ -468,12 +468,12 @@ int modulator_proc(void *data)
 
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
-		if (!cache->enable_migration_modulator)
+		if (!ACCESS_ONCE(cache->enable_migration_modulator))
 			goto modulator_update;
 
 		util = (100 * (new - old)) / 1000;
 
-		if (util < wb->migrate_threshold)
+		if (util < ACCESS_ONCE(wb->migrate_threshold))
 			cache->allow_migrate = true;
 		else
 			cache->allow_migrate = false;
@@ -524,7 +524,7 @@ int recorder_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = cache->update_record_interval * 1000;
+		intvl = ACCESS_ONCE(cache->update_record_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -547,7 +547,7 @@ int sync_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = cache->sync_interval * 1000;
+		intvl = ACCESS_ONCE(cache->sync_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));

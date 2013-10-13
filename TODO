@@ -10,6 +10,12 @@ TODO:
     - Refactor recover_cache() to make it readable.
     - flush daemon should sleep by schedule_timeout_interruptile
       to remove flush_wait_queue?
-
-Please send patches to Greg Kroah-Hartman <gregkh@linuxfoundation.org> and Cc:
-Akira Hayakawa <ruby.wktk@gmail.com>
+    - barrier_deadline_ms is zero to flush immediately.
+    - cache_nr should be removed. more clear to use u32 directory.
+    - rambuf pool size should be configurable.
+    - rambuf pool should be mempool?
+    - nr_segments, nr_rambuf_pool should be u32.
+    - lap to u64?
+    - block up in I/O error.
+    - compile in 32 bit env.
+    - Run on Raspberry Pi and write report.

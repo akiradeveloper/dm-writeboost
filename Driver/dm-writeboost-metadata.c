@@ -1112,7 +1112,6 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	/* Flush Daemon */
 	spin_lock_init(&cache->flush_queue_lock);
 	INIT_LIST_HEAD(&cache->flush_queue);
-	init_waitqueue_head(&cache->flush_wait_queue);
 	CREATE_DAEMON(flush);
 
 	/* Deferred ACK for barrier writes */

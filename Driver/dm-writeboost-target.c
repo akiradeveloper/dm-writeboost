@@ -177,8 +177,9 @@ static void queue_flushing(struct wb_cache *cache)
 	empty = list_empty(&cache->flush_queue);
 	list_add_tail(&job->flush_queue, &cache->flush_queue);
 	spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+
 	if (empty)
-		wake_up_interruptible(&cache->flush_wait_queue);
+		wake_up_process(cache->flush_daemon);
 
 	next_id = current_seg->global_id + 1;
 	new_seg = get_segment_header_by_id(cache, next_id);

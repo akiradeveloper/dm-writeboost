@@ -25,10 +25,8 @@ int flush_proc(void *data)
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while (list_empty(&cache->flush_queue)) {
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
-			wait_event_interruptible_timeout(
-				cache->flush_wait_queue,
-				(!list_empty(&cache->flush_queue)),
-				msecs_to_jiffies(1000));
+
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 
 			/*
 			 * flush daemon can exit

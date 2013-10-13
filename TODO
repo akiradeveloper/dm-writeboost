@@ -16,6 +16,7 @@ TODO:
     - rambuf pool should be mempool?
     - nr_segments, nr_rambuf_pool should be u32.
     - lap to u64?
+    -- CAN NOT. metablock_device should be less than 14 bytes
     - block up in I/O error.
     - compile in 32 bit env.
     - Run on Raspberry Pi and write report.

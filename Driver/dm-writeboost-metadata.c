@@ -104,7 +104,7 @@ static void *bigarray_at(struct bigarray *arr, u64 i)
 /*
  * Get the in-core metablock of the given index.
  */
-static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
+static struct metablock *mb_at(struct wb_cache *cache, u32 idx)
 {
 	u32 idx_inseg;
 	u32 seg_idx = div_u64_rem(idx, cache->nr_caches_inseg, &idx_inseg);
@@ -115,7 +115,7 @@ static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 
 static void mb_array_empty_init(struct wb_cache *cache)
 {
-	cache_nr i;
+	u32 i;
 	for (i = 0; i < cache->nr_caches; i++) {
 		struct metablock *mb = mb_at(cache, i);
 		INIT_HLIST_NODE(&mb->ht_list);
@@ -145,16 +145,16 @@ static u32 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
 
 sector_t calc_mb_start_sector(struct wb_cache *cache,
 			      struct segment_header *seg,
-			      cache_nr mb_idx)
+			      u32 mb_idx)
 {
 	u32 idx;
 	div_u64_rem(mb_idx, cache->nr_caches_inseg, &idx);
 	return seg->start_sector + ((1 + idx) << 3);
 }
 
-bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
+bool is_on_buffer(struct wb_cache *cache, u32 mb_idx)
 {
-	cache_nr start = cache->current_seg->start_idx;
+	u32 start = cache->current_seg->start_idx;
 	if (mb_idx < start)
 		return false;
 
@@ -225,7 +225,7 @@ static void free_segment_header_array(struct wb_cache *cache)
  */
 static int __must_check ht_empty_init(struct wb_cache *cache)
 {
-	cache_nr idx;
+	u32 idx;
 	size_t i, nr_heads;
 	struct bigarray *arr;
 
@@ -652,9 +652,8 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 				   struct wb_cache *cache,
 				   struct segment_header *src)
 {
-	cache_nr i;
-	u32 tmp32;
 	u8 left, right;
+	u32 i, tmp32;
 
 	dest->global_id = cpu_to_le64(src->global_id);
 	dest->length = src->length;
@@ -682,7 +681,7 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 static void update_by_segment_header_device(struct wb_cache *cache,
 					    struct segment_header_device *src)
 {
-	cache_nr i;
+	u32 i;
 	struct segment_header *seg =
 		get_segment_header_by_id(cache, src->global_id);
 	seg->length = src->length;

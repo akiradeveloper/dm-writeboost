@@ -12,8 +12,8 @@
 struct segment_header *get_segment_header_by_id(struct wb_cache *,
 						u64 segment_id);
 sector_t calc_mb_start_sector(struct wb_cache *,
-			      struct segment_header *, cache_nr mb_idx);
-bool is_on_buffer(struct wb_cache *, cache_nr mb_idx);
+			      struct segment_header *, u32 mb_idx);
+bool is_on_buffer(struct wb_cache *, u32 mb_idx);
 
 /*----------------------------------------------------------------*/
 

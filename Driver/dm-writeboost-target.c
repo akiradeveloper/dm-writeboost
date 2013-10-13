@@ -500,7 +500,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 	int rw;
 	struct lookup_key key;
 	struct ht_head *head;
-	cache_nr update_mb_idx;
+	u32 update_mb_idx;
 	size_t start;
 	void *data;
 

@@ -81,15 +81,6 @@ struct superblock_record_device {
 } __packed;
 
 /*
- * Cache line index.
- *
- * dm-writeboost can supoort a cache device
- * with size less than 4KB * (1 << 32)
- * that is 16TB.
- */
-typedef u32 cache_nr;
-
-/*
  * Metadata of a 4KB cache line
  *
  * Dirtiness is defined for each sector
@@ -98,7 +89,7 @@ typedef u32 cache_nr;
 struct metablock {
 	sector_t sector; /* key */
 
-	cache_nr idx; /* Const */
+	u32 idx; /* Const */
 
 	struct hlist_node ht_list;
 
@@ -143,7 +134,7 @@ struct segment_header {
 	 */
 	u8 length;
 
-	cache_nr start_idx; /* Const */
+	u32 start_idx; /* Const */
 	sector_t start_sector; /* Const */
 
 	struct list_head migrate_list;
@@ -234,7 +225,7 @@ struct wb_cache {
 
 	struct dm_dev *device;
 	struct mutex io_lock;
-	cache_nr nr_caches; /* Const */
+	u32 nr_caches; /* Const */
 	u32 nr_segments; /* Const */
 	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
@@ -252,7 +243,7 @@ struct wb_cache {
 	size_t htsize;
 	struct ht_head *null_head;
 
-	cache_nr cursor; /* Index that has been written the most lately */
+	u32 cursor; /* Index that has been written the most lately */
 	struct segment_header *current_seg;
 
 	struct rambuffer *current_rambuf;

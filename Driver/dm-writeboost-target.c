@@ -148,7 +148,8 @@ static void queue_flushing(struct wb_cache *cache)
 	bool empty;
 	struct rambuffer *next_rambuf;
 	size_t n1 = 0, n2 = 0;
-	u64 next_id, tmp64;
+	u32 tmp32;
+	u64 next_id;
 
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
 		n1++;
@@ -200,8 +201,8 @@ static void queue_flushing(struct wb_cache *cache)
 	cache->cursor = current_seg->start_idx + (cache->nr_caches_inseg - 1);
 	new_seg->length = 0;
 
-	div64_u64_rem(next_id, cache->nr_rambuf_pool, &tmp64);
-	next_rambuf = cache->rambuf_pool + tmp64;
+	div_u64_rem(next_id, cache->nr_rambuf_pool, &tmp32);
+	next_rambuf = cache->rambuf_pool + tmp32;
 	wait_for_completion(&next_rambuf->done);
 	INIT_COMPLETION(next_rambuf->done);
 

@@ -107,7 +107,7 @@ static void *bigarray_at(struct bigarray *arr, u64 i)
 static struct metablock *mb_at(struct wb_cache *cache, cache_nr idx)
 {
 	u32 idx_inseg;
-	u64 seg_idx = div_u64_rem(idx, cache->nr_caches_inseg, &idx_inseg);
+	u32 seg_idx = div_u64_rem(idx, cache->nr_caches_inseg, &idx_inseg);
 	struct segment_header *seg =
 		bigarray_at(cache->segment_header_array, seg_idx);
 	return seg->mb_array + idx_inseg;
@@ -126,21 +126,21 @@ static void mb_array_empty_init(struct wb_cache *cache)
 }
 
 static sector_t calc_segment_header_start(struct wb_cache *cache,
-					  u64 segment_idx)
+					  u32 segment_idx)
 {
 	return (1 << 11) + (1 << cache->segment_size_order) * (segment_idx);
 }
 
 static u32 calc_segment_lap(struct wb_cache *cache, u64 segment_id)
 {
-	u64 a = div64_u64(segment_id - 1, cache->nr_segments);
+	u64 a = div_u64(segment_id - 1, cache->nr_segments);
 	return a + 1;
 };
 
-static u64 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
+static u32 calc_nr_segments(struct dm_dev *dev, struct wb_cache *cache)
 {
 	sector_t devsize = dm_devsize(dev);
-	return div64_u64(devsize - (1 << 11), 1 << cache->segment_size_order);
+	return div_u64(devsize - (1 << 11), 1 << cache->segment_size_order);
 }
 
 sector_t calc_mb_start_sector(struct wb_cache *cache,
@@ -171,14 +171,14 @@ bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
 struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
 						u64 segment_id)
 {
-	u64 idx;
-	div64_u64_rem(segment_id - 1, cache->nr_segments, &idx);
+	u32 idx;
+	div_u64_rem(segment_id - 1, cache->nr_segments, &idx);
 	return bigarray_at(cache->segment_header_array, idx);
 }
 
 static int __must_check init_segment_header_array(struct wb_cache *cache)
 {
-	u64 segment_idx, nr_segments = cache->nr_segments;
+	u32 segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
 		make_bigarray(sizeof_segment_header(cache), nr_segments);
 	if (!cache->segment_header_array) {
@@ -466,7 +466,7 @@ static void format_segmd_endio(unsigned long error, void *__context)
  */
 int __must_check format_cache_device(struct dm_dev *dev, struct wb_cache *cache)
 {
-	u64 i, nr_segments = calc_nr_segments(dev, cache);
+	u32 i, nr_segments = calc_nr_segments(dev, cache);
 	struct format_segmd_context context;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
@@ -607,7 +607,7 @@ read_superblock_record(struct superblock_record_device *record,
 
 static int __must_check
 read_segment_header_device(struct segment_header_device *dest,
-			   struct wb_cache *cache, u64 segment_idx)
+			   struct wb_cache *cache, u32 segment_idx)
 {
 	int r = 0;
 	struct dm_io_request io_req;
@@ -742,10 +742,9 @@ static int __must_check recover_cache(struct wb_cache *cache)
 	int r = 0;
 	struct segment_header_device *header;
 	struct segment_header *seg;
-	u64 i, j,
-	    max_id, oldest_id, last_flushed_id, init_segment_id,
-	    oldest_idx, nr_segments = cache->nr_segments,
+	u64 max_id, oldest_id, last_flushed_id, init_segment_id,
 	    header_id, record_id;
+	u32 i, j, oldest_idx, nr_segments = cache->nr_segments;
 
 	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, cache);
@@ -818,7 +817,7 @@ static int __must_check recover_cache(struct wb_cache *cache)
 	 *      last_flushed  init_seg  migrated  last_migrated  flushed
 	 */
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
-		div64_u64_rem(i, nr_segments, &j);
+		div_u64_rem(i, nr_segments, &j);
 		r = read_segment_header_device(header, cache, j);
 		if (r) {
 			WBERR();
@@ -907,8 +906,7 @@ static int __must_check init_rambuf_pool(struct wb_cache *cache)
 	size_t i, j;
 	struct rambuffer *rambuf;
 
-	/* tmp var to avoid 80 cols */
-	u64 nr = div_u64(RAMBUF_POOL_ALLOCATED * 1000000,
+	u32 nr = div_u64(RAMBUF_POOL_ALLOCATED * 1000000,
 			 1 << (cache->segment_size_order + SECTOR_SHIFT));
 	cache->nr_rambuf_pool = nr;
 	cache->rambuf_pool = kmalloc(sizeof(struct rambuffer) * nr,

@@ -235,7 +235,7 @@ struct wb_cache {
 	struct dm_dev *device;
 	struct mutex io_lock;
 	cache_nr nr_caches; /* Const */
-	u64 nr_segments; /* Const */
+	u32 nr_segments; /* Const */
 	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
 	struct bigarray *segment_header_array;
@@ -256,7 +256,7 @@ struct wb_cache {
 	struct segment_header *current_seg;
 
 	struct rambuffer *current_rambuf;
-	u64 nr_rambuf_pool; /* Const */
+	u32 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 
 	atomic64_t last_migrated_segment_id;

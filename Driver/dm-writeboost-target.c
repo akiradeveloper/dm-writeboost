@@ -823,6 +823,11 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 	return 0;
 }
 
+#define ARG_EXIST(n)\
+	if (argc <= (n)) {\
+		goto exit_parse_arg;\
+	}
+
 /*
  * <backing dev> <cache dev> <segment size order>
  */
@@ -884,6 +889,10 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_get_device_cache;
 	}
 
+	/* Optional Parameters */
+
+	cache->segment_size_order = 7;
+	ARG_EXIST(2);
 	if (kstrtoul(argv[2], 10, &tmp)) {
 		r = -EINVAL;
 		goto bad_segment_size_order;
@@ -896,6 +905,16 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	cache->segment_size_order = tmp;
+
+	cache->rambuf_pool_amount = 2048;
+	ARG_EXIST(3);
+	if (kstrtoul(argv[3], 10, &tmp)) {
+		r = -EINVAL;
+		goto bad_rambuf_pool_amount;
+	}
+	cache->rambuf_pool_amount = tmp;
+
+exit_parse_arg:
 
 	r = audit_cache_device(cachedev, cache, &need_format, &allow_format);
 	if (r) {
@@ -953,6 +972,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 bad_resume_cache:
 bad_format_cache:
 bad_audit_cache:
+bad_rambuf_pool_amount:
 bad_segment_size_order:
 	dm_put_device(ti, cachedev);
 bad_get_device_cache:

@@ -14,6 +14,11 @@ TODO:
     - cache_nr should be removed. more clear to use u32 directory.
     - rambuf pool size should be configurable.
     - rambuf pool should be mempool?
+    -- It is not just a mempool. Each has completion.
+    -- But we have still hope.
+       Maybe `mempool_create` can accept allo_fn that
+       and we can define initialization of the object there.
+    - RAM bufffer pool resizable if possible (low priority).
     - nr_segments, nr_rambuf_pool should be u32.
     - lap to u64?
     -- CAN NOT. metablock_device should be less than 14 bytes

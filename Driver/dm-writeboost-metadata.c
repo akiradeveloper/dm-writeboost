@@ -905,8 +905,14 @@ static int __must_check init_rambuf_pool(struct wb_cache *cache)
 	size_t i, j;
 	struct rambuffer *rambuf;
 
-	u32 nr = div_u64(RAMBUF_POOL_ALLOCATED * 1000000,
+	u32 nr = div_u64(cache->rambuf_pool_amount * 1000,
 			 1 << (cache->segment_size_order + SECTOR_SHIFT));
+
+	if (!nr) {
+		WBERR("rambuf must be allocated at least one");
+		return -EINVAL;
+	}
+
 	cache->nr_rambuf_pool = nr;
 	cache->rambuf_pool = kmalloc(sizeof(struct rambuffer) * nr,
 				     GFP_KERNEL);

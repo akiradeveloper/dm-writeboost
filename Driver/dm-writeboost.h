@@ -33,11 +33,6 @@
 	DMINFO("info@%s() " f, __func__, ## args)
 
 /*
- * The amount of RAM buffer pool to pre-allocated.
- */
-#define RAMBUF_POOL_ALLOCATED 64 /* MB */
-
-/*
  * The Detail of the Disk Format
  *
  * Whole:
@@ -247,6 +242,7 @@ struct wb_cache {
 	struct segment_header *current_seg;
 
 	struct rambuffer *current_rambuf;
+	u32 rambuf_pool_amount; /* kB */
 	u32 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 

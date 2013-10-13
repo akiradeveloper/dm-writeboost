@@ -337,6 +337,9 @@ struct wb_device {
 	u8 migrate_threshold;
 
 	atomic64_t nr_dirty_caches;
+
+	wait_queue_head_t blockup_wait_queue;
+	int blockup;
 };
 
 struct flush_job {
@@ -374,20 +377,47 @@ u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
 
+/*
+ * I/O error on either backing or cache
+ * should block up the whole system.
+ * Either reading or writing a device
+ * should not be done if it once returns -EIO.
+ * These devices are untrustable and
+ * we wait for sysadmin to remove the failure cause away.
+ */
+
+#define wait_on_blockup()\
+	do {\
+		BUG_ON(!wb);\
+		if (ACCESS_ONCE(wb->blockup)) {\
+			WBERR("system is blocked up on I/O error. set blockup to 0 after checkup.");\
+			wait_event_interruptible(wb->blockup_wait_queue,\
+						 !ACCESS_ONCE(wb->blockup));\
+		}\
+	} while (0)
+
+/* FIXME error handling may not be correct. */
+#define RETRY(proc)\
+	do {\
+		BUG_ON(!wb);\
+		r = proc;\
+		if (r == -EOPNOTSUPP) {\
+			r = 0;\
+		} else if (r == -EIO) { /* I/O error is critical */\
+			wb->blockup = true;\
+			wait_on_blockup();\
+		} else if (r) {\
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
+		}\
+	} while (r)
+
 int dm_safe_io_internal(
+		struct wb_device*,
 		struct dm_io_request *,
 		unsigned num_regions, struct dm_io_region *,
 		unsigned long *err_bits, bool thread, const char *caller);
-#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
-	dm_safe_io_internal((io_req), (num_regions), (regions), \
-			    (err_bits), (thread), __func__)
-
-void dm_safe_io_retry_internal(
-		struct dm_io_request *,
-		unsigned num_regions, struct dm_io_region *,
-		bool thread, const char *caller);
-#define dm_safe_io_retry(io_req, num_regions, regions, thread) \
-	dm_safe_io_retry_internal((io_req), (num_regions), (regions), \
-				  (thread), __func__)
+#define dm_safe_io(io_req, num_regions, regions, err_bits, thread)\
+		dm_safe_io_internal(wb, (io_req), (num_regions), (regions),\
+				    (err_bits), (thread), __func__);\
 
 sector_t dm_devsize(struct dm_dev *);

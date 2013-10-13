@@ -12,15 +12,19 @@
 
 int flush_proc(void *data)
 {
+	int r;
 	unsigned long flags;
 
 	struct wb_cache *cache = data;
+	struct wb_device *wb = cache->wb;
 
 	while (true) {
 		struct flush_job *job;
 		struct segment_header *seg;
 		struct dm_io_request io_req;
 		struct dm_io_region region;
+
+		wait_on_blockup();
 
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while (list_empty(&cache->flush_queue)) {
@@ -63,7 +67,7 @@ int flush_proc(void *data)
 			.count = (seg->length + 1) << 3,
 		};
 
-		dm_safe_io_retry(&io_req, 1, &region, false);
+		RETRY(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 		atomic64_set(&cache->last_flushed_segment_id, seg->global_id);
 
@@ -76,7 +80,7 @@ int flush_proc(void *data)
 		 */
 		if (!bio_list_empty(&job->barrier_ios)) {
 			struct bio *bio;
-			blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
+			RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
 			while ((bio = bio_list_pop(&job->barrier_ios)))
 				bio_endio(bio, 0);
 
@@ -145,6 +149,7 @@ static void migrate_endio(unsigned long error, void *context)
 static void submit_migrate_io(struct wb_cache *cache,
 			      struct segment_header *seg, size_t k)
 {
+	int r;
 	u8 i, j;
 	size_t a = cache->nr_caches_inseg * k;
 	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
@@ -182,7 +187,7 @@ static void submit_migrate_io(struct wb_cache *cache,
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
-			dm_safe_io_retry(&io_req_w, 1, &region_w, false);
+			RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
 		} else {
 			for (j = 0; j < 8; j++) {
 				bool b = dirty_bits & (1 << j);
@@ -203,8 +208,7 @@ static void submit_migrate_io(struct wb_cache *cache,
 					.sector = mb->sector + j,
 					.count = 1,
 				};
-				dm_safe_io_retry(
-					&io_req_w, 1, &region_w, false);
+				RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
 			}
 		}
 	}
@@ -214,7 +218,9 @@ static void memorize_dirty_state(struct wb_cache *cache,
 				 struct segment_header *seg, size_t k,
 				 size_t *migrate_io_count)
 {
+	int r;
 	u8 i, j;
+	struct wb_device *wb = cache->wb;
 	size_t a = cache->nr_caches_inseg * k;
 	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
 	struct metablock *mb;
@@ -231,7 +237,7 @@ static void memorize_dirty_state(struct wb_cache *cache,
 		.sector = seg->start_sector + (1 << 3),
 		.count = seg->length << 3,
 	};
-	dm_safe_io_retry(&io_req_r, 1, &region_r, false);
+	RETRY(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
 
 	/*
 	 * We take snapshot of the dirtiness in the segments.
@@ -279,6 +285,8 @@ static void cleanup_segment(struct wb_cache *cache, struct segment_header *seg)
 
 static void migrate_linked_segments(struct wb_cache *cache)
 {
+	struct wb_device *wb = cache->wb;
+	int r;
 	struct segment_header *seg;
 	size_t k, migrate_io_count = 0;
 
@@ -334,7 +342,7 @@ migrate_write:
 	 * on this issue by always
 	 * migrating those data persistently.
 	 */
-	blkdev_issue_flush(cache->wb->device->bdev, GFP_NOIO, NULL);
+	RETRY(blkdev_issue_flush(cache->wb->device->bdev, GFP_NOIO, NULL));
 
 	/*
 	 * Discarding the migrated regions
@@ -349,21 +357,24 @@ migrate_write:
 	 * will craze the cache.
 	 */
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		blkdev_issue_discard(cache->device->bdev,
-				     seg->start_sector + (1 << 3),
-				     seg->length << 3,
-				     GFP_NOIO, 0);
+		RETRY(blkdev_issue_discard(cache->device->bdev,
+					   seg->start_sector + (1 << 3),
+					   seg->length << 3,
+					   GFP_NOIO, 0));
 	}
 }
 
 int migrate_proc(void *data)
 {
 	struct wb_cache *cache = data;
+	struct wb_device *wb = cache->wb;
 
 	while (!kthread_should_stop()) {
 		bool allow_migrate;
 		u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
+
+		wait_on_blockup();
 
 		/*
 		 * If urge_migrate is true
@@ -465,6 +476,8 @@ int modulator_proc(void *data)
 
 	while (!kthread_should_stop()) {
 
+		wait_on_blockup();
+
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
 		if (!ACCESS_ONCE(cache->enable_migration_modulator))
@@ -489,6 +502,8 @@ modulator_update:
 
 static void update_superblock_record(struct wb_cache *cache)
 {
+	int r;
+	struct wb_device *wb = cache->wb;
 	struct superblock_record_device o;
 	void *buf;
 	struct dm_io_request io_req;
@@ -512,16 +527,20 @@ static void update_superblock_record(struct wb_cache *cache)
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, 1, &region, false);
+	RETRY(dm_safe_io(&io_req, 1, &region, NULL, false));
 	mempool_free(buf, cache->buf_1_pool);
 }
 
 int recorder_proc(void *data)
 {
 	struct wb_cache *cache = data;
+	struct wb_device *wb = cache->wb;
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
+
+		wait_on_blockup();
+
 		/* sec -> ms */
 		intvl = ACCESS_ONCE(cache->update_record_interval) * 1000;
 
@@ -541,10 +560,15 @@ int recorder_proc(void *data)
 
 int sync_proc(void *data)
 {
+	int r;
 	struct wb_cache *cache = data;
+	struct wb_device *wb = cache->wb;
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
+
+		wait_on_blockup();
+
 		/* sec -> ms */
 		intvl = ACCESS_ONCE(cache->sync_interval) * 1000;
 
@@ -554,7 +578,8 @@ int sync_proc(void *data)
 		}
 
 		flush_current_buffer(cache);
-		blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL);
+
+		RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}

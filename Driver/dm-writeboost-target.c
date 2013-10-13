@@ -35,6 +35,7 @@ static void safe_io_proc(struct work_struct *work)
  * @thread run this operation in other thread to avoid deadlock.
  */
 int dm_safe_io_internal(
+		struct wb_device *wb,
 		struct dm_io_request *io_req,
 		unsigned num_regions, struct dm_io_region *regions,
 		unsigned long *err_bits, bool thread, const char *caller)
@@ -51,6 +52,11 @@ int dm_safe_io_internal(
 
 		INIT_WORK_ONSTACK(&io.work, safe_io_proc);
 
+		/*
+		 * don't go on submitting I/O
+		 * minimizes the risk of breaking the data.
+		 */
+		wait_on_blockup();
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 
@@ -58,6 +64,7 @@ int dm_safe_io_internal(
 		if (err_bits)
 			*err_bits = io.err_bits;
 	} else {
+		wait_on_blockup();
 		err = dm_io(io_req, num_regions, regions, err_bits);
 	}
 
@@ -77,36 +84,6 @@ int dm_safe_io_internal(
 	}
 
 	return err;
-}
-
-void dm_safe_io_retry_internal(
-		struct dm_io_request *io_req,
-		unsigned num_regions, struct dm_io_region *regions,
-		bool thread, const char *caller)
-{
-	int err, count = 0;
-	unsigned long err_bits;
-	dev_t dev;
-
-retry_io:
-	err_bits = 0;
-	err = dm_safe_io_internal(io_req, num_regions, regions, &err_bits,
-				  thread, caller);
-
-	dev = regions->bdev->bd_dev;
-	if (err || err_bits) {
-		count++;
-		WBWARN("%s() io error count(%d)", caller, count);
-		schedule_timeout_interruptible(msecs_to_jiffies(1000));
-		goto retry_io;
-	}
-
-	if (count) {
-		WBWARN("%s() recover from io error rw(%d), sector(%llu), dev(%u:%u)",
-		       caller,
-		       io_req->bi_rw, (unsigned long long) regions->sector,
-		       MAJOR(dev), MINOR(dev));
-	}
 }
 
 sector_t dm_devsize(struct dm_dev *dev)
@@ -333,6 +310,7 @@ static void clear_stat(struct wb_cache *cache)
 static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 		       struct metablock *mb, u8 dirty_bits, bool thread)
 {
+	int r;
 	struct wb_device *wb = cache->wb;
 
 	if (!dirty_bits)
@@ -355,8 +333,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.sector = calc_mb_start_sector(cache, seg, mb->idx),
 			.count = (1 << 3),
 		};
-
-		dm_safe_io_retry(&io_req_r, 1, &region_r, thread);
+		RETRY(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
 
 		io_req_w = (struct dm_io_request) {
 			.client = wb_io_client,
@@ -370,7 +347,8 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
-		dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
+		RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
+
 		mempool_free(buf, cache->buf_8_pool);
 	} else {
 		void *buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO);
@@ -398,7 +376,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 				.sector = src,
 				.count = 1,
 			};
-			dm_safe_io_retry(&io_req_r, 1, &region_r, thread);
+			RETRY(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
 
 			io_req_w = (struct dm_io_request) {
 				.client = wb_io_client,
@@ -412,7 +390,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 				.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
-			dm_safe_io_retry(&io_req_w, 1, &region_w, thread);
+			RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
 		}
 		mempool_free(buf, cache->buf_1_pool);
 	}
@@ -425,6 +403,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 static void migrate_buffered_mb(struct wb_cache *cache,
 				struct metablock *mb, u8 dirty_bits)
 {
+	int r;
 	struct wb_device *wb = cache->wb;
 	u8 i;
 	sector_t offset;
@@ -464,7 +443,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 			.count = 1,
 		};
 
-		dm_safe_io_retry(&io_req, 1, &region, true);
+		RETRY(dm_safe_io(&io_req, 1, &region, NULL, true));
 	}
 	mempool_free(buf, cache->buf_1_pool);
 }
@@ -508,6 +487,9 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 	struct dm_dev *orig = wb->device;
+
+	if (ACCESS_ONCE(wb->blockup))
+		return -EIO;
 
 #if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
@@ -865,6 +847,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	wb->migrate_threshold = 70;
 
+	init_waitqueue_head(&wb->blockup_wait_queue);
+	wb->blockup = false;
 
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 	if (!cache) {
@@ -1017,6 +1001,13 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (kstrtoul(argv[1], 10, &tmp))
 		return -EINVAL;
+
+	if (!strcasecmp(cmd, "blockup")) {
+		if (tmp > 1)
+			return -EINVAL;
+		wb->blockup = tmp;
+		return 0;
+	}
 
 	if (!strcasecmp(cmd, "allow_migrate")) {
 		if (tmp > 1)

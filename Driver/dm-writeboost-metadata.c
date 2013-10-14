@@ -332,12 +332,14 @@ void discard_caches_inseg(struct wb_cache *cache, struct segment_header *seg)
 
 /*----------------------------------------------------------------*/
 
-static int read_superblock_header(struct superblock_header_device *sup,
+static int read_superblock_header(struct wb_cache *cache,
+				  struct superblock_header_device *sup,
 				  struct dm_dev *dev)
 {
 	int r = 0;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
+	struct wb_device *wb = cache->wb;
 
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
@@ -382,7 +384,7 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 {
 	int r = 0;
 	struct superblock_header_device sup;
-	r = read_superblock_header(&sup, dev);
+	r = read_superblock_header(cache, &sup, dev);
 	if (r) {
 		WBERR("read superblock header failed");
 		return r;
@@ -411,6 +413,7 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 static int format_superblock_header(struct dm_dev *dev, struct wb_cache *cache)
 {
 	int r = 0;
+	struct wb_device *wb = cache->wb;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
 
@@ -470,6 +473,7 @@ static void format_segmd_endio(unsigned long error, void *__context)
 int __must_check format_cache_device(struct dm_dev *dev, struct wb_cache *cache)
 {
 	u32 i, nr_segments = calc_nr_segments(dev, cache);
+	struct wb_device *wb = cache->wb;
 	struct format_segmd_context context;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
@@ -573,6 +577,7 @@ read_superblock_record(struct superblock_record_device *record,
 		       struct wb_cache *cache)
 {
 	int r = 0;
+	struct wb_device *wb = cache->wb;
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 
@@ -613,6 +618,7 @@ read_segment_header_device(struct segment_header_device *dest,
 			   struct wb_cache *cache, u32 segment_idx)
 {
 	int r = 0;
+	struct wb_device *wb = cache->wb;
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 	void *buf = kmalloc(1 << 12, GFP_KERNEL);

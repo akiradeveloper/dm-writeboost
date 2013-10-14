@@ -23,5 +23,6 @@ TODO:
     - lap to u64?
     -- CAN NOT. metablock_device should be less than 14 bytes
     - block up in I/O error.
+    -- print process id when blockup?
     - compile in 32 bit env.
     - Run on Raspberry Pi and write report.

@@ -426,6 +426,13 @@ int migrate_proc(void *data)
 			list_add_tail(&seg->migrate_list, &cache->migrate_list);
 		}
 
+		/*
+		 * We insert write barrier here
+		 * to make sure that migrate list
+		 * is complete.
+		 */
+		smp_wmb();
+
 		migrate_linked_segments(cache);
 
 		/*

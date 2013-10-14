@@ -9,8 +9,8 @@ BACKING=/dev/vdd1
 #BACKING=/dev/sdc2
 export BACKING
 
-#CACHE=/dev/vg1/cache3m
-CACHE=/dev/vg1/cache2g
+CACHE=/dev/vg1/cache3m
+#CACHE=/dev/vg1/cache2g
 #CACHE=/dev/sdd2
 export CACHE
 

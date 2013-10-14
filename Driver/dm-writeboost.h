@@ -396,7 +396,6 @@ extern struct dm_io_client *wb_io_client;
 		}\
 	} while (0)
 
-/* FIXME error handling may not be correct. */
 #define RETRY(proc)\
 	do {\
 		BUG_ON(!wb);\
@@ -406,8 +405,11 @@ extern struct dm_io_client *wb_io_client;
 		} else if (r == -EIO) { /* I/O error is critical */\
 			wb->blockup = true;\
 			wait_on_blockup();\
-		} else if (r) {\
+		} else if (r == -ENOMEM) {\
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
+		} else if (r) { \
+			WBERR("please report!! I/O failed but no retry error code %d", r);\
+			r = 0;\
 		}\
 	} while (r)
 

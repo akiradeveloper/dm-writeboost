@@ -15,7 +15,8 @@ dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 
 echo create writeboost-vol ...
 sz=`blockdev --getsize ${BACKING}`
-dmsetup create writeboost-vol --table "0 ${sz} writeboost ${BACKING} ${CACHE} 7"
+# dmsetup create writeboost-vol --table "0 ${sz} writeboost ${BACKING} ${CACHE} 11 8192"
+dmsetup create writeboost-vol --table "0 ${sz} writeboost ${BACKING} ${CACHE}"
 
 if test $? -ne 0; then
     echo "initialization failed. see dmseg"

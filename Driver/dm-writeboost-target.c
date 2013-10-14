@@ -829,7 +829,9 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
 	}
 
 /*
- * <backing dev> <cache dev> <segment size order>
+ * <backing dev> <cache dev>
+ * [segment size order]
+ * [rambuf pool amount]
  */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {

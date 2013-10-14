@@ -70,9 +70,9 @@ int dm_safe_io_internal(
 			eb = (~(unsigned long)0);
 		else
 			eb = *err_bits;
-		WBERR("%s() io error err(%d, %lu), rw(%d), sector(%lu), dev(%u:%u)",
+		WBERR("%s() io error err(%d, %lu), rw(%d), sector(%llu), dev(%u:%u)",
 		      caller, err, eb,
-		      io_req->bi_rw, regions->sector,
+		      io_req->bi_rw, (unsigned long long) regions->sector,
 		      MAJOR(dev), MINOR(dev));
 	}
 
@@ -102,9 +102,9 @@ retry_io:
 	}
 
 	if (count) {
-		WBWARN("%s() recover from io error rw(%d), sector(%lu), dev(%u:%u)",
+		WBWARN("%s() recover from io error rw(%d), sector(%llu), dev(%u:%u)",
 		       caller,
-		       io_req->bi_rw, regions->sector,
+		       io_req->bi_rw, (unsigned long long) regions->sector,
 		       MAJOR(dev), MINOR(dev));
 	}
 }
@@ -1129,7 +1129,7 @@ writeboost_status(
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v = &cache->stat[i];
-			DMEMIT("%lu ", atomic64_read(v));
+			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
 		}
 
 		DMEMIT("%d ", 7);
@@ -1140,7 +1140,7 @@ writeboost_status(
 		DMEMIT("enable_migration_modulator %d ",
 		       cache->enable_migration_modulator ? 1 : 0);
 		DMEMIT("migrate_threshold %d ", wb->migrate_threshold);
-		DMEMIT("nr_cur_batched_migration %lu ",
+		DMEMIT("nr_cur_batched_migration %u ",
 		       cache->nr_cur_batched_migration);
 		DMEMIT("sync_interval %lu ",
 		       cache->sync_interval);

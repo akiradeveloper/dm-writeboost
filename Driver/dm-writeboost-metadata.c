@@ -28,7 +28,10 @@ static u32 nr_elems_in_part(struct bigarray *arr)
 
 static u64 nr_parts(struct bigarray *arr)
 {
-	return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
+	// return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
+	u64 a = arr->nr_elems;
+	u32 b = nr_elems_in_part(arr);
+	return div_u64(a + b - 1, b);
 }
 
 static struct bigarray *make_bigarray(u32 elemsize, u64 nr_elems)

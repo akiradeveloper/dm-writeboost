@@ -591,7 +591,7 @@ read_superblock_record(struct superblock_record_device *record,
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
-	r = dm_safe_io(&io_req, 1, &region, NULL, true);
+	r = dm_safe_io(&io_req, 1, &region, NULL, false);
 
 	kfree(buf);
 

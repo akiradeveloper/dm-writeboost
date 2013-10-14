@@ -512,7 +512,7 @@ static void update_superblock_record(struct wb_cache *cache)
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
-	dm_safe_io_retry(&io_req, 1, &region, true);
+	dm_safe_io_retry(&io_req, 1, &region, false);
 	mempool_free(buf, cache->buf_1_pool);
 }
 

@@ -293,8 +293,8 @@ struct wb_cache {
 	struct list_head migrate_list;
 	u8 *dirtiness_snapshot;
 	void *migrate_buffer;
-	size_t nr_cur_batched_migration;
-	size_t nr_max_batched_migration; /* param */
+	u32 nr_cur_batched_migration;
+	u32 nr_max_batched_migration; /* param */
 
 	/*
 	 * Migration modulator

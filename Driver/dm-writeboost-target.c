@@ -70,9 +70,9 @@ int dm_safe_io_internal(
 			eb = (~(unsigned long)0);
 		else
 			eb = *err_bits;
-		WBERR("%s() io error err(%d, %lu), rw(%d), sector(%lu), dev(%u:%u)",
+		WBERR("%s() io error err(%d, %lu), rw(%d), sector(%llu), dev(%u:%u)",
 		      caller, err, eb,
-		      io_req->bi_rw, regions->sector,
+		      io_req->bi_rw, (unsigned long long) regions->sector,
 		      MAJOR(dev), MINOR(dev));
 	}
 
@@ -104,7 +104,7 @@ retry_io:
 	if (count) {
 		WBWARN("%s() recover from io error rw(%d), sector(%lu), dev(%u:%u)",
 		       caller,
-		       io_req->bi_rw, regions->sector,
+		       io_req->bi_rw, (unsigned long long) regions->sector,
 		       MAJOR(dev), MINOR(dev));
 	}
 }
@@ -1129,7 +1129,7 @@ writeboost_status(
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v = &cache->stat[i];
-			DMEMIT("%lu ", atomic64_read(v));
+			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
 		}
 
 		DMEMIT("%d ", 7);

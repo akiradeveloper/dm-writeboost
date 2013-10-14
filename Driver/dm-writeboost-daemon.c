@@ -51,6 +51,8 @@ int flush_proc(void *data)
 		list_del(&job->flush_queue);
 		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 
+		smp_rmb();
+
 		seg = job->seg;
 
 		io_req = (struct dm_io_request) {
@@ -423,6 +425,13 @@ int migrate_proc(void *data)
 					atomic64_read(&cache->last_migrated_segment_id) + i);
 			list_add_tail(&seg->migrate_list, &cache->migrate_list);
 		}
+
+		/*
+		 * We insert write barrier here
+		 * to make sure that migrate list
+		 * is complete.
+		 */
+		smp_wmb();
 
 		migrate_linked_segments(cache);
 

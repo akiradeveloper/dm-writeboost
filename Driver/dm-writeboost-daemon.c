@@ -362,7 +362,7 @@ int migrate_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		bool allow_migrate;
-		size_t i, nr_mig_candidates, nr_mig, nr_max_batch;
+		u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
 
 		/*

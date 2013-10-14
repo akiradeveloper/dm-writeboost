@@ -51,6 +51,8 @@ int flush_proc(void *data)
 		list_del(&job->flush_queue);
 		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 
+		smp_rmb();
+
 		seg = job->seg;
 
 		io_req = (struct dm_io_request) {

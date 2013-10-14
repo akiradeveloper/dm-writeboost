@@ -150,6 +150,14 @@ static void queue_flushing(struct wb_cache *cache)
 	bio_list_merge(&job->barrier_ios, &cache->barrier_ios);
 	bio_list_init(&cache->barrier_ios);
 
+	/*
+	 * Queuing imcomplete flush job
+	 * will let flush daemon go wild.
+	 * We put write barrier to make sure
+	 * that job is completely initizalied.
+	 */
+	smp_wmb();
+
 	spin_lock_irqsave(&cache->flush_queue_lock, flags);
 	empty = list_empty(&cache->flush_queue);
 	list_add_tail(&job->flush_queue, &cache->flush_queue);

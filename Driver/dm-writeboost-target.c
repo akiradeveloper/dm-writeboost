@@ -77,7 +77,7 @@ int dm_safe_io_internal(
 			eb = (~(unsigned long)0);
 		else
 			eb = *err_bits;
-		WBERR("%s() io error err(%d, %lu), rw(%d), sector(%llu), dev(%u:%u)",
+		WBERR("%s() I/O error err(%d, %lu), rw(%d), sector(%llu), dev(%u:%u)",
 		      caller, err, eb,
 		      io_req->bi_rw, (unsigned long long) regions->sector,
 		      MAJOR(dev), MINOR(dev));
@@ -131,7 +131,7 @@ static void queue_flushing(struct wb_cache *cache)
 	while (atomic_read(&current_seg->nr_inflight_ios)) {
 		n1++;
 		if (n1 == 100)
-			WBWARN();
+			WBWARN("inflight ios remained for current seg");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
@@ -173,7 +173,7 @@ static void queue_flushing(struct wb_cache *cache)
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
 		n2++;
 		if (n2 == 100)
-			WBWARN();
+			WBWARN("inflight ios remained for new seg");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
@@ -835,7 +835,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if (r) {
-		WBERR();
+		WBERR("settting max io len failed");
 		return r;
 	}
 #else
@@ -939,7 +939,7 @@ exit_parse_arg:
 
 	r = resume_cache(cache, cachedev);
 	if (r) {
-		WBERR("%d", r);
+		WBERR("failed to resume cache err(%d)", r);
 		goto bad_resume_cache;
 	}
 	clear_stat(cache);
@@ -1014,6 +1014,7 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 		if (tmp > 1)
 			return -EINVAL;
 		wb->blockup = tmp;
+		wake_up(&wb->blockup_wait_queue);
 		return 0;
 	}
 
@@ -1118,33 +1119,39 @@ writeboost_status(
 		DMEMIT("%llu %llu %llu %llu %llu %u ",
 		       (long long unsigned int)
 		       atomic64_read(&wb->nr_dirty_caches),
-		       (long long unsigned int) cache->nr_segments,
+		       (long long unsigned int)
+		       cache->nr_segments,
 		       (long long unsigned int)
 		       atomic64_read(&cache->last_migrated_segment_id),
 		       (long long unsigned int)
 		       atomic64_read(&cache->last_flushed_segment_id),
-		       (long long unsigned int) cache->current_seg->global_id,
-		       (unsigned int) cache->cursor);
+		       (long long unsigned int)
+		       cache->current_seg->global_id,
+		       (unsigned int)
+		       cache->cursor);
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v = &cache->stat[i];
 			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
 		}
 
-		DMEMIT("%d ", 7);
+		DMEMIT("%d ", 8);
 		DMEMIT("barrier_deadline_ms %lu ",
 		       cache->barrier_deadline_ms);
 		DMEMIT("allow_migrate %d ",
 		       cache->allow_migrate ? 1 : 0);
 		DMEMIT("enable_migration_modulator %d ",
 		       cache->enable_migration_modulator ? 1 : 0);
-		DMEMIT("migrate_threshold %d ", wb->migrate_threshold);
+		DMEMIT("migrate_threshold %d ",
+		       wb->migrate_threshold);
 		DMEMIT("nr_cur_batched_migration %u ",
 		       cache->nr_cur_batched_migration);
 		DMEMIT("sync_interval %lu ",
 		       cache->sync_interval);
-		DMEMIT("update_record_interval %lu",
+		DMEMIT("update_record_interval %lu ",
 		       cache->update_record_interval);
+		DMEMIT("blockup %d",
+		       wb->blockup);
 		break;
 
 	case STATUSTYPE_TABLE:
@@ -1188,13 +1195,13 @@ static int __init writeboost_module_init(void)
 	safe_io_wq = alloc_workqueue("safeiowq",
 				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	if (!safe_io_wq) {
-		WBERR();
+		WBERR("failed to alloc safe_io_wq");
 		goto bad_wq;
 	}
 
 	wb_io_client = dm_io_client_create();
 	if (IS_ERR(wb_io_client)) {
-		WBERR();
+		WBERR("failed to alloc wb_io_client");
 		r = PTR_ERR(wb_io_client);
 		goto bad_io_client;
 	}

@@ -28,7 +28,6 @@ static u32 nr_elems_in_part(struct bigarray *arr)
 
 static u64 nr_parts(struct bigarray *arr)
 {
-	// return dm_div_up(arr->nr_elems, nr_elems_in_part(arr));
 	u64 a = arr->nr_elems;
 	u32 b = nr_elems_in_part(arr);
 	return div_u64(a + b - 1, b);
@@ -41,7 +40,7 @@ static struct bigarray *make_bigarray(u32 elemsize, u64 nr_elems)
 
 	struct bigarray *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
-		WBERR();
+		WBERR("failed to alloc arr");
 		return NULL;
 	}
 
@@ -49,7 +48,7 @@ static struct bigarray *make_bigarray(u32 elemsize, u64 nr_elems)
 	arr->nr_elems = nr_elems;
 	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
 	if (!arr->parts) {
-		WBERR();
+		WBERR("failed to alloc parts");
 		goto bad_alloc_parts;
 	}
 
@@ -57,7 +56,7 @@ static struct bigarray *make_bigarray(u32 elemsize, u64 nr_elems)
 		part = arr->parts + i;
 		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
 		if (!part->memory) {
-			WBERR();
+			WBERR("failed to alloc part memory");
 			for (j = 0; j < i; j++) {
 				part = arr->parts + j;
 				kfree(part->memory);
@@ -364,7 +363,7 @@ static int read_superblock_header(struct wb_cache *cache,
 	kfree(buf);
 
 	if (r) {
-		WBERR();
+		WBERR("io failed in reading superblock header");
 		return r;
 	}
 

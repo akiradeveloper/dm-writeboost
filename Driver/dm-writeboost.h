@@ -22,14 +22,14 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
-#define wbdebug(f, args...) \
+#define wbdebug(f, args...)\
 	DMINFO("debug@%s() L.%d" f, __func__, __LINE__, ## args)
 
-#define WBERR(f, args...) \
+#define WBERR(f, args...)\
 	DMERR("err@%s() " f, __func__, ## args)
-#define WBWARN(f, args...) \
+#define WBWARN(f, args...)\
 	DMWARN("warn@%s() " f, __func__, ## args)
-#define WBINFO(f, args...) \
+#define WBINFO(f, args...)\
 	DMINFO("info@%s() " f, __func__, ## args)
 
 /*
@@ -393,6 +393,7 @@ extern struct dm_io_client *wb_io_client;
 			WBERR("system is blocked up on I/O error. set blockup to 0 after checkup.");\
 			wait_event_interruptible(wb->blockup_wait_queue,\
 						 !ACCESS_ONCE(wb->blockup));\
+			WBINFO("reactivated after blockup");\
 		}\
 	} while (0)
 

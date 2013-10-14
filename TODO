@@ -25,4 +25,5 @@ TODO:
     - block up in I/O error.
     -- print process id when blockup?
     - compile in 32 bit env.
+    - should wait "un"interruptible on blockup
     - Run on Raspberry Pi and write report.

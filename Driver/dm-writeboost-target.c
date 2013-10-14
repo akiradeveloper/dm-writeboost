@@ -102,7 +102,7 @@ retry_io:
 	}
 
 	if (count) {
-		WBWARN("%s() recover from io error rw(%d), sector(%lu), dev(%u:%u)",
+		WBWARN("%s() recover from io error rw(%d), sector(%llu), dev(%u:%u)",
 		       caller,
 		       io_req->bi_rw, (unsigned long long) regions->sector,
 		       MAJOR(dev), MINOR(dev));
@@ -1140,7 +1140,7 @@ writeboost_status(
 		DMEMIT("enable_migration_modulator %d ",
 		       cache->enable_migration_modulator ? 1 : 0);
 		DMEMIT("migrate_threshold %d ", wb->migrate_threshold);
-		DMEMIT("nr_cur_batched_migration %lu ",
+		DMEMIT("nr_cur_batched_migration %u ",
 		       cache->nr_cur_batched_migration);
 		DMEMIT("sync_interval %lu ",
 		       cache->sync_interval);

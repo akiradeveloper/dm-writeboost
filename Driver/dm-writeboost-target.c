@@ -1149,7 +1149,7 @@ writeboost_status(
 		DMEMIT("update_record_interval %lu ",
 		       cache->update_record_interval);
 		DMEMIT("blockup %d",
-		       wb->blockup);
+		       wb->blockup ? 1 : 0);
 		break;
 
 	case STATUSTYPE_TABLE:

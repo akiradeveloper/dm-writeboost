@@ -1,7 +1,0 @@
-STAGING - LOG STRUCTURED CACHING
-M:	Greg Kroah-Hartman <gregkh@linuxfoundation.org>
-M:	Akira Hayakawa <ruby.wktk@gmail.com>
-S:	Maintained
-L:	dm-devel@redhat.com
-W:	https://github.com/akiradeveloper/dm-writeboost.git
-F:	drivers/staging/dm-writeboost/

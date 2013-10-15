@@ -1,8 +1,0 @@
-config DM_WRITEBOOST
-	tristate "Log-structured Caching (EXPERIMENTAL)"
-	depends on BLK_DEV_DM
-	default n
-	---help---
-	  A cache layer that
-	  batches random writes into a big sequential write
-	  to a cache device in Log-structured manner.

@@ -10,6 +10,7 @@
 
 /*----------------------------------------------------------------*/
 
+static void update_barrier_deadline(struct wb_cache *);
 int flush_proc(void *data)
 {
 	int r;
@@ -86,8 +87,7 @@ int flush_proc(void *data)
 			while ((bio = bio_list_pop(&job->barrier_ios)))
 				bio_endio(bio, 0);
 
-			mod_timer(&cache->barrier_deadline_timer,
-				  msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
+			update_barrier_deadline(cache);
 		}
 
 		mempool_free(job, cache->flush_job_pool);
@@ -97,6 +97,12 @@ int flush_proc(void *data)
 
 /*----------------------------------------------------------------*/
 
+static void update_barrier_deadline(struct wb_cache *cache)
+{
+	mod_timer(&cache->barrier_deadline_timer,
+		  jiffies + msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
+}
+
 void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
 {
 	mutex_lock(&cache->io_lock);
@@ -104,8 +110,7 @@ void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
 	mutex_unlock(&cache->io_lock);
 
 	if (!timer_pending(&cache->barrier_deadline_timer))
-		mod_timer(&cache->barrier_deadline_timer,
-			  msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
+		update_barrier_deadline(cache);
 }
 
 void barrier_deadline_proc(unsigned long data)

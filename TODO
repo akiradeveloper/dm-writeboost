@@ -27,3 +27,13 @@ TODO:
     - compile in 32 bit env.
     - should wait "un"interruptible on blockup
     - Run on Raspberry Pi and write report.
+    - On KVM environment with virtio disks attached,
+      FLUSH/FUA requests are not tested because these
+      devices doesn't supports these type of I/Os.
+      iterate_devices is not appropriate or
+      always accept them by mark flush_suported.
+      dd conv=fsync to write writeboost volume
+      can reproduce this problem.
+    - Something wrong with deferred barrier implementation.
+      timeout for schecduling a deadline worker
+      twice by dding sync 1 sector. on KVM, 3.12-rc1

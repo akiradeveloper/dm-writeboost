@@ -31,7 +31,8 @@ TODO:
       FLUSH/FUA requests are not tested because these
       devices doesn't supports these type of I/Os.
       iterate_devices is not appropriate or
-      always accept them by mark flush_suported.
+      always accept them by mark flush_suported
+      (flush_supported is since 3.6).
       dd conv=fsync to write writeboost volume
       can reproduce this problem.
     - Something wrong with deferred barrier implementation.

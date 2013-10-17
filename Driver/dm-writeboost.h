@@ -15,6 +15,7 @@
 #include <linux/version.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 #include <linux/mutex.h>
 #include <linux/kthread.h>
 #include <linux/sched.h>

@@ -343,8 +343,7 @@ static int read_superblock_header(struct wb_cache *cache,
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
 		WBERR("failed to alloc buffer");
-		r = -ENOMEM;
-		goto bad_alloc_buf;
+		return -ENOMEM;
 	}
 
 	io_req_sup = (struct dm_io_request) {
@@ -360,7 +359,6 @@ static int read_superblock_header(struct wb_cache *cache,
 		.count = 1,
 	};
 	r = dm_safe_io(&io_req_sup, 1, &region_sup, NULL, false);
-
 	if (r) {
 		WBERR("io failed in reading superblock header");
 		goto bad_io;
@@ -370,7 +368,6 @@ static int read_superblock_header(struct wb_cache *cache,
 
 bad_io:
 	kfree(buf);
-bad_alloc_buf:
 
 	return r;
 }
@@ -602,15 +599,15 @@ read_superblock_record(struct superblock_record_device *record,
 		.count = 1,
 	};
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
-
-	kfree(buf);
-
 	if (r) {
 		WBERR();
-		return r;
+		goto bad_io;
 	}
 
 	memcpy(record, buf, sizeof(*record));
+
+bad_io:
+	kfree(buf);
 
 	return r;
 }
@@ -642,15 +639,15 @@ read_segment_header_device(struct segment_header_device *dest,
 		.count = (1 << 3),
 	};
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
-
-	kfree(buf);
-
 	if (r) {
 		WBERR();
-		return r;
+		goto bad_io;
 	}
 
 	memcpy(dest, buf, sizeof_segment_header_device(cache));
+
+bad_io:
+	kfree(buf);
 
 	return r;
 }

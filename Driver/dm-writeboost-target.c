@@ -949,6 +949,22 @@ exit_parse_arg:
 	ti->per_bio_data_size = sizeof(struct per_bio_data);
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
+	/*
+	 * Any write barrier requests should
+	 * not be ignored for any reason.
+	 *
+	 * That barriers are accepted for
+	 * any combination of underlying devices
+	 * makes it easier to find bug regarding
+	 * the barriers.
+	 *
+	 * dm-cache and dm-thin also turned
+	 * this flag on.
+	 */
+	ti->flush_supported = true;
+#endif
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;

@@ -178,17 +178,12 @@ struct segment_header_device {
 	/* - FROM ------------------------------------ */
 	__le64 global_id;
 	/*
-	 * How many cache lines in this segments
-	 * should be counted in resuming.
-	 */
-	u8 length;
-	/*
 	 * On what lap in rorating on cache device
 	 * used to find the head and tail in the
 	 * segments in cache device.
 	 */
 	__le32 lap;
-	u8 padding[512 - (8 + 1 + 4)]; /* 512B */
+	u8 padding[512 - (8 + 4)]; /* 512B */
 	/* - TO -------------------------------------- */
 	struct metablock_device mbarr[0]; /* 16B * N */
 } __packed;

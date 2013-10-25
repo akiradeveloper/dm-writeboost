@@ -664,9 +664,8 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 	u32 i, tmp32;
 
 	dest->global_id = cpu_to_le64(src->global_id);
-	dest->length = src->length;
-	dest->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
 
+	/* just a tiny validation */
 	left = src->length - 1;
 	div_u64_rem(cache->cursor, cache->nr_caches_inseg, &tmp32);
 	right = tmp32;
@@ -675,9 +674,10 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
 		struct metablock_device *mbdev = &dest->mbarr[i];
+
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->lap = dest->lap;
+		mbdev->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
 	}
 }
 
@@ -690,18 +690,48 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 					    struct segment_header_device *src)
 {
 	u32 i;
-	struct segment_header *seg =
-		get_segment_header_by_id(cache, src->global_id);
-	seg->length = src->length;
+	u64 id = le64_to_cpu(src->global_id);
+	struct segment_header *seg = get_segment_header_by_id(cache, id);
+	u32 seg_lap = calc_segment_lap(cache, id);
 
 	INIT_COMPLETION(seg->migrate_done);
 
-	for (i = 0 ; i < src->length; i++) {
+	for (i = 0 ; i < cache->nr_caches_inseg; i++) {
 		struct lookup_key key;
 		struct ht_head *head;
 		struct metablock *found, *mb = seg->mb_array + i;
 		struct metablock_device *mbdev = &src->mbarr[i];
 
+		/*
+		 * lap is kind of checksum.
+		 * If the checksum are the same between
+		 * original (seg_lap) and the dumped on
+		 * the metadata the metadata is considered valid.
+		 *
+		 * This algorithm doesn't care the case
+		 * metadata are partially written but it is OK.
+		 *
+		 * The cases are splitted by the volatility of
+		 * the buffer.
+		 *
+		 * If the buffer is volatile, ACK to the barrier
+		 * will only be done after completion of flushing
+		 * to the cache device. Therefore, these metadata
+		 * lost are ignored doesn't violate the semantics.
+		 *
+		 * If the buffer is non-volatile, ACK to the barrier
+		 * is already done. However, only after FUA write to
+		 * the cache device the buffer is ready to be reused.
+		 * Therefore, metadata is not lost and is still on
+		 * the buffer.
+		 */
+		if (le32_to_cpu(mbdev->lap) != seg_lap)
+			break;
+
+		/*
+		 * How could this be happened? But no harm.
+		 * We only recover dirty caches.
+		 */
 		if (!mbdev->dirty_bits)
 			continue;
 
@@ -721,27 +751,6 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 			ht_del(cache, found);
 		ht_register(cache, head, &key, mb);
 	}
-}
-
-/*
- * If only if the lap attributes
- * are the same between header and all the metablock,
- * the segment is judged to be flushed correctly
- * and then merge into the runtime structure.
- * Otherwise, ignored.
- */
-static bool checkup_atomicity(struct segment_header_device *header)
-{
-	u8 i;
-	u32 a = le32_to_cpu(header->lap), b;
-	for (i = 0; i < header->length; i++) {
-		struct metablock_device *o;
-		o = header->mbarr + i;
-		b = le32_to_cpu(o->lap);
-		if (a != b)
-			return false;
-	}
-	return true;
 }
 
 static int __must_check recover_cache(struct wb_cache *cache)
@@ -841,20 +850,6 @@ static int __must_check recover_cache(struct wb_cache *cache)
 		 */
 		if (header_id <= last_flushed_id)
 			break;
-
-		if (unlikely(!checkup_atomicity(header))) {
-			/*
-			 * FIXME
-			 * This header is not valid
-			 * and following metadata discarded.
-			 * Other information such as
-			 * last_migrated_segment_id
-			 * should be adjusted.
-			 */
-			WBWARN("header atomicity broken id %llu",
-			       header_id);
-			break;
-		}
 
 		/*
 		 * Now the header is proven valid.

@@ -2,16 +2,21 @@
 
 export WB_ROOT=`pwd`
 
-#BACKING=/dev/vg2/back18g
-#BACKING=/dev/vdd
+# Setup this file
+# so as to fit your environment.
+
+# BACKING=/dev/vg2/back18g
+# BACKING=/dev/vdd
 BACKING=/dev/vdd1
-#BACKING=/dev/vg2/back40g
-#BACKING=/dev/sdc2
+# BACKING=/dev/vg2/back40g
+# BACKING=/dev/sdc2
+# BACKING=/dev/sda2
 export BACKING
 
 CACHE=/dev/vg1/cache3m
-#CACHE=/dev/vg1/cache2g
-#CACHE=/dev/sdd2
+# CACHE=/dev/vg1/cache2g
+# CACHE=/dev/sdd2
+# CACHE=/dev/sda1
 export CACHE
 
 echo BACKING: ${BACKING}

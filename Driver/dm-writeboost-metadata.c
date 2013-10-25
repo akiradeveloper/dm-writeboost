@@ -342,8 +342,9 @@ static int read_superblock_header(struct wb_cache *cache,
 
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
-		WBERR();
-		return -ENOMEM;
+		WBERR("failed to alloc buffer");
+		r = -ENOMEM;
+		goto bad_alloc_buf;
 	}
 
 	io_req_sup = (struct dm_io_request) {
@@ -360,16 +361,18 @@ static int read_superblock_header(struct wb_cache *cache,
 	};
 	r = dm_safe_io(&io_req_sup, 1, &region_sup, NULL, false);
 
-	kfree(buf);
-
 	if (r) {
 		WBERR("io failed in reading superblock header");
-		return r;
+		goto bad_io;
 	}
 
 	memcpy(sup, buf, sizeof(*sup));
 
-	return 0;
+bad_io:
+	kfree(buf);
+bad_alloc_buf:
+
+	return r;
 }
 
 /*

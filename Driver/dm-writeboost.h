@@ -365,7 +365,6 @@ struct per_bio_data {
 	void *ptr;
 };
 #endif
-#endif
 
 /*----------------------------------------------------------------*/
 
@@ -428,3 +427,7 @@ int dm_safe_io_internal(
 				    (err_bits), (thread), __func__);\
 
 sector_t dm_devsize(struct dm_dev *);
+
+/*----------------------------------------------------------------*/
+
+#endif

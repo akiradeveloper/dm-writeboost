@@ -73,7 +73,7 @@ writeboost <backing dev> <cache dev>
 backing dev        : slow device holding original data blocks.
 cache dev          : fast device holding cached data and its metadata.
 segment size order : the size of RAM buffer
-                     1 << n (sectors), 4 <= n <= 11
+                     1 << n (sectors), 4 <= n <= 10
                      default 7
 rambuf pool amount : The amount of the RAM buffer pool (kB).
                      Too fewer amount may cause waiting for new buffer

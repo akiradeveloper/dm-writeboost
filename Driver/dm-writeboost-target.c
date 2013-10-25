@@ -892,9 +892,9 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		r = -EINVAL;
 		goto bad_segment_size_order;
 	}
-	if (tmp < 4 || 11 < tmp) {
+	if (tmp < 4 || 10 < tmp) {
 		r = -EINVAL;
-		WBERR("segment size order out of range. not 4 <= %lu <= 11", tmp);
+		WBERR("segment size order out of range. not 4 <= %lu <= 10", tmp);
 		goto bad_segment_size_order;
 	}
 	cache->segment_size_order = tmp;

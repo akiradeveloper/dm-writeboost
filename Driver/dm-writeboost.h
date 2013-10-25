@@ -45,7 +45,7 @@
  * superblock header (512B) + ... + superblock record (512B)
  *
  * Segment:
- * segment_header_device +
+ * segment_header_device (512B) +
  * metablock_device * nr_caches_inseg +
  * (aligned first 4KB region)
  * data[0] (4KB) + data{1] + ... + data{nr_cache_inseg - 1]
@@ -104,13 +104,16 @@ struct metablock {
 
 /*
  * On-disk metablock
+ *
+ * Its size must be a factor of one sector
+ * to avoid starddling neighboring two sectors.
+ * Facebook's flashcache does the same thing.
  */
 struct metablock_device {
 	__le64 sector;
-
 	u8 dirty_bits;
-
 	__le32 lap;
+	u8 padding[16 - (8 + 1 + 4)];
 } __packed;
 
 #define SZ_MAX (~(size_t)0)
@@ -172,7 +175,7 @@ struct segment_header {
  * Must be at most 4KB large.
  */
 struct segment_header_device {
-	/* - FROM - At most512 byte for atomicity. --- */
+	/* - FROM ------------------------------------ */
 	__le64 global_id;
 	/*
 	 * How many cache lines in this segments
@@ -185,9 +188,9 @@ struct segment_header_device {
 	 * segments in cache device.
 	 */
 	__le32 lap;
+	u8 padding[512 - (8 + 1 + 4)]; /* 512B */
 	/* - TO -------------------------------------- */
-	/* This array must locate at the tail */
-	struct metablock_device mbarr[0];
+	struct metablock_device mbarr[0]; /* 16B * N */
 } __packed;
 
 struct rambuffer {
@@ -362,7 +365,6 @@ struct per_bio_data {
 	void *ptr;
 };
 #endif
-#endif
 
 /*----------------------------------------------------------------*/
 
@@ -425,3 +427,7 @@ int dm_safe_io_internal(
 				    (err_bits), (thread), __func__);\
 
 sector_t dm_devsize(struct dm_dev *);
+
+/*----------------------------------------------------------------*/
+
+#endif

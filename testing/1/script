@@ -1,7 +1,10 @@
 #!/bin/sh
 
 mkfs.xfs -f /dev/mapper/writeboost-vol
-#OPTIONS="-o nobarrier"
+# OPTIONS="-o nobarrier"
+
+# mkfs.ext4 /dev/mapper/writeboost-vol
+
 mount ${OPTIONS} /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362

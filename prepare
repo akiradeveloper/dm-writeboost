@@ -2,6 +2,8 @@
 
 . ./config
 
+echo 7 > /proc/sys/kernel/printk
+
 # Discard the whole cache device before formatting
 # blkdiscard command is included in upstream util-linux.
 # But don't worry, without discarding, dm-lc works correctly.
@@ -24,9 +26,12 @@ if test $? -ne 0; then
 fi
 
 echo configure things for tests ...
+# dmsetup message writeboost-vol 0 barrier_deadline_ms 1000
 # dmsetup message writeboost-vol 0 enable_migration_modulator 1
 # dmsetup message writeboost-vol 0 update_record_interval 2
 # dmsetup message writeboost-vol 0 sync_interval 3
 
+# To disable migration except urgent ones
+# enable these two lines.
 # dmsetup message writeboost-vol 0 enable_migration_modulator 0
 # dmsetup message writeboost-vol 0 allow_migrate 0

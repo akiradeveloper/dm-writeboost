@@ -468,18 +468,12 @@ static sector_t calc_cache_alignment(struct wb_cache *cache,
 	return div_u64(bio_sector, 1 << 3) * (1 << 3);
 }
 
-static int writeboost_map(struct dm_target *ti, struct bio *bio
-#if LINUX_VERSION_CODE < PER_BIO_VERSION
-			, union map_info *map_context
-#endif
-		  )
+static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	unsigned long flags;
 	struct segment_header *uninitialized_var(seg);
 	struct metablock *mb, *new_mb;
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context;
-#endif
 	sector_t bio_count, s;
 	u8 bio_offset;
 	u32 tmp32;
@@ -499,9 +493,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio
 	if (ACCESS_ONCE(wb->blockup))
 		return -EIO;
 
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
-#endif
 	map_context->ptr = NULL;
 
 	/*
@@ -793,17 +785,12 @@ write_on_buffer:
 	return DM_MAPIO_SUBMITTED;
 }
 
-static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error
-#if LINUX_VERSION_CODE < PER_BIO_VERSION
-			   , union map_info *map_context
-#endif
-		     )
+static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 {
 	struct segment_header *seg;
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	struct per_bio_data *map_context =
 		dm_per_bio_data(bio, ti->per_bio_data_size);
-#endif
+
 	if (!map_context->ptr)
 		return 0;
 
@@ -832,15 +819,11 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	struct dm_dev *origdev, *cachedev;
 	unsigned long tmp;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if (r) {
 		WBERR("settting max io len failed");
 		return r;
 	}
-#else
-	ti->split_io = (1 << 3);
-#endif
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
@@ -945,11 +928,8 @@ exit_parse_arg:
 	wb->ti = ti;
 	ti->private = wb;
 
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
 	ti->per_bio_data_size = sizeof(struct per_bio_data);
-#endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
 	/*
 	 * Any write barrier requests should
 	 * not be ignored for any reason.
@@ -963,15 +943,9 @@ exit_parse_arg:
 	 * this flag on.
 	 */
 	ti->flush_supported = true;
-#endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
-#else
-	ti->num_flush_requests = 1;
-	ti->num_discard_requests = 1;
-#endif
 
 	ti->discard_zeroes_data_unsupported = true;
 
@@ -1109,19 +1083,8 @@ static void writeboost_io_hints(struct dm_target *ti,
 	blk_limits_io_opt(limits, 4096);
 }
 
-static
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
-void
-#else
-int
-#endif
-writeboost_status(
-		struct dm_target *ti, status_type_t type,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0)
-		unsigned flags,
-#endif
-		char *result,
-		unsigned maxlen)
+static void writeboost_status(struct dm_target *ti, status_type_t type,
+			      unsigned flags, char *result, unsigned maxlen)
 {
 	unsigned int sz = 0;
 	struct wb_device *wb = ti->private;
@@ -1172,9 +1135,6 @@ writeboost_status(
 		DMEMIT("%s %s", wb->device->name, wb->cache->device->name);
 		break;
 	}
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 8, 0)
-	return 0;
-#endif
 }
 
 static struct target_type writeboost_target = {

@@ -302,13 +302,7 @@ struct metablock *ht_lookup(struct wb_cache *cache,
 {
 	struct metablock *mb, *found = NULL;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)
-	hlist_for_each_entry(mb, &head->ht_list, ht_list)
-#else
-	struct hlist_node *pos;
-	hlist_for_each_entry(mb, pos, &head->ht_list, ht_list)
-#endif
-	{
+	hlist_for_each_entry(mb, &head->ht_list, ht_list) {
 		if (mb_hit(mb, key)) {
 			found = mb;
 			break;

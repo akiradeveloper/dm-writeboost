@@ -354,12 +354,9 @@ struct flush_job {
 	struct bio_list barrier_ios;
 };
 
-#define PER_BIO_VERSION KERNEL_VERSION(3, 8, 0)
-#if LINUX_VERSION_CODE >= PER_BIO_VERSION
 struct per_bio_data {
 	void *ptr;
 };
-#endif
 
 /*----------------------------------------------------------------*/
 

@@ -1,28 +1,37 @@
 # DM-WRITEBOOST
 **L**og-structured **C**aching for Linux
 
+## Notice
+Guys, we are strongly heading toward upstream.
+We won't look back anymore.
+
+All supports before 3.12 are off.
+porting-final tag is the last moment
+that this kernel module was portable.
+If you want to test the impact of writeboost
+in your environment please use the revision.
+
+Sorry and thanks for those having tested
+in environments. writeboost will be in the main tree, I promise.
+
 ## Overview
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  
-DCD is an extra logical block layer that 
-gathers in-coming small random writes 
-into a big sequential write
-which then performs high throughput and low latency. See also the DCD paper [1].  
+DCD, originally implemented in Solaris, is an extra logical block layer that gathers in-coming small random writes 
+into a big sequential write which then performs high throughput and low latency.
+See also the DCD papers [1] and its recent application [2].
 
 ## Features
-* Log-structured caching principle ensures the durability to server crash.  
-* Unlike bcache, dm-writeboost is a complete loadable kernel module.  
-* Fully supports REQ_FLUSH/REQ_FUA operations to emulate block device.  
-* Kernel versions since 3.2 are widely supported.  
-* Capable of performing 375kiops(1.5GB/sec) random writes with a fast enough cache.  
-* Concurrency not discussed in DCD paper is implemented.  
-* Auxiliary daemon autonomously controls the behavior of the kernel module.
+* Capable of performing 375kiops (1.5GB/sec) random writes with a fast enough cache.  
+* Maximizes the lifetime of SSD device.
+* Log-structured property ensures perfect metadata durability.
+* (Future Work) Applies persistent memory to process write barriers more effectively.
 
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
+* [2] G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)
 
 ## Quick Start
-You are provided with nice scripts for quick starting.  
-Assuming you have expanded dm-writeboost under /home/akira,
+You are ready for nice scripts for quick starting.  
 
 (1) [common] Configure device paths for backing store and cache device.  
 
@@ -49,8 +58,8 @@ If you will use the portable module in this repo,
 
 	# source prepare  
 
-and you are now ready for `/dev/mapper/perflv` powered by dm-writeboost.  
-Try testing and performance and see what is happening.  
+and you are now ready for `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
+Try testing and performance and see what's happening.  
 
 ## Contributing to dm-writeboost
 Any type of contribution is all welcome.  

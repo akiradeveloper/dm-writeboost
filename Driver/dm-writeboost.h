@@ -337,8 +337,28 @@ struct wb_device {
 
 	atomic64_t nr_dirty_caches;
 
-	wait_queue_head_t blockup_wait_queue;
+	/*
+	 * blockup is true makes
+	 * all the daemons sleep and
+	 * device return EIO on any requests.
+	 * These daemones are sleeping
+	 * on the wait_queue.
+	 *
+	 * wait_on_blockup macros is used
+	 * as a guard to ensure
+	 * any process doesn't submit I/O
+	 * in case blockup is true.
+	 *
+	 * This variable is set true in
+	 * these two cases
+	 * 1. Some underlying devices return EIO
+	 *    and we must immediately blockup the
+	 *    device to avoid further damage.
+	 * 2. When device is suspended to stop
+	 *    all the daemons' activities.
+	 */
 	int blockup;
+	wait_queue_head_t blockup_wait_queue;
 };
 
 struct flush_job {

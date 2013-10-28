@@ -31,6 +31,7 @@ int flush_proc(void *data)
 		while (list_empty(&cache->flush_queue)) {
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 
+			wait_on_blockup();
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 
 			/*
@@ -592,7 +593,6 @@ int sync_proc(void *data)
 		}
 
 		flush_current_buffer(cache);
-
 		RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));

@@ -219,7 +219,7 @@ static void queue_current_buffer(struct wb_cache *cache)
 
 /*
  * flush all the dirty data at a moment
- * but NOT persistently.
+ * but _NOT_ persistently.
  * Clean up the writes before termination
  * is an example of the usecase.
  */
@@ -981,6 +981,30 @@ static void writeboost_dtr(struct dm_target *ti)
 	kfree(wb);
 }
 
+static void writeboost_postsuspend(struct dm_target *ti)
+{
+	int r;
+	struct wb_device *wb = ti->private;
+	struct wb_cache *cache = wb->cache;
+
+	/*
+	 * Clean up all the dirty writes
+	 * prior to stop daemons.
+	 */
+	flush_current_buffer(cache);
+	RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
+
+	wb->blockup = true;
+	wake_up_all(&wb->blockup_wait_queue);
+}
+
+static void writeboost_resume(struct dm_target *ti)
+{
+	struct wb_device *wb = ti->private;
+	wb->blockup = false;
+	wake_up_all(&wb->blockup_wait_queue);
+}
+
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct wb_device *wb = ti->private;
@@ -1002,7 +1026,7 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 		if (tmp > 1)
 			return -EINVAL;
 		wb->blockup = tmp;
-		wake_up(&wb->blockup_wait_queue);
+		wake_up_all(&wb->blockup_wait_queue);
 		return 0;
 	}
 
@@ -1142,9 +1166,11 @@ static struct target_type writeboost_target = {
 	.version = {0, 1, 0},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
+	.end_io = writeboost_end_io,
 	.ctr = writeboost_ctr,
 	.dtr = writeboost_dtr,
-	.end_io = writeboost_end_io,
+	.postsuspend = writeboost_postsuspend,
+	.resume = writeboost_resume,
 	.merge = writeboost_merge,
 	.message = writeboost_message,
 	.status = writeboost_status,

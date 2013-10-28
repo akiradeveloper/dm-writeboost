@@ -46,4 +46,6 @@ Some of the items addressed are already resolved.
 - Change recover algorithm. length in semgent_header_device
   should removed.
 - suspend/resume. postsuspend and resume should be implemented.
-  blockup (::int) and stop_daemons (::int)
+- MUST stop all daemons prior to blockup requests.
+  stop variable introduced.
+  don't ACK any io after once ack EIO should be ruled.

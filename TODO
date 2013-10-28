@@ -45,3 +45,5 @@ Some of the items addressed are already resolved.
   Make it 16 bytes on disk.
 - Change recover algorithm. length in semgent_header_device
   should removed.
+- suspend/resume. postsuspend and resume should be implemented.
+  blockup (::int) and stop_daemons (::int)

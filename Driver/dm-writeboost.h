@@ -23,14 +23,14 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
-#define wbdebug(f, args...)\
+#define wbdebug(f, args...) \
 	DMINFO("debug@%s() L.%d" f, __func__, __LINE__, ## args)
 
-#define WBERR(f, args...)\
+#define WBERR(f, args...) \
 	DMERR("err@%s() " f, __func__, ## args)
-#define WBWARN(f, args...)\
+#define WBWARN(f, args...) \
 	DMWARN("warn@%s() " f, __func__, ## args)
-#define WBINFO(f, args...)\
+#define WBINFO(f, args...) \
 	DMINFO("info@%s() " f, __func__, ## args)
 
 /*
@@ -381,32 +381,32 @@ extern struct dm_io_client *wb_io_client;
  * we wait for sysadmin to remove the failure cause away.
  */
 
-#define wait_on_blockup()\
-	do {\
-		BUG_ON(!wb);\
-		if (ACCESS_ONCE(wb->blockup)) {\
-			WBERR("system is blocked up on I/O error. set blockup to 0 after checkup.");\
-			wait_event_interruptible(wb->blockup_wait_queue,\
-						 !ACCESS_ONCE(wb->blockup));\
-			WBINFO("reactivated after blockup");\
-		}\
+#define wait_on_blockup() \
+	do { \
+		BUG_ON(!wb); \
+		if (ACCESS_ONCE(wb->blockup)) { \
+			WBERR("system is blocked up on I/O error. set blockup to 0 after checkup."); \
+			wait_event_interruptible(wb->blockup_wait_queue, \
+						 !ACCESS_ONCE(wb->blockup)); \
+			WBINFO("reactivated after blockup"); \
+		} \
 	} while (0)
 
-#define RETRY(proc)\
-	do {\
-		BUG_ON(!wb);\
-		r = proc;\
-		if (r == -EOPNOTSUPP) {\
+#define RETRY(proc) \
+	do { \
+		BUG_ON(!wb); \
+		r = proc; \
+		if (r == -EOPNOTSUPP) { \
 			r = 0;\
-		} else if (r == -EIO) { /* I/O error is critical */\
-			wb->blockup = true;\
-			wait_on_blockup();\
-		} else if (r == -ENOMEM) {\
+		} else if (r == -EIO) { /* I/O error is critical */ \
+			wb->blockup = true; \
+			wait_on_blockup(); \
+		} else if (r == -ENOMEM) { \
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
 		} else if (r) { \
 			WBERR("please report!! I/O failed but no retry error code %d", r);\
 			r = 0;\
-		}\
+		} \
 	} while (r)
 
 int dm_safe_io_internal(
@@ -414,9 +414,9 @@ int dm_safe_io_internal(
 		struct dm_io_request *,
 		unsigned num_regions, struct dm_io_region *,
 		unsigned long *err_bits, bool thread, const char *caller);
-#define dm_safe_io(io_req, num_regions, regions, err_bits, thread)\
-		dm_safe_io_internal(wb, (io_req), (num_regions), (regions),\
-				    (err_bits), (thread), __func__);\
+#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
+		dm_safe_io_internal(wb, (io_req), (num_regions), (regions), \
+				    (err_bits), (thread), __func__);
 
 sector_t dm_devsize(struct dm_dev *);
 

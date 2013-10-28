@@ -998,16 +998,18 @@ void free_migration_buffer(struct wb_cache *cache)
 
 /*----------------------------------------------------------------*/
 
-#define CREATE_DAEMON(name)\
-	cache->name##_daemon = kthread_create(name##_proc, cache,\
-					      #name "_daemon");\
-	if (IS_ERR(cache->name##_daemon)) {\
-		r = PTR_ERR(cache->name##_daemon);\
-		cache->name##_daemon = NULL;\
-		WBERR("couldn't spawn" #name "daemon");\
-		goto bad_##name##_daemon;\
-	}\
-	wake_up_process(cache->name##_daemon);
+#define CREATE_DAEMON(name) \
+	do { \
+		cache->name##_daemon = kthread_create(name##_proc, cache, \
+						      #name "_daemon"); \
+		if (IS_ERR(cache->name##_daemon)) { \
+			r = PTR_ERR(cache->name##_daemon); \
+			cache->name##_daemon = NULL; \
+			WBERR("couldn't spawn" #name "daemon"); \
+			goto bad_##name##_daemon; \
+		} \
+		wake_up_process(cache->name##_daemon); \
+	} while (0)
 
 int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 {

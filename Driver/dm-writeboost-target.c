@@ -800,10 +800,10 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	return 0;
 }
 
-#define ARG_EXIST(n)\
-	if (argc <= (n)) {\
-		goto exit_parse_arg;\
-	}
+#define ARG_EXIST(n) { \
+	if (argc <= (n)) { \
+		goto exit_parse_arg; \
+	} }
 
 /*
  * <backing dev> <cache dev>

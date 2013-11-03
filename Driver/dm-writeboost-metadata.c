@@ -1178,11 +1178,9 @@ bad_buf_1_pool:
 
 void free_cache(struct wb_cache *cache)
 {
-	wbdebug();
 	kthread_stop(cache->sync_daemon);
 	kthread_stop(cache->recorder_daemon);
 	kthread_stop(cache->modulator_daemon);
-	wbdebug();
 
 	kthread_stop(cache->flush_daemon);
 

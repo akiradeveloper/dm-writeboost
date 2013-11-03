@@ -53,7 +53,6 @@ int flush_proc(void *data)
 			 * flush daemon should halt
 			 * after all barriers are acknowledged.
 			 */
-			DEAD(stop_on_dead());
 			if (kthread_should_stop())
 				return 0;
 			else
@@ -404,8 +403,6 @@ int migrate_proc(void *data)
 		u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
 
-		stop_on_dead();
-
 		/*
 		 * If urge_migrate is true
 		 * Migration should be immediate.
@@ -414,7 +411,6 @@ int migrate_proc(void *data)
 				ACCESS_ONCE(cache->allow_migrate);
 
 		if (!allow_migrate) {
-			wbdebug();
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -423,7 +419,6 @@ int migrate_proc(void *data)
 				    atomic64_read(&cache->last_migrated_segment_id);
 
 		if (!nr_mig_candidates) {
-			wbdebug();
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}

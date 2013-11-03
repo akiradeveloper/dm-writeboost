@@ -227,9 +227,7 @@ void flush_current_buffer(struct wb_cache *cache)
 	struct segment_header *old_seg;
 	u32 tmp32;
 
-	wbdebug();
 	mutex_lock(&cache->io_lock);
-	wbdebug();
 	old_seg = cache->current_seg;
 
 	queue_current_buffer(cache);
@@ -238,9 +236,7 @@ void flush_current_buffer(struct wb_cache *cache)
 	cache->current_seg->length = 1;
 	mutex_unlock(&cache->io_lock);
 
-	wbdebug();
 	wait_for_completion(&old_seg->flush_done);
-	wbdebug();
 }
 
 /*----------------------------------------------------------------*/
@@ -974,15 +970,6 @@ static void writeboost_dtr(struct dm_target *ti)
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 
-	WBINFO();
-
-	/*
-	 * Must clean up all the volatile data
-	 * before termination.
-	 */
-	flush_current_buffer(cache);
-	IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
-
 	set_bit(WB_DEAD, &wb->flags);
 	wake_up_all(&wb->dead_wait_queue);
 
@@ -996,6 +983,10 @@ static void writeboost_dtr(struct dm_target *ti)
 	kfree(wb);
 }
 
+/*
+ * .postsuspend is called before .dtr
+ * same code not needed in .dtr
+ */
 static void writeboost_postsuspend(struct dm_target *ti)
 {
 	int r;
@@ -1003,20 +994,11 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 
-	DMINFO("postsuspend");
-
-	/*
-	 * Clean up all the dirty writes prior to stop daemons.
-	 */
 	flush_current_buffer(cache);
-	wbdebug();
 	IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
 }
 
-static void writeboost_resume(struct dm_target *ti) 
-{
-	DMINFO("resume");
-}
+static void writeboost_resume(struct dm_target *ti) {}
 
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {

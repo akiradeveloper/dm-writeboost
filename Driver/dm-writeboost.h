@@ -20,6 +20,7 @@
 #include <linux/kthread.h>
 #include <linux/sched.h>
 #include <linux/timer.h>
+#include <linux/workqueue.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
@@ -326,6 +327,18 @@ struct wb_cache {
 	atomic64_t stat[STATLEN];
 };
 
+enum WB_FLAG {
+	/*
+	 * The flag WB_DEAD set makes all the daemons
+	 * sleep and device return EIO on any requests.
+	 *
+	 * This flag is set when either one of the underlying
+	 * devices returned EIO and we must immediately
+	 * block up the whole to avoid further damage.
+	 */
+	WB_DEAD = 0,
+};
+
 struct wb_device {
 	struct dm_target *ti;
 
@@ -337,28 +350,9 @@ struct wb_device {
 
 	atomic64_t nr_dirty_caches;
 
-	/*
-	 * blockup is true makes
-	 * all the daemons sleep and
-	 * device return EIO on any requests.
-	 * These daemones are sleeping
-	 * on the wait_queue.
-	 *
-	 * wait_on_blockup macros is used
-	 * as a guard to ensure
-	 * any process doesn't submit I/O
-	 * in case blockup is true.
-	 *
-	 * This variable is set true in
-	 * these two cases
-	 * 1. Some underlying devices return EIO
-	 *    and we must immediately blockup the
-	 *    device to avoid further damage.
-	 * 2. When device is suspended to stop
-	 *    all the daemons' activities.
-	 */
-	int blockup;
-	wait_queue_head_t blockup_wait_queue;
+	wait_queue_head_t dead_wait_queue;
+
+	unsigned long flags;
 };
 
 struct flush_job {
@@ -394,38 +388,44 @@ extern struct dm_io_client *wb_io_client;
 
 /*
  * I/O error on either backing or cache
- * should block up the whole system.
+ * should block up the whole system immediately.
  * Either reading or writing a device
  * should not be done if it once returns -EIO.
- * These devices are untrustable and
- * we wait for sysadmin to remove the failure cause away.
+ * These devices are all untrustable.
  */
 
-#define wait_on_blockup() \
-	do { \
-		BUG_ON(!wb); \
-		if (ACCESS_ONCE(wb->blockup)) { \
-			WBERR("system is blocked up on I/O error. set blockup to 0 after checkup."); \
-			wait_event_interruptible(wb->blockup_wait_queue, \
-						 !ACCESS_ONCE(wb->blockup)); \
-			WBINFO("reactivated after blockup"); \
-		} \
-	} while (0)
+#define LIVE_DEAD(proc_live, proc_dead) \
+	if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
+		proc_live; \
+	} else { \
+		proc_dead; \
+	}
 
-#define RETRY(proc) \
+#define LIVE(proc) \
+	if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
+		proc; \
+	}
+
+#define DEAD(proc) \
+	if (unlikely(test_bit(WB_DEAD, &wb->flags))) { \
+		proc; \
+	}
+
+#define IO(proc) \
 	do { \
-		BUG_ON(!wb); \
-		r = proc; \
+		r = 0; \
+		LIVE(r = proc); \
 		if (r == -EOPNOTSUPP) { \
-			r = 0;\
-		} else if (r == -EIO) { /* I/O error is critical */ \
-			wb->blockup = true; \
-			wait_on_blockup(); \
+			r = 0; \
+		} else if (r == -EIO) { \
+			set_bit(WB_DEAD, &wb->flags); \
+			wake_up_all(&wb->dead_wait_queue); \
+			WBERR("marked as dead"); \
 		} else if (r == -ENOMEM) { \
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
 		} else if (r) { \
-			WBERR("please report!! I/O failed but no retry error code %d", r);\
 			r = 0;\
+			WARN_ONCE(1, "PLEASE REPORT!! I/O FAILED FOR UNEXPECTED REASON %d", r); \
 		} \
 	} while (r)
 

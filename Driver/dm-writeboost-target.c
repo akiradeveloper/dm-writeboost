@@ -56,7 +56,6 @@ int dm_safe_io_internal(
 		 * don't go on submitting I/O
 		 * minimizes the risk of breaking the data.
 		 */
-		wait_on_blockup();
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 
@@ -64,7 +63,6 @@ int dm_safe_io_internal(
 		if (err_bits)
 			*err_bits = io.err_bits;
 	} else {
-		wait_on_blockup();
 		err = dm_io(io_req, num_regions, regions, err_bits);
 	}
 
@@ -170,6 +168,7 @@ static void queue_flushing(struct wb_cache *cache)
 	new_seg = get_segment_header_by_id(cache, next_id);
 	new_seg->global_id = next_id;
 
+	/* FIXME not needed? */
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
 		n2++;
 		if (n2 == 100)
@@ -341,7 +340,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.sector = calc_mb_start_sector(cache, seg, mb->idx),
 			.count = (1 << 3),
 		};
-		RETRY(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
+		IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
 
 		io_req_w = (struct dm_io_request) {
 			.client = wb_io_client,
@@ -355,7 +354,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
-		RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
+		IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
 
 		mempool_free(buf, cache->buf_8_pool);
 	} else {
@@ -384,7 +383,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 				.sector = src,
 				.count = 1,
 			};
-			RETRY(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
+			IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
 
 			io_req_w = (struct dm_io_request) {
 				.client = wb_io_client,
@@ -398,7 +397,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 				.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
-			RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
+			IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
 		}
 		mempool_free(buf, cache->buf_1_pool);
 	}
@@ -451,7 +450,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 			.count = 1,
 		};
 
-		RETRY(dm_safe_io(&io_req, 1, &region, NULL, true));
+		IO(dm_safe_io(&io_req, 1, &region, NULL, true));
 	}
 	mempool_free(buf, cache->buf_1_pool);
 }
@@ -490,11 +489,10 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	struct wb_cache *cache = wb->cache;
 	struct dm_dev *orig = wb->device;
 
-	if (ACCESS_ONCE(wb->blockup))
-		return -EIO;
-
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
 	map_context->ptr = NULL;
+
+	DEAD(bio_endio(bio, -EIO); return DM_MAPIO_SUBMITTED);
 
 	/*
 	 * We only discard only the backing store because
@@ -838,8 +836,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	 */
 	wb->migrate_threshold = 70;
 
-	init_waitqueue_head(&wb->blockup_wait_queue);
-	wb->blockup = false;
+	init_waitqueue_head(&wb->dead_wait_queue);
+	clear_bit(WB_DEAD, &wb->flags);
 
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 	if (!cache) {
@@ -849,7 +847,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 	wb->cache = cache;
 	wb->cache->wb = wb;
-
 
 	r = dm_get_device(ti, argv[0], dm_table_get_mode(ti->table),
 			  &origdev);
@@ -968,8 +965,13 @@ bad_alloc_cache:
 
 static void writeboost_dtr(struct dm_target *ti)
 {
+	int r;
+
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
+
+	set_bit(WB_DEAD, &wb->flags);
+	wake_up_all(&wb->dead_wait_queue);
 
 	free_cache(cache);
 	kfree(cache);
@@ -981,29 +983,22 @@ static void writeboost_dtr(struct dm_target *ti)
 	kfree(wb);
 }
 
+/*
+ * .postsuspend is called before .dtr
+ * same code not needed in .dtr
+ */
 static void writeboost_postsuspend(struct dm_target *ti)
 {
 	int r;
+
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 
-	/*
-	 * Clean up all the dirty writes
-	 * prior to stop daemons.
-	 */
 	flush_current_buffer(cache);
-	RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
-
-	wb->blockup = true;
-	wake_up_all(&wb->blockup_wait_queue);
+	IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
 }
 
-static void writeboost_resume(struct dm_target *ti)
-{
-	struct wb_device *wb = ti->private;
-	wb->blockup = false;
-	wake_up_all(&wb->blockup_wait_queue);
-}
+static void writeboost_resume(struct dm_target *ti) {}
 
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {
@@ -1021,14 +1016,6 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (kstrtoul(argv[1], 10, &tmp))
 		return -EINVAL;
-
-	if (!strcasecmp(cmd, "blockup")) {
-		if (tmp > 1)
-			return -EINVAL;
-		wb->blockup = tmp;
-		wake_up_all(&wb->blockup_wait_queue);
-		return 0;
-	}
 
 	if (!strcasecmp(cmd, "allow_migrate")) {
 		if (tmp > 1)
@@ -1136,7 +1123,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
 		}
 
-		DMEMIT("%d ", 8);
+		DMEMIT("%d ", 7);
 		DMEMIT("barrier_deadline_ms %lu ",
 		       cache->barrier_deadline_ms);
 		DMEMIT("allow_migrate %d ",
@@ -1151,8 +1138,6 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		       cache->sync_interval);
 		DMEMIT("update_record_interval %lu ",
 		       cache->update_record_interval);
-		DMEMIT("blockup %d",
-		       wb->blockup ? 1 : 0);
 		break;
 
 	case STATUSTYPE_TABLE:

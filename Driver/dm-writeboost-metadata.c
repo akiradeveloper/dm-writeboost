@@ -1178,19 +1178,11 @@ bad_buf_1_pool:
 
 void free_cache(struct wb_cache *cache)
 {
-	int r;
-	struct wb_device *wb = cache->wb;
-
-	/*
-	 * Must clean up all the volatile data
-	 * before termination.
-	 */
-	flush_current_buffer(cache);
-	RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
-
+	wbdebug();
 	kthread_stop(cache->sync_daemon);
 	kthread_stop(cache->recorder_daemon);
 	kthread_stop(cache->modulator_daemon);
+	wbdebug();
 
 	kthread_stop(cache->flush_daemon);
 

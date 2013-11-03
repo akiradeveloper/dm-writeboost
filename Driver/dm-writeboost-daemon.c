@@ -8,9 +8,27 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+/* FIXME? WB_DEAD or WB_STOP ? */
+/* FIXME? rename */
+/*
+ * All the daemons should stop in dead state.
+ * Daemons are actually terminated in calling .dtr routine
+ * since there generally should be no more than two path
+ * for terminating sole thing.
+ */
+#define stop_on_dead() \
+	do { \
+		WBERR("daemon stop"); \
+		wait_event_interruptible(wb->dead_wait_queue, \
+					 !test_bit(WB_DEAD, &wb->flags) || \
+					 kthread_should_stop()); \
+		WBERR("daemon restart"); \
+	} while (0)
+
 /*----------------------------------------------------------------*/
 
 static void update_barrier_deadline(struct wb_cache *);
+
 int flush_proc(void *data)
 {
 	int r;
@@ -25,19 +43,17 @@ int flush_proc(void *data)
 		struct dm_io_request io_req;
 		struct dm_io_region region;
 
-		wait_on_blockup();
-
 		spin_lock_irqsave(&cache->flush_queue_lock, flags);
 		while (list_empty(&cache->flush_queue)) {
 			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
 
-			wait_on_blockup();
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 
 			/*
-			 * flush daemon can exit
-			 * only if no flush job is queued.
+			 * flush daemon should halt
+			 * after all barriers are acknowledged.
 			 */
+			DEAD(stop_on_dead());
 			if (kthread_should_stop())
 				return 0;
 			else
@@ -71,8 +87,7 @@ int flush_proc(void *data)
 			.count = (seg->length + 1) << 3,
 		};
 
-		RETRY(dm_safe_io(&io_req, 1, &region, NULL, false));
-
+		IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 		atomic64_set(&cache->last_flushed_segment_id, seg->global_id);
 
 		complete_all(&seg->flush_done);
@@ -84,9 +99,15 @@ int flush_proc(void *data)
 		 */
 		if (!bio_list_empty(&job->barrier_ios)) {
 			struct bio *bio;
-			RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
-			while ((bio = bio_list_pop(&job->barrier_ios)))
-				bio_endio(bio, 0);
+
+			IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
+
+			while ((bio = bio_list_pop(&job->barrier_ios))) {
+				LIVE_DEAD(
+					bio_endio(bio, 0),
+					bio_endio(bio, -EIO)
+				);
+			}
 
 			update_barrier_deadline(cache);
 		}
@@ -122,9 +143,8 @@ void barrier_deadline_proc(unsigned long data)
 
 void flush_barrier_ios(struct work_struct *work)
 {
-	struct wb_cache *cache =
-		container_of(work, struct wb_cache,
-			     barrier_deadline_work);
+	struct wb_cache *cache = container_of(work, struct wb_cache,
+					      barrier_deadline_work);
 
 	if (bio_list_empty(&cache->barrier_ios))
 		return;
@@ -195,7 +215,7 @@ static void submit_migrate_io(struct wb_cache *cache,
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
-			RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
+			IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
 		} else {
 			for (j = 0; j < 8; j++) {
 				bool b = dirty_bits & (1 << j);
@@ -216,7 +236,7 @@ static void submit_migrate_io(struct wb_cache *cache,
 					.sector = mb->sector + j,
 					.count = 1,
 				};
-				RETRY(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
+				IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
 			}
 		}
 	}
@@ -245,7 +265,7 @@ static void memorize_dirty_state(struct wb_cache *cache,
 		.sector = seg->start_sector + (1 << 3),
 		.count = seg->length << 3,
 	};
-	RETRY(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
+	IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
 
 	/*
 	 * We take snapshot of the dirtiness in the segments.
@@ -320,8 +340,10 @@ migrate_write:
 		k++;
 	}
 
-	wait_event_interruptible(cache->migrate_wait_queue,
-				 atomic_read(&cache->migrate_io_count) == 0);
+	LIVE_DEAD(
+		wait_event_interruptible(cache->migrate_wait_queue,
+					 atomic_read(&cache->migrate_io_count) == 0),
+		atomic_set(&cache->migrate_io_count, 0));
 
 	if (atomic_read(&cache->migrate_fail_count)) {
 		WBWARN("%u writebacks failed. retry.",
@@ -350,7 +372,7 @@ migrate_write:
 	 * on this issue by always
 	 * migrating those data persistently.
 	 */
-	RETRY(blkdev_issue_flush(cache->wb->device->bdev, GFP_NOIO, NULL));
+	IO(blkdev_issue_flush(cache->wb->device->bdev, GFP_NOIO, NULL));
 
 	/*
 	 * Discarding the migrated regions
@@ -365,10 +387,10 @@ migrate_write:
 	 * will craze the cache.
 	 */
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		RETRY(blkdev_issue_discard(cache->device->bdev,
-					   seg->start_sector + (1 << 3),
-					   seg->length << 3,
-					   GFP_NOIO, 0));
+		IO(blkdev_issue_discard(cache->device->bdev,
+					seg->start_sector + (1 << 3),
+					seg->length << 3,
+					GFP_NOIO, 0));
 	}
 }
 
@@ -382,7 +404,7 @@ int migrate_proc(void *data)
 		u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
 		struct segment_header *seg, *tmp;
 
-		wait_on_blockup();
+		stop_on_dead();
 
 		/*
 		 * If urge_migrate is true
@@ -392,6 +414,7 @@ int migrate_proc(void *data)
 				ACCESS_ONCE(cache->allow_migrate);
 
 		if (!allow_migrate) {
+			wbdebug();
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -400,6 +423,7 @@ int migrate_proc(void *data)
 				    atomic64_read(&cache->last_migrated_segment_id);
 
 		if (!nr_mig_candidates) {
+			wbdebug();
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
@@ -490,8 +514,7 @@ int modulator_proc(void *data)
 	unsigned long intvl = 1000;
 
 	while (!kthread_should_stop()) {
-
-		wait_on_blockup();
+		stop_on_dead();
 
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
@@ -542,7 +565,7 @@ static void update_superblock_record(struct wb_cache *cache)
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
-	RETRY(dm_safe_io(&io_req, 1, &region, NULL, false));
+	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 	mempool_free(buf, cache->buf_1_pool);
 }
 
@@ -550,11 +573,11 @@ int recorder_proc(void *data)
 {
 	struct wb_cache *cache = data;
 	struct wb_device *wb = cache->wb;
+
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
-
-		wait_on_blockup();
+		stop_on_dead();
 
 		/* sec -> ms */
 		intvl = ACCESS_ONCE(cache->update_record_interval) * 1000;
@@ -581,8 +604,7 @@ int sync_proc(void *data)
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
-
-		wait_on_blockup();
+		stop_on_dead();
 
 		/* sec -> ms */
 		intvl = ACCESS_ONCE(cache->sync_interval) * 1000;
@@ -593,7 +615,7 @@ int sync_proc(void *data)
 		}
 
 		flush_current_buffer(cache);
-		RETRY(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
+		IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}

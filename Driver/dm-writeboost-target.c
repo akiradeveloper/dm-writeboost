@@ -761,6 +761,13 @@ write_on_buffer:
 	start = s << SECTOR_SHIFT;
 	data = bio_data(bio);
 
+	/*
+	 * TODO
+	 * If the buffer is persistent,
+	 * we have to avoid storing dirty data to the buffer.
+	 * We don't have to do such thing with volatiole memory.
+	 */
+
 	memcpy(cache->current_rambuf->data + start, data, bio->bi_size);
 	atomic_dec(&seg->nr_inflight_ios);
 
@@ -779,7 +786,10 @@ write_on_buffer:
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	bio_endio(bio, 0);
+	LIVE_DEAD(
+		bio_endio(bio, 0),
+		bio_endio(bio, -EIO));
+
 	return DM_MAPIO_SUBMITTED;
 }
 

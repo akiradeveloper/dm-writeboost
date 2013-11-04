@@ -543,14 +543,14 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	 * The reason we use mutex instead of rw_semaphore
 	 * that can allow truely concurrent read access
 	 * is that mutex is even lighter than rw_semaphore.
-	 * Since dm-writebuffer is a real performance centric software
-	 * the overhead of rw_semaphore is crucial.
-	 * All in all,
-	 * since exclusive region in read path is enough small
-	 * and cheap, using rw_semaphore and let the reads
-	 * execute concurrently won't improve the performance
-	 * as much as one expects.
+	 * Since dm-writebuffer is a real performance centric
+	 * software the overhead of rw_semaphore is crucial.
+	 * All in all, since exclusive region in read path
+	 * is enough small and cheap, using rw_semaphore and
+	 * let the reads execute concurrently won't improve
+	 * the performance as much as one expects.
 	 */
+
 	mutex_lock(&cache->io_lock);
 	mb = ht_lookup(cache, head, &key);
 	if (mb) {
@@ -577,42 +577,70 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			return DM_MAPIO_REMAPPED;
 		}
 
+		/*
+		 * There are two classes for cache placement.
+		 *
+		 * Live:
+		 * The cache is on the RAM buffer.
+		 *
+		 * Stable:
+		 * The cache is not on the RAM buffer but at least
+		 * queued in flush_queue.
+		 */
+
+		/*
+		 * (Locking)
+		 * Dirtiness of a live cache
+		 *
+		 * We can assume dirtiness of a cache only increase
+		 * when it is on the buffer, we call this cache is live.
+		 * This eases the locking because we don't worry the
+		 * dirtiness of a live cache fluctuates.
+		 */
+
 		dirty_bits = atomic_read_mb_dirtiness(seg, mb);
-
 		if (unlikely(on_buffer)) {
-
+			/*
+			 * Writing and Reading to the same sector
+			 * at the same time may return stale data.
+			 * We can deal with this issue by extending
+			 * mutex region within this if-clause and
+			 * waiting for nr_inflight_ios to become 1
+			 * to ensure potential writes are all consumed.
+			 * But, who on the earth use the storage in
+			 * such a crazy way? I don't think any to do that.
+			 * Don't forget that page cache exists.
+			 *
+			 * We don't deal with that therefore since
+			 * extending lock region lose read performance.
+			 */
 			if (dirty_bits)
 				migrate_buffered_mb(cache, mb, dirty_bits);
-
-			/*
-			 * Cache class
-			 * Live and Stable
-			 *
-			 * Live:
-			 * The cache is on the RAM buffer.
-			 *
-			 * Stable:
-			 * The cache is not on the RAM buffer
-			 * but at least queued in flush_queue.
-			 */
-
-			/*
-			 * (Locking)
-			 * Dirtiness of a live cache
-			 *
-			 * We can assume dirtiness of a cache only increase
-			 * when it is on the buffer, we call this cache is live.
-			 * This eases the locking because
-			 * we don't worry the dirtiness of
-			 * a live cache fluctuates.
-			 */
 
 			atomic_dec(&seg->nr_inflight_ios);
 			bio_remap(bio, orig, bio->bi_sector);
 			return DM_MAPIO_REMAPPED;
 		}
 
+		/*
+		 * (Locking)
+		 * Dirtiness of a stable cache
+		 *
+		 * Unlike the live caches that don't fluctuate
+		 * the dirtiness, stable caches which are not
+		 * on the buffer but on the cache device may
+		 * decrease the dirtiness by other processes
+		 * than the migrate daemon. This works fine
+		 * because migrating the same cache twice
+		 * doesn't craze the cache concistency.
+		 */
+
+		/*
+		 * We must wait for the (maybe) queued segment
+		 * to be flushed to the cache device.
+		 */
 		wait_for_completion(&seg->flush_done);
+
 		if (likely(dirty_bits == 255)) {
 			bio_remap(bio,
 				  cache->device,
@@ -620,22 +648,6 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 				  + bio_offset);
 			map_context->ptr = seg;
 		} else {
-
-			/*
-			 * (Locking)
-			 * Dirtiness of a stable cache
-			 *
-			 * Unlike the live caches that don't
-			 * fluctuate the dirtiness,
-			 * stable caches which are not on the buffer
-			 * but on the cache device
-			 * may decrease the dirtiness by other processes
-			 * than the migrate daemon.
-			 * This works fine
-			 * because migrating the same cache twice
-			 * doesn't craze the cache concistency.
-			 */
-
 			migrate_mb(cache, seg, mb, dirty_bits, true);
 			cleanup_mb_if_dirty(cache, seg, mb);
 
@@ -663,9 +675,9 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 				!bio_fullsize || !(dirty_bits == 255);
 
 			/*
-			 * Migration works in background
-			 * and may have cleaned up the metablock.
-			 * If the metablock is clean we need not to migrate.
+			 * Migration works in background and may have
+			 * cleaned up the metablock. If the metablock
+			 * is clean we need not to migrate.
 			 */
 			if (!dirty_bits)
 				needs_cleanup_prev_cache = false;
@@ -676,8 +688,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			}
 
 			/*
-			 * Fullsize dirty cache
-			 * can be discarded without migration.
+			 * Fullsize dirty cache can be discarded
+			 * without migration.
 			 */
 			cleanup_mb_if_dirty(cache, seg, mb);
 
@@ -839,6 +851,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return -ENOMEM;
 	}
 	atomic64_set(&wb->nr_dirty_caches, 0);
+
 	/*
 	 * EMC's textbook on storage system says
 	 * storage should keep its disk util less

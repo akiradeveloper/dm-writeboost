@@ -476,7 +476,7 @@ sector_t dm_devsize(struct dm_dev *);
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
 		} else if (r) { \
 			r = 0;\
-			WARN_ONCE(1, "PLEASE REPORT!!! I/O FAILED FOR UNKNOWN REASON %d", r); \
+			WARN_ONCE(1, "PLEASE REPORT!!! I/O FAILED FOR UNKNOWN REASON err(%d)", r); \
 		} \
 	} while (r)
 

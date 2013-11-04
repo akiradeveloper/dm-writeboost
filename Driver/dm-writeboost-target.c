@@ -893,6 +893,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ARG_EXIST(2);
 	if (kstrtoul(argv[2], 10, &tmp)) {
 		r = -EINVAL;
+		WBERR();
 		goto bad_segment_size_order;
 	}
 	if (tmp < 4 || 10 < tmp) {
@@ -905,6 +906,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ARG_EXIST(3);
 	if (kstrtoul(argv[3], 10, &tmp)) {
 		r = -EINVAL;
+		WBERR();
 		goto bad_rambuf_pool_amount;
 	}
 	cache->rambuf_pool_amount = tmp;
@@ -913,7 +915,7 @@ exit_parse_arg:
 
 	r = audit_cache_device(cachedev, cache, &need_format, &allow_format);
 	if (r) {
-		WBERR("audit cache device fails err(%d)", r);
+		WBERR("failed to audit cache device err(%d)", r);
 		/*
 		 * If something happens in auditing the cache
 		 * such as read io error either go formatting
@@ -1192,7 +1194,7 @@ static int __init writeboost_module_init(void)
 
 	r = dm_register_target(&writeboost_target);
 	if (r < 0) {
-		WBERR("%d", r);
+		WBERR("failed to register target err(%d)", r);
 		return r;
 	}
 

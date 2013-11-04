@@ -17,3 +17,6 @@ Some of the items addressed are already resolved.
    and we can define initialization of the object there.
 - RAM bufffer pool resizable if possible (low prio).
 - Run on Raspberry Pi and write report (low prio)
+- modulator daemon repeat stop/restart in flakey crash test
+  while other daemons don't. This is not a bad behavior but
+  need to elucidate.

@@ -379,7 +379,7 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 	struct superblock_header_device sup;
 	r = read_superblock_header(cache, &sup, dev);
 	if (r) {
-		WBERR("read superblock header failed");
+		WBERR("failed to read superblock header");
 		return r;
 	}
 
@@ -387,8 +387,8 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 	*allow_format = false;
 
 	if (le32_to_cpu(sup.magic) != WRITEBOOST_MAGIC) {
-		WBERR("superblock header: magic number invalid");
 		*allow_format = true;
+		WBERR("superblock header: magic number invalid");
 		return 0;
 	}
 

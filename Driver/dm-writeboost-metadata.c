@@ -14,31 +14,31 @@ struct part {
 	void *memory;
 };
 
-struct bigarray {
+struct large_array {
 	struct part *parts;
 	u64 nr_elems;
 	u32 elemsize;
 };
 
 #define ALLOC_SIZE (1 << 16)
-static u32 nr_elems_in_part(struct bigarray *arr)
+static u32 nr_elems_in_part(struct large_array *arr)
 {
 	return div_u64(ALLOC_SIZE, arr->elemsize);
 };
 
-static u64 nr_parts(struct bigarray *arr)
+static u64 nr_parts(struct large_array *arr)
 {
 	u64 a = arr->nr_elems;
 	u32 b = nr_elems_in_part(arr);
 	return div_u64(a + b - 1, b);
 }
 
-static struct bigarray *make_bigarray(u32 elemsize, u64 nr_elems)
+static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 {
 	u64 i, j;
 	struct part *part;
 
-	struct bigarray *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
+	struct large_array *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
 		WBERR("failed to alloc arr");
 		return NULL;
@@ -73,7 +73,7 @@ bad_alloc_parts:
 	return NULL;
 }
 
-static void kill_bigarray(struct bigarray *arr)
+static void large_array_free(struct large_array *arr)
 {
 	size_t i;
 	for (i = 0; i < nr_parts(arr); i++) {
@@ -84,7 +84,7 @@ static void kill_bigarray(struct bigarray *arr)
 	kfree(arr);
 }
 
-static void *bigarray_at(struct bigarray *arr, u64 i)
+static void *large_array_at(struct large_array *arr, u64 i)
 {
 	u32 n = nr_elems_in_part(arr);
 	u32 k;
@@ -111,7 +111,7 @@ static struct metablock *mb_at(struct wb_cache *cache, u32 idx)
 	u32 idx_inseg;
 	u32 seg_idx = div_u64_rem(idx, cache->nr_caches_inseg, &idx_inseg);
 	struct segment_header *seg =
-		bigarray_at(cache->segment_header_array, seg_idx);
+		large_array_at(cache->segment_header_array, seg_idx);
 	return seg->mb_array + idx_inseg;
 }
 
@@ -175,14 +175,14 @@ struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
 {
 	u32 idx;
 	div_u64_rem(segment_id - 1, cache->nr_segments, &idx);
-	return bigarray_at(cache->segment_header_array, idx);
+	return large_array_at(cache->segment_header_array, idx);
 }
 
 static int __must_check init_segment_header_array(struct wb_cache *cache)
 {
 	u32 segment_idx, nr_segments = cache->nr_segments;
 	cache->segment_header_array =
-		make_bigarray(sizeof_segment_header(cache), nr_segments);
+		large_array_alloc(sizeof_segment_header(cache), nr_segments);
 	if (!cache->segment_header_array) {
 		WBERR();
 		return -ENOMEM;
@@ -190,7 +190,7 @@ static int __must_check init_segment_header_array(struct wb_cache *cache)
 
 	for (segment_idx = 0; segment_idx < nr_segments; segment_idx++) {
 		struct segment_header *seg =
-			bigarray_at(cache->segment_header_array, segment_idx);
+			large_array_at(cache->segment_header_array, segment_idx);
 		seg->start_idx = cache->nr_caches_inseg * segment_idx;
 		seg->start_sector =
 			calc_segment_header_start(cache, segment_idx);
@@ -217,7 +217,7 @@ static int __must_check init_segment_header_array(struct wb_cache *cache)
 
 static void free_segment_header_array(struct wb_cache *cache)
 {
-	kill_bigarray(cache->segment_header_array);
+	large_array_free(cache->segment_header_array);
 }
 
 /*----------------------------------------------------------------*/
@@ -229,11 +229,11 @@ static int __must_check ht_empty_init(struct wb_cache *cache)
 {
 	u32 idx;
 	size_t i, nr_heads;
-	struct bigarray *arr;
+	struct large_array *arr;
 
 	cache->htsize = cache->nr_caches;
 	nr_heads = cache->htsize + 1;
-	arr = make_bigarray(sizeof(struct ht_head), nr_heads);
+	arr = large_array_alloc(sizeof(struct ht_head), nr_heads);
 	if (!arr) {
 		WBERR();
 		return -ENOMEM;
@@ -242,7 +242,7 @@ static int __must_check ht_empty_init(struct wb_cache *cache)
 	cache->htable = arr;
 
 	for (i = 0; i < nr_heads; i++) {
-		struct ht_head *hd = bigarray_at(arr, i);
+		struct ht_head *hd = large_array_at(arr, i);
 		INIT_HLIST_HEAD(&hd->ht_list);
 	}
 
@@ -250,7 +250,7 @@ static int __must_check ht_empty_init(struct wb_cache *cache)
 	 * Our hashtable has one special bucket called null head.
 	 * Orphan metablocks are linked to the null head.
 	 */
-	cache->null_head = bigarray_at(cache->htable, cache->htsize);
+	cache->null_head = large_array_at(cache->htable, cache->htsize);
 
 	for (idx = 0; idx < cache->nr_caches; idx++) {
 		struct metablock *mb = mb_at(cache, idx);
@@ -262,14 +262,14 @@ static int __must_check ht_empty_init(struct wb_cache *cache)
 
 static void free_ht(struct wb_cache *cache)
 {
-	kill_bigarray(cache->htable);
+	large_array_free(cache->htable);
 }
 
 struct ht_head *ht_get_head(struct wb_cache *cache, struct lookup_key *key)
 {
 	u32 idx;
 	div_u64_rem(key->sector, cache->htsize, &idx);
-	return bigarray_at(cache->htable, idx);
+	return large_array_at(cache->htable, idx);
 }
 
 static bool mb_hit(struct metablock *mb, struct lookup_key *key)

@@ -224,7 +224,7 @@ struct wb_cache {
 	u32 nr_segments; /* Const */
 	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
-	struct bigarray *segment_header_array;
+	struct large_array *segment_header_array;
 
 	/*
 	 * Chained hashtable
@@ -234,7 +234,7 @@ struct wb_cache {
 	 * Cache discarding often happedns
 	 * This structure fits our needs.
 	 */
-	struct bigarray *htable;
+	struct large_array *htable;
 	size_t htsize;
 	struct ht_head *null_head;
 

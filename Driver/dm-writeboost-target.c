@@ -965,8 +965,6 @@ bad_alloc_cache:
 
 static void writeboost_dtr(struct dm_target *ti)
 {
-	int r;
-
 	struct wb_device *wb = ti->private;
 	struct wb_cache *cache = wb->cache;
 

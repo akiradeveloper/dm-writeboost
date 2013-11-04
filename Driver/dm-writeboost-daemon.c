@@ -8,14 +8,25 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
-/* FIXME? WB_DEAD or WB_STOP ? */
-/* FIXME? rename */
+/*----------------------------------------------------------------*/
+
+/* Stopping Daemons */
+
 /*
- * All the daemons should stop in dead state.
- * Daemons are actually terminated in calling .dtr routine
+ * Daemons should not be terminated in blockup situation.
+ * They should be actually terminated in calling .dtr routine
  * since there generally should be no more than two path
  * for terminating sole thing.
  */
+
+/*
+ * flush daemon and migrate daemon stopped in blockup
+ * could cause lockup in calling .dtr since it demands
+ * .postsuspend to flush transient data called beforehand
+ * and these daemons related to I/O execution should
+ * not be stopped therefor.
+ */
+
 #define stop_on_dead() \
 	do { \
 		WBERR("daemon stop"); \
@@ -61,8 +72,6 @@ void flush_barrier_ios(struct work_struct *work)
 }
 
 /*----------------------------------------------------------------*/
-
-/* static void update_barrier_deadline(struct wb_cache *); */
 
 int flush_proc(void *data)
 {

@@ -1,5 +1,5 @@
 /*
- * writeboost
+ * Writeboost
  * Log-structured Caching for Linux
  *
  * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
@@ -852,7 +852,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 	if (!cache) {
 		r = -ENOMEM;
-		WBERR("couldn'T allocate cache");
+		WBERR("couldn't allocate cache");
 		goto bad_alloc_cache;
 	}
 	wb->cache = cache;

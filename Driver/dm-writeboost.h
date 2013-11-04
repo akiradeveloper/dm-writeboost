@@ -7,8 +7,6 @@
 #ifndef DM_WRITEBOOST_H
 #define DM_WRITEBOOST_H
 
-/*----------------------------------------------------------------*/
-
 #define DM_MSG_PREFIX "writeboost"
 
 #include <linux/module.h>
@@ -24,6 +22,15 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
+/*----------------------------------------------------------------*/
+
+/*
+ * Nice printk macros
+ *
+ * Production code should not include lineno
+ * but name of the caller is OK.
+ */
+
 #define wbdebug(f, args...) \
 	DMINFO("debug@%s() L.%d" f, __func__, __LINE__, ## args)
 
@@ -33,6 +40,8 @@
 	DMWARN("warn@%s() " f, __func__, ## args)
 #define WBINFO(f, args...) \
 	DMINFO("info@%s() " f, __func__, ## args)
+
+/*----------------------------------------------------------------*/
 
 /*
  * The Detail of the Disk Format
@@ -114,7 +123,7 @@ struct metablock_device {
 	__le64 sector;
 	u8 dirty_bits;
 	__le32 lap;
-	u8 padding[16 - (8 + 1 + 4)];
+	u8 padding[16 - (8 + 1 + 4)]; /* 16B */
 } __packed;
 
 #define SZ_MAX (~(size_t)0)
@@ -386,6 +395,21 @@ u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
 
+int dm_safe_io_internal(
+		struct wb_device*,
+		struct dm_io_request *,
+		unsigned num_regions, struct dm_io_region *,
+		unsigned long *err_bits, bool thread, const char *caller);
+#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
+		dm_safe_io_internal(wb, (io_req), (num_regions), (regions), \
+				    (err_bits), (thread), __func__);
+
+sector_t dm_devsize(struct dm_dev *);
+
+/*----------------------------------------------------------------*/
+
+/* Device Blockup */
+
 /*
  * I/O error on either backing or cache
  * should block up the whole system immediately.
@@ -394,23 +418,50 @@ extern struct dm_io_client *wb_io_client;
  * These devices are all untrustable.
  */
 
+/*
+ * After the system is blocked up
+ * all I/Os to underlying devices are all ignored.
+ * IOWs, this is equivalent to having /dev/null devices
+ * as these devices and runnig on memory data structures
+ * goes on agnostic to the fact that these devices freezed.
+ */
+
 #define LIVE_DEAD(proc_live, proc_dead) \
-	if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
-		proc_live; \
-	} else { \
-		proc_dead; \
-	}
+	do { \
+		if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
+			proc_live; \
+		} else { \
+			proc_dead; \
+		} \
+	} while (0)
 
 #define LIVE(proc) \
-	if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
-		proc; \
-	}
+	do { \
+		if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
+			proc; \
+		} \
+	} while (0)
 
 #define DEAD(proc) \
-	if (unlikely(test_bit(WB_DEAD, &wb->flags))) { \
-		proc; \
-	}
+	do { \
+		if (unlikely(test_bit(WB_DEAD, &wb->flags))) { \
+			proc; \
+		} \
+	} while (0)
 
+/*
+ * Only -EIO retuned is regareded as a signal
+ * to block up the whole system.
+ *
+ * -EOPNOTSUPP could be retuned if the target device is
+ * a virtual device and we request discard.
+ *
+ * -ENOMEM could be returned from blkdev_issue_discard (3.12-rc5)
+ * for example. Wating for a while can make room for alocation.
+ *
+ * For other unknown error codes we ignore them and
+ * ask the human users to report us.
+ */
 #define IO(proc) \
 	do { \
 		r = 0; \
@@ -425,20 +476,9 @@ extern struct dm_io_client *wb_io_client;
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
 		} else if (r) { \
 			r = 0;\
-			WARN_ONCE(1, "PLEASE REPORT!! I/O FAILED FOR UNEXPECTED REASON %d", r); \
+			WARN_ONCE(1, "PLEASE REPORT!!! I/O FAILED FOR UNKNOWN REASON %d", r); \
 		} \
 	} while (r)
-
-int dm_safe_io_internal(
-		struct wb_device*,
-		struct dm_io_request *,
-		unsigned num_regions, struct dm_io_region *,
-		unsigned long *err_bits, bool thread, const char *caller);
-#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
-		dm_safe_io_internal(wb, (io_req), (num_regions), (regions), \
-				    (err_bits), (thread), __func__);
-
-sector_t dm_devsize(struct dm_dev *);
 
 /*----------------------------------------------------------------*/
 

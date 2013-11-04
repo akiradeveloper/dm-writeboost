@@ -11,7 +11,7 @@ Features are as follows,
 - CPU: Intel core i7-3770  
 - RAM: 32GB  
 - SSD: Samsung 840 Pro (256GB)  
-- HDD: Seagate 
+- HDD: Seagate xxx
 - Kernel Version: 3.9.8  
 
 ## (1) Measuring throughput by fio tool
@@ -22,7 +22,8 @@ and configurations.
 
 The base fio script is shown below
 which is what competitor cache softwares
-are examined in.
+(bcache, dm-cache, enhanceIO)
+are examined by.
 
 ```
 [global]

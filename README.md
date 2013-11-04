@@ -8,7 +8,7 @@ We won't look back anymore.
 All supports before 3.12 are off.
 porting-final tag is the last moment
 that this kernel module was portable.
-If you want to test the impact of writeboost
+If you want to examine the performance impact of writeboost
 in your environment please use the revision.
 
 Sorry and thanks for those having tested
@@ -18,13 +18,13 @@ in environments. writeboost will be in the main tree, I promise.
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  
 DCD, originally implemented in Solaris, is an extra logical block layer that gathers in-coming small random writes 
 into a big sequential write which then performs high throughput and low latency.
-See also the DCD papers [1] and its recent application [2].
+See also the DCD paper [1] and its recent application [2].
 
 ## Features
 * Capable of performing 375kiops (1.5GB/sec) random writes with a fast enough cache.  
 * Maximizes the lifetime of SSD device.
 * Log-structured property ensures perfect metadata durability.
-* (Future Work) Applies persistent memory to process write barriers more effectively.
+* (Future Work) Applies persistent memory to process write barriers more efficiently.
 
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)

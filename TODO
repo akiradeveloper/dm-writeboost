@@ -7,45 +7,13 @@ Some of the items addressed are already resolved.
   Should use the same approach that is proven successful.
 - Fix document.
 - Add more comments inline to explain what it does and how it works.
-- Rename struct arr
--- Renamed to bigarray. I don't know if it's appropriate.
 - Refactor recover_cache() to make it readable.
-- flush daemon should sleep by schedule_timeout_interruptile
-  to remove flush_wait_queue?
 - barrier_deadline_ms is zero to flush immediately.
-- cache_nr should be removed. more clear to use u32 directory.
-- rambuf pool size should be configurable.
+- rambuf pool size should be configurable. Possible?
 - rambuf pool should be mempool?
 -- It is not just a mempool. Each has completion.
 -- But we have still hope.
    Maybe `mempool_create` can accept allo_fn that
    and we can define initialization of the object there.
-- RAM bufffer pool resizable if possible (low priority).
-- nr_segments, nr_rambuf_pool should be u32.
-- lap to u64?
--- CAN NOT. metablock_device should be less than 14 bytes
-- block up in I/O error.
--- print process id when blockup?
-- compile in 32 bit env.
-- should wait "un"interruptible on blockup
-- Run on Raspberry Pi and write report.
-- On KVM environment with virtio disks attached,
-  FLUSH/FUA requests are not tested because these
-  devices doesn't supports these type of I/Os.
-  iterate_devices is not appropriate or
-  always accept them by mark flush_suported
-  (flush_supported is since 3.6).
-  dd conv=fsync to write writeboost volume
-  can reproduce this problem.
-- Something wrong with deferred barrier implementation.
-  timeout for schecduling a deadline worker
-  twice by dding sync 1 sector. on KVM, 3.12-rc1
-- To avoid metadata partial writes, metadata should not
-  straddle two sectors.
-  Make it 16 bytes on disk.
-- Change recover algorithm. length in semgent_header_device
-  should removed.
-- suspend/resume. postsuspend and resume should be implemented.
-- MUST stop all daemons prior to blockup requests.
-  stop variable introduced.
-  don't ACK any io after once ack EIO should be ruled.
+- RAM bufffer pool resizable if possible (low prio).
+- Run on Raspberry Pi and write report (low prio)

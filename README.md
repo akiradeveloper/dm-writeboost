@@ -33,28 +33,22 @@ See also the DCD paper [1] and its recent application [2].
 ## Quick Start
 You are ready for nice scripts for quick starting.  
 
-(1) [common] Configure device paths for backing store and cache device.  
+(1) Configure the path for the devices
 
 	$ cd /home/akira/dm-writeboost  
 	$ vi config
 
-(2) If the kernel doesn't have dm-writeboost merged, please build the module first.  
+(2) Compile
 
 	$ source build
 
-(3) [common] Load dm-writeboost into the kernel.  
-How to Load dm-writeboost module depends on your environment.  
-
-If you are using kernel with dm-writeboost merged,  
-
-	# modprobe dm-writeboost
-
-If you will use the portable module in this repo,  
+(3) Load
 
 	# cd Driver
 	# insmod dm-writeboost.ko
+	# cd -
 
-(4) [common] Run prepare script  
+(3) Run prepare script (Edit if you want)
 
 	# source prepare  
 

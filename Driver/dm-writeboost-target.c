@@ -777,7 +777,7 @@ write_on_buffer:
 	 * TODO
 	 * If the buffer is persistent,
 	 * we have to avoid storing dirty data to the buffer.
-	 * We don't have to do such thing with volatiole memory.
+	 * We don't have to do such thing with volatile memory.
 	 */
 
 	memcpy(cache->current_rambuf->data + start, data, bio->bi_size);

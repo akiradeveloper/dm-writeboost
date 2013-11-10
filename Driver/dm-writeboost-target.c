@@ -1164,7 +1164,11 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("%s %s", wb->device->name, wb->cache->device->name);
+		DMEMIT("%s %s %u %u",
+		       wb->device->name,
+		       wb->cache->device->name,
+		       cache->segment_size_order,
+		       cache->rambuf_pool_amount);
 		break;
 	}
 }

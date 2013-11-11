@@ -348,7 +348,15 @@ enum WB_FLAG {
 	WB_DEAD = 0,
 };
 
+enum RAMBUF_TYPE {
+	BUF_NORMAL = 0,
+	BUF_NV_BLK,
+	BUF_NV_RAM,
+};
+
 struct wb_device {
+	int type;
+
 	struct dm_target *ti;
 
 	struct dm_dev *device;

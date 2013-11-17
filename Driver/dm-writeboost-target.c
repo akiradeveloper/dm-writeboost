@@ -1127,26 +1127,28 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 	switch (type) {
 	case STATUSTYPE_INFO:
-		DMEMIT("%llu %llu %llu %llu %llu %u ",
-		       (long long unsigned int)
-		       atomic64_read(&wb->nr_dirty_caches),
+		DMEMIT("%u %u %llu %llu %llu %llu %llu ",
+		       (unsigned int)
+		       cache->cursor,
+		       (unsigned int)
+		       cache->nr_caches,
 		       (long long unsigned int)
 		       cache->nr_segments,
 		       (long long unsigned int)
-		       atomic64_read(&cache->last_migrated_segment_id),
+		       cache->current_seg->global_id,
 		       (long long unsigned int)
 		       atomic64_read(&cache->last_flushed_segment_id),
 		       (long long unsigned int)
-		       cache->current_seg->global_id,
-		       (unsigned int)
-		       cache->cursor);
+		       atomic64_read(&cache->last_migrated_segment_id),
+		       (long long unsigned int)
+		       atomic64_read(&wb->nr_dirty_caches));
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v = &cache->stat[i];
 			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
 		}
 
-		DMEMIT("%d ", 7);
+		DMEMIT("%d ", 14);
 		DMEMIT("barrier_deadline_ms %lu ",
 		       cache->barrier_deadline_ms);
 		DMEMIT("allow_migrate %d ",

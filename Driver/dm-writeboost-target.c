@@ -820,34 +820,51 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	return 0;
 }
 
-#define ARG_EXIST(n) { \
-	if (argc <= (n)) { \
-		goto exit_parse_arg; \
-	} }
-
 /*
- * <backing dev> <cache dev>
- * [segment size order]
- * [rambuf pool amount]
+ * Create a device
+ * dm-writeboost supports 3 types of buffer
+ * relevant to what-it-is.
+ * The first argument decides it and
+ * the following arguments change with the type.
+ *
+ * With volatile RAM as the buffer
+ * 0 <backing dev> <cache dev>
+ * #optional args
+ * [segment_size_order val]
+ * [rambuf_pool_amount val]
+ *
+ * With a block device as the buffer (TODO future work)
+ * 1 <backing dev> <cache dev> <buffer dev>
  */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r = 0;
+	struct dm_arg_set as;
 	bool need_format, allow_format;
 	struct wb_device *wb;
 	struct wb_cache *cache;
 	struct dm_dev *origdev, *cachedev;
-	unsigned long tmp;
+	unsigned opt_argc, tmp;
+
+	static struct dm_arg _args[] = {
+		{0, 0, "invalid buffer type"},
+		{0, 4, "invalid optional argc"},
+		{4, 10, "invalid segment size order"},
+		{512, UINT_MAX, "invalid rambuf pool amount"},
+	};
+
+	as.argc = argc;
+	as.argv = argv;
 
 	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if (r) {
-		WBERR("settting max io len failed");
+		ti->error = "settting max io len failed";
 		return r;
 	}
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
-		WBERR("couldn't allocate wb");
+		ti->error = "couldn't allocate wb";
 		return -ENOMEM;
 	}
 	atomic64_set(&wb->nr_dirty_caches, 0);
@@ -865,57 +882,71 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
 	if (!cache) {
 		r = -ENOMEM;
-		WBERR("couldn't allocate cache");
+		ti->error = "couldn't allocate cache";
 		goto bad_alloc_cache;
 	}
 	wb->cache = cache;
 	wb->cache->wb = wb;
 
-	r = dm_get_device(ti, argv[0], dm_table_get_mode(ti->table),
+	r = dm_read_arg(_args, &as, &tmp, &ti->error);
+	if (r)
+		goto bad_type;
+	wb->type = tmp;
+
+	r = dm_get_device(ti, dm_shift_arg(&as), dm_table_get_mode(ti->table),
 			  &origdev);
 	if (r) {
-		WBERR("couldn't get backing dev err(%d)", r);
+		ti->error = "couldn't get backing dev";
 		goto bad_get_device_orig;
 	}
 	wb->device = origdev;
 
-	r = dm_get_device(ti, argv[1], dm_table_get_mode(ti->table),
+	r = dm_get_device(ti, dm_shift_arg(&as), dm_table_get_mode(ti->table),
 			  &cachedev);
 	if (r) {
-		WBERR("couldn't get cache dev err(%d)", r);
+		ti->error =  "couldn't get cache dev";
 		goto bad_get_device_cache;
 	}
+
+	r = dm_read_arg_group(_args + 1, &as, &opt_argc, &ti->error);
+	if (r)
+		goto bad_opt_arg;
 
 	/* Optional Parameters */
 	cache->segment_size_order = 7;
 	cache->rambuf_pool_amount = 2048;
 
-	ARG_EXIST(2);
-	if (kstrtoul(argv[2], 10, &tmp)) {
-		r = -EINVAL;
-		WBERR();
-		goto bad_segment_size_order;
-	}
-	if (tmp < 4 || 10 < tmp) {
-		r = -EINVAL;
-		WBERR("segment size order out of range. not 4 <= %lu <= 10", tmp);
-		goto bad_segment_size_order;
-	}
-	cache->segment_size_order = tmp;
+	if (as.argc)
+		opt_argc = 0;
 
-	ARG_EXIST(3);
-	if (kstrtoul(argv[3], 10, &tmp)) {
-		r = -EINVAL;
-		WBERR();
-		goto bad_rambuf_pool_amount;
-	}
-	cache->rambuf_pool_amount = tmp;
+	while (opt_argc) {
+		const char *key = dm_shift_arg(&as);
+		opt_argc--;
 
-exit_parse_arg:
+		if (!strcasecmp(key, "segment_size_order")) {
+			r = dm_read_arg(_args + 2, &as, &tmp, &ti->error);
+			if (r)
+				goto bad_opt_arg;
+			opt_argc--;
+			cache->segment_size_order = tmp;
+		}
+
+		if (!strcasecmp(key, "rambuf_pool_amount")) {
+			r = dm_read_arg(_args + 3, &as, &tmp, &ti->error);
+			if (r)
+				goto bad_opt_arg;
+			opt_argc--;
+			cache->rambuf_pool_amount = tmp;
+		}
+
+		r = -EINVAL;
+		ti->error = "invalid optional arg key";
+		goto bad_opt_arg;
+	}
 
 	r = audit_cache_device(cachedev, cache, &need_format, &allow_format);
 	if (r) {
-		WBERR("failed to audit cache device err(%d)", r);
+		ti->error = "failed to audit cache device";
 		/*
 		 * If something happens in auditing the cache
 		 * such as read io error either go formatting
@@ -929,20 +960,19 @@ exit_parse_arg:
 		if (allow_format) {
 			r = format_cache_device(cachedev, cache);
 			if (r) {
-				WBERR("format cache device fails err(%d)", r);
+				ti->error = "format cache device failed";
 				goto bad_format_cache;
 			}
 		} else {
 			r = -EINVAL;
-			WBERR("cache device not allowed to format");
+			ti->error = "cache device not allowed to format";
 			goto bad_audit_cache;
 		}
 	}
 
-
 	r = resume_cache(cache, cachedev);
 	if (r) {
-		WBERR("failed to resume cache err(%d)", r);
+		ti->error = "failed to resume cache";
 		goto bad_resume_cache;
 	}
 	clear_stat(cache);
@@ -976,12 +1006,12 @@ exit_parse_arg:
 bad_resume_cache:
 bad_format_cache:
 bad_audit_cache:
-bad_rambuf_pool_amount:
-bad_segment_size_order:
+bad_opt_arg:
 	dm_put_device(ti, cachedev);
 bad_get_device_cache:
 	dm_put_device(ti, origdev);
 bad_get_device_orig:
+bad_type:
 	kfree(cache);
 bad_alloc_cache:
 	kfree(wb);
@@ -1164,7 +1194,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("%s %s %u %u",
+		DMEMIT("0 %s %s 4 segment_size_order %u rambuf_pool_amount %u",
 		       wb->device->name,
 		       wb->cache->device->name,
 		       cache->segment_size_order,

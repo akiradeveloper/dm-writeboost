@@ -66,9 +66,18 @@ All the operations are via dmsetup command.
 
 Constructor
 -----------
-writeboost <backing dev> <cache dev>
-           [segment size order]
-           [rambuf pool amount]
+The first argument is the type of the buffer.
+The following arguments alter along with it.
+
+type
+0: volatile ram buffer (DRAM)
+1: non-volatile buffer backed by block device
+2: non-volatile ram buffer (persistent memory)
+
+writeboost 0 <backing dev> <cache dev>
+           #optional args
+           [segment_size_order val]
+           [rambuf_pool_amount val]
 
 backing dev        : slow device holding original data blocks.
 cache dev          : fast device holding cached data and its metadata.
@@ -135,4 +144,5 @@ Example
 =======
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 sz=`blockdev --getsize ${BACKING}`
-dmsetup create writeboost-vol --table "0 ${sz} writeboost ${BACKING} {CACHE}"
+dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE} 4 \
+                                       rambuf_pool_amount 8192 segment_size_order 8"

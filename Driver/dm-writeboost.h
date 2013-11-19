@@ -334,6 +334,7 @@ struct wb_cache {
 	unsigned long sync_interval; /* param */
 
 	atomic64_t stat[STATLEN];
+	atomic64_t count_non_full_flushed;
 };
 
 enum WB_FLAG {

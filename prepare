@@ -5,7 +5,7 @@
 echo 7 > /proc/sys/kernel/printk
 
 sz=`blockdev --getsize ${CACHE}`
-dmsetup create cache-flakey --table "0 ${sz} flakey ${CACHE} 0 5 1"
+dmsetup create cache-flakey --table "0 ${sz} flakey ${CACHE} 0 5 0"
 CACHE=/dev/mapper/cache-flakey
 
 sz=`blockdev --getsize ${BACKING}`

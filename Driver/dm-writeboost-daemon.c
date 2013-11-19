@@ -68,6 +68,7 @@ void flush_barrier_ios(struct work_struct *work)
 	if (bio_list_empty(&cache->barrier_ios))
 		return;
 
+	atomic64_inc(&cache->count_non_full_flushed);
 	flush_current_buffer(cache);
 }
 

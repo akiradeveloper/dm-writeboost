@@ -976,6 +976,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_resume_cache;
 	}
 	clear_stat(cache);
+	atomic64_set(&cache->count_non_full_flushed, 0);
 
 	wb->ti = ti;
 	ti->private = wb;
@@ -1177,6 +1178,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 			atomic64_t *v = &cache->stat[i];
 			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
 		}
+		DMEMIT("%llu ", (unsigned long long) atomic64_read(&cache->count_non_full_flushed));
 
 		DMEMIT("%d ", 14);
 		DMEMIT("barrier_deadline_ms %lu ",

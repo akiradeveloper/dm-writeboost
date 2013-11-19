@@ -103,6 +103,7 @@ Status
 <lastly migrated id>
 <# dirty cache blocks>
 <stat info (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
+<stat count not full flushed>
 <# tunable args>
 [tunable params]* (see below "Messages")
 

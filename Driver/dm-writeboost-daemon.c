@@ -29,11 +29,10 @@
 
 #define stop_on_dead() \
 	do { \
-		WBERR("daemon stop"); \
+		DEAD(WBERR("daemon stop")); \
 		wait_event_interruptible(wb->dead_wait_queue, \
 					 !test_bit(WB_DEAD, &wb->flags) || \
 					 kthread_should_stop()); \
-		WBERR("daemon restart"); \
 	} while (0)
 
 /*----------------------------------------------------------------*/

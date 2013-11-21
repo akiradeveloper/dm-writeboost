@@ -908,16 +908,16 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_get_device_cache;
 	}
 
-	r = dm_read_arg_group(_args + 1, &as, &opt_argc, &ti->error);
-	if (r)
-		goto bad_opt_arg;
-
 	/* Optional Parameters */
 	cache->segment_size_order = 7;
 	cache->rambuf_pool_amount = 2048;
 
-	if (as.argc)
-		opt_argc = 0;
+	opt_argc = 0;
+	if (as.argc) {
+		r = dm_read_arg_group(_args + 1, &as, &opt_argc, &ti->error);
+		if (r)
+			goto bad_opt_arg;
+	}
 
 	while (opt_argc) {
 		const char *key = dm_shift_arg(&as);

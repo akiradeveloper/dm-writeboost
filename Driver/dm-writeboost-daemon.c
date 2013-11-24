@@ -30,45 +30,45 @@
 #define stop_on_dead() \
 	do { \
 		DEAD(WBERR("daemon stop")); \
-		wait_event_interruptible(cache->dead_wait_queue, \
-					 !test_bit(WB_DEAD, &cache->flags) || \
+		wait_event_interruptible(wb->dead_wait_queue, \
+					 !test_bit(WB_DEAD, &wb->flags) || \
 					 kthread_should_stop()); \
 	} while (0)
 
 /*----------------------------------------------------------------*/
 
-static void update_barrier_deadline(struct wb_cache *cache)
+static void update_barrier_deadline(struct wb_device *wb)
 {
-	mod_timer(&cache->barrier_deadline_timer,
-		  jiffies + msecs_to_jiffies(ACCESS_ONCE(cache->barrier_deadline_ms)));
+	mod_timer(&wb->barrier_deadline_timer,
+		  jiffies + msecs_to_jiffies(ACCESS_ONCE(wb->barrier_deadline_ms)));
 }
 
-void queue_barrier_io(struct wb_cache *cache, struct bio *bio)
+void queue_barrier_io(struct wb_device *wb, struct bio *bio)
 {
-	mutex_lock(&cache->io_lock);
-	bio_list_add(&cache->barrier_ios, bio);
-	mutex_unlock(&cache->io_lock);
+	mutex_lock(&wb->io_lock);
+	bio_list_add(&wb->barrier_ios, bio);
+	mutex_unlock(&wb->io_lock);
 
-	if (!timer_pending(&cache->barrier_deadline_timer))
-		update_barrier_deadline(cache);
+	if (!timer_pending(&wb->barrier_deadline_timer))
+		update_barrier_deadline(wb);
 }
 
 void barrier_deadline_proc(unsigned long data)
 {
-	struct wb_cache *cache = (struct wb_cache *) data;
-	schedule_work(&cache->barrier_deadline_work);
+	struct wb_device *wb = (struct wb_device *) data;
+	schedule_work(&wb->barrier_deadline_work);
 }
 
 void flush_barrier_ios(struct work_struct *work)
 {
-	struct wb_cache *cache = container_of(work, struct wb_cache,
-					      barrier_deadline_work);
+	struct wb_device *wb = container_of(work, struct wb_device,
+					    barrier_deadline_work);
 
-	if (bio_list_empty(&cache->barrier_ios))
+	if (bio_list_empty(&wb->barrier_ios))
 		return;
 
-	atomic64_inc(&cache->count_non_full_flushed);
-	flush_current_buffer(cache);
+	atomic64_inc(&wb->count_non_full_flushed);
+	flush_current_buffer(wb);
 }
 
 /*----------------------------------------------------------------*/
@@ -78,7 +78,7 @@ int flush_proc(void *data)
 	int r;
 	unsigned long flags;
 
-	struct wb_cache *cache = data;
+	struct wb_device *wb = data;
 
 	while (true) {
 		struct flush_job *job;
@@ -86,9 +86,9 @@ int flush_proc(void *data)
 		struct dm_io_request io_req;
 		struct dm_io_region region;
 
-		spin_lock_irqsave(&cache->flush_queue_lock, flags);
-		while (list_empty(&cache->flush_queue)) {
-			spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+		spin_lock_irqsave(&wb->flush_queue_lock, flags);
+		while (list_empty(&wb->flush_queue)) {
+			spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
 
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 
@@ -99,7 +99,7 @@ int flush_proc(void *data)
 			if (kthread_should_stop())
 				return 0;
 			else
-				spin_lock_irqsave(&cache->flush_queue_lock, flags);
+				spin_lock_irqsave(&wb->flush_queue_lock, flags);
 		}
 
 		/*
@@ -107,9 +107,9 @@ int flush_proc(void *data)
 		 * and flush it.
 		 */
 		job = list_first_entry(
-			&cache->flush_queue, struct flush_job, flush_queue);
+			&wb->flush_queue, struct flush_job, flush_queue);
 		list_del(&job->flush_queue);
-		spin_unlock_irqrestore(&cache->flush_queue_lock, flags);
+		spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
 
 		smp_rmb();
 
@@ -124,13 +124,13 @@ int flush_proc(void *data)
 		};
 
 		region = (struct dm_io_region) {
-			.bdev = cache->cache_dev->bdev,
+			.bdev = wb->cache_dev->bdev,
 			.sector = seg->start_sector,
 			.count = (seg->length + 1) << 3,
 		};
 
 		IO(dm_safe_io(&io_req, 1, &region, NULL, false));
-		atomic64_set(&cache->last_flushed_segment_id, seg->global_id);
+		atomic64_set(&wb->last_flushed_segment_id, seg->global_id);
 
 		complete_all(&seg->flush_done);
 
@@ -142,7 +142,7 @@ int flush_proc(void *data)
 		if (!bio_list_empty(&job->barrier_ios)) {
 			struct bio *bio;
 
-			IO(blkdev_issue_flush(cache->cache_dev->bdev, GFP_NOIO, NULL));
+			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
 			while ((bio = bio_list_pop(&job->barrier_ios))) {
 				LIVE_DEAD(
@@ -151,10 +151,10 @@ int flush_proc(void *data)
 				);
 			}
 
-			update_barrier_deadline(cache);
+			update_barrier_deadline(wb);
 		}
 
-		mempool_free(job, cache->flush_job_pool);
+		mempool_free(job, wb->flush_job_pool);
 	}
 	return 0;
 }
@@ -163,13 +163,13 @@ int flush_proc(void *data)
 
 static void migrate_endio(unsigned long error, void *context)
 {
-	struct wb_cache *cache = context;
+	struct wb_device *wb = context;
 
 	if (error)
-		atomic_inc(&cache->migrate_fail_count);
+		atomic_inc(&wb->migrate_fail_count);
 
-	if (atomic_dec_and_test(&cache->migrate_io_count))
-		wake_up_interruptible(&cache->migrate_wait_queue);
+	if (atomic_dec_and_test(&wb->migrate_io_count))
+		wake_up_interruptible(&wb->migrate_wait_queue);
 }
 
 /*
@@ -181,18 +181,18 @@ static void migrate_endio(unsigned long error, void *context)
  * in the buffer.
  * This function submits the one in position k.
  */
-static void submit_migrate_io(struct wb_cache *cache,
+static void submit_migrate_io(struct wb_device *wb,
 			      struct segment_header *seg, size_t k)
 {
 	int r;
 	u8 i, j;
-	size_t a = cache->nr_caches_inseg * k;
-	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
+	size_t a = wb->nr_caches_inseg * k;
+	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
 
-		u8 dirty_bits = *(cache->dirtiness_snapshot + (a + i));
+		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
 
 		unsigned long offset;
 		void *base, *addr;
@@ -212,12 +212,12 @@ static void submit_migrate_io(struct wb_cache *cache,
 				.client = wb_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
-				.notify.context = cache,
+				.notify.context = wb,
 				.mem.type = DM_IO_VMA,
 				.mem.ptr.vma = addr,
 			};
 			region_w = (struct dm_io_region) {
-				.bdev = cache->origin_dev->bdev,
+				.bdev = wb->origin_dev->bdev,
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
@@ -233,12 +233,12 @@ static void submit_migrate_io(struct wb_cache *cache,
 					.client = wb_io_client,
 					.bi_rw = WRITE,
 					.notify.fn = migrate_endio,
-					.notify.context = cache,
+					.notify.context = wb,
 					.mem.type = DM_IO_VMA,
 					.mem.ptr.vma = addr,
 				};
 				region_w = (struct dm_io_region) {
-					.bdev = cache->origin_dev->bdev,
+					.bdev = wb->origin_dev->bdev,
 					.sector = mb->sector + j,
 					.count = 1,
 				};
@@ -248,14 +248,14 @@ static void submit_migrate_io(struct wb_cache *cache,
 	}
 }
 
-static void memorize_dirty_state(struct wb_cache *cache,
+static void memorize_dirty_state(struct wb_device *wb,
 				 struct segment_header *seg, size_t k,
 				 size_t *migrate_io_count)
 {
 	int r;
 	u8 i, j;
-	size_t a = cache->nr_caches_inseg * k;
-	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
+	size_t a = wb->nr_caches_inseg * k;
+	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 	struct metablock *mb;
 
 	struct dm_io_request io_req_r = {
@@ -266,7 +266,7 @@ static void memorize_dirty_state(struct wb_cache *cache,
 		.mem.ptr.vma = p,
 	};
 	struct dm_io_region region_r = {
-		.bdev = cache->cache_dev->bdev,
+		.bdev = wb->cache_dev->bdev,
 		.sector = seg->start_sector + (1 << 3),
 		.count = seg->length << 3,
 	};
@@ -282,7 +282,7 @@ static void memorize_dirty_state(struct wb_cache *cache,
 	 */
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
-		*(cache->dirtiness_snapshot + (a + i)) =
+		*(wb->dirtiness_snapshot + (a + i)) =
 			atomic_read_mb_dirtiness(seg, mb);
 	}
 
@@ -291,7 +291,7 @@ static void memorize_dirty_state(struct wb_cache *cache,
 
 		mb = seg->mb_array + i;
 
-		dirty_bits = *(cache->dirtiness_snapshot + (a + i));
+		dirty_bits = *(wb->dirtiness_snapshot + (a + i));
 
 		if (!dirty_bits)
 			continue;
@@ -307,16 +307,16 @@ static void memorize_dirty_state(struct wb_cache *cache,
 	}
 }
 
-static void cleanup_segment(struct wb_cache *cache, struct segment_header *seg)
+static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
 {
 	u8 i;
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
-		cleanup_mb_if_dirty(cache, seg, mb);
+		cleanup_mb_if_dirty(wb, seg, mb);
 	}
 }
 
-static void migrate_linked_segments(struct wb_cache *cache)
+static void migrate_linked_segments(struct wb_device *wb)
 {
 	int r;
 	struct segment_header *seg;
@@ -329,36 +329,36 @@ static void migrate_linked_segments(struct wb_cache *cache)
 	 * - etc.
 	 */
 	k = 0;
-	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		memorize_dirty_state(cache, seg, k, &migrate_io_count);
+	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+		memorize_dirty_state(wb, seg, k, &migrate_io_count);
 		k++;
 	}
 
 migrate_write:
-	atomic_set(&cache->migrate_io_count, migrate_io_count);
-	atomic_set(&cache->migrate_fail_count, 0);
+	atomic_set(&wb->migrate_io_count, migrate_io_count);
+	atomic_set(&wb->migrate_fail_count, 0);
 
 	k = 0;
-	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		submit_migrate_io(cache, seg, k);
+	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+		submit_migrate_io(wb, seg, k);
 		k++;
 	}
 
 	LIVE_DEAD(
-		wait_event_interruptible(cache->migrate_wait_queue,
-					 atomic_read(&cache->migrate_io_count) == 0),
-		atomic_set(&cache->migrate_io_count, 0));
+		wait_event_interruptible(wb->migrate_wait_queue,
+					 atomic_read(&wb->migrate_io_count) == 0),
+		atomic_set(&wb->migrate_io_count, 0));
 
-	if (atomic_read(&cache->migrate_fail_count)) {
+	if (atomic_read(&wb->migrate_fail_count)) {
 		WBWARN("%u writebacks failed. retry.",
-		       atomic_read(&cache->migrate_fail_count));
+		       atomic_read(&wb->migrate_fail_count));
 		goto migrate_write;
 	}
 
-	BUG_ON(atomic_read(&cache->migrate_io_count));
+	BUG_ON(atomic_read(&wb->migrate_io_count));
 
-	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		cleanup_segment(cache, seg);
+	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+		cleanup_segment(wb, seg);
 	}
 
 	/*
@@ -376,7 +376,7 @@ migrate_write:
 	 * on this issue by always
 	 * migrating those data persistently.
 	 */
-	IO(blkdev_issue_flush(cache->origin_dev->bdev, GFP_NOIO, NULL));
+	IO(blkdev_issue_flush(wb->origin_dev->bdev, GFP_NOIO, NULL));
 
 	/*
 	 * Discarding the migrated regions
@@ -390,8 +390,8 @@ migrate_write:
 	 * and unexpected metablock data
 	 * will craze the cache.
 	 */
-	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		IO(blkdev_issue_discard(cache->cache_dev->bdev,
+	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+		IO(blkdev_issue_discard(wb->cache_dev->bdev,
 					seg->start_sector + (1 << 3),
 					seg->length << 3,
 					GFP_NOIO, 0));
@@ -400,7 +400,7 @@ migrate_write:
 
 int migrate_proc(void *data)
 {
-	struct wb_cache *cache = data;
+	struct wb_device *wb = data;
 
 	while (!kthread_should_stop()) {
 		bool allow_migrate;
@@ -411,30 +411,30 @@ int migrate_proc(void *data)
 		 * If urge_migrate is true
 		 * Migration should be immediate.
 		 */
-		allow_migrate = ACCESS_ONCE(cache->urge_migrate) ||
-				ACCESS_ONCE(cache->allow_migrate);
+		allow_migrate = ACCESS_ONCE(wb->urge_migrate) ||
+				ACCESS_ONCE(wb->allow_migrate);
 
 		if (!allow_migrate) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 
-		nr_mig_candidates = atomic64_read(&cache->last_flushed_segment_id) -
-				    atomic64_read(&cache->last_migrated_segment_id);
+		nr_mig_candidates = atomic64_read(&wb->last_flushed_segment_id) -
+				    atomic64_read(&wb->last_migrated_segment_id);
 
 		if (!nr_mig_candidates) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 
-		nr_max_batch = ACCESS_ONCE(cache->nr_max_batched_migration);
-		if (cache->nr_cur_batched_migration != nr_max_batch) {
+		nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
+		if (wb->nr_cur_batched_migration != nr_max_batch) {
 			/*
 			 * Request buffer for nr_max_batch size.
 			 * If the allocation fails
 			 * continue to use the current buffer.
 			 */
-			alloc_migration_buffer(cache, nr_max_batch);
+			alloc_migration_buffer(wb, nr_max_batch);
 		}
 
 		/*
@@ -443,16 +443,15 @@ int migrate_proc(void *data)
 		 * segments at a time.
 		 */
 		nr_mig = min(nr_mig_candidates,
-			     cache->nr_cur_batched_migration);
+			     wb->nr_cur_batched_migration);
 
 		/*
 		 * Add segments to migrate atomically.
 		 */
 		for (i = 1; i <= nr_mig; i++) {
-			seg = get_segment_header_by_id(
-					cache,
-					atomic64_read(&cache->last_migrated_segment_id) + i);
-			list_add_tail(&seg->migrate_list, &cache->migrate_list);
+			seg = get_segment_header_by_id(wb,
+					atomic64_read(&wb->last_migrated_segment_id) + i);
+			list_add_tail(&seg->migrate_list, &wb->migrate_list);
 		}
 
 		/*
@@ -462,17 +461,17 @@ int migrate_proc(void *data)
 		 */
 		smp_wmb();
 
-		migrate_linked_segments(cache);
+		migrate_linked_segments(wb);
 
 		/*
 		 * (Locking)
 		 * Only line of code changes
 		 * last_migrate_segment_id during runtime.
 		 */
-		atomic64_add(nr_mig, &cache->last_migrated_segment_id);
+		atomic64_add(nr_mig, &wb->last_migrated_segment_id);
 
 		list_for_each_entry_safe(seg, tmp,
-					 &cache->migrate_list,
+					 &wb->migrate_list,
 					 migrate_list) {
 			complete_all(&seg->migrate_done);
 			list_del(&seg->migrate_list);
@@ -485,9 +484,9 @@ int migrate_proc(void *data)
  * Wait for a segment of given ID
  * finishes its migration.
  */
-void wait_for_migration(struct wb_cache *cache, u64 id)
+void wait_for_migration(struct wb_device *wb, u64 id)
 {
-	struct segment_header *seg = get_segment_header_by_id(cache, id);
+	struct segment_header *seg = get_segment_header_by_id(wb, id);
 
 	/*
 	 * Set urge_migrate to true
@@ -495,19 +494,19 @@ void wait_for_migration(struct wb_cache *cache, u64 id)
 	 * to complete migarate of this segment
 	 * immediately.
 	 */
-	cache->urge_migrate = true;
-	wake_up_process(cache->migrate_daemon);
+	wb->urge_migrate = true;
+	wake_up_process(wb->migrate_daemon);
 	wait_for_completion(&seg->migrate_done);
-	cache->urge_migrate = false;
+	wb->urge_migrate = false;
 }
 
 /*----------------------------------------------------------------*/
 
 int modulator_proc(void *data)
 {
-	struct wb_cache *cache = data;
+	struct wb_device *wb = data;
 
-	struct hd_struct *hd = cache->origin_dev->bdev->bd_part;
+	struct hd_struct *hd = wb->origin_dev->bdev->bd_part;
 	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 
@@ -516,15 +515,15 @@ int modulator_proc(void *data)
 
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
-		if (!ACCESS_ONCE(cache->enable_migration_modulator))
+		if (!ACCESS_ONCE(wb->enable_migration_modulator))
 			goto modulator_update;
 
 		util = div_u64(100 * (new - old), 1000);
 
-		if (util < ACCESS_ONCE(cache->migrate_threshold))
-			cache->allow_migrate = true;
+		if (util < ACCESS_ONCE(wb->migrate_threshold))
+			wb->allow_migrate = true;
 		else
-			cache->allow_migrate = false;
+			wb->allow_migrate = false;
 
 modulator_update:
 		old = new;
@@ -536,7 +535,7 @@ modulator_update:
 
 /*----------------------------------------------------------------*/
 
-static void update_superblock_record(struct wb_cache *cache)
+static void update_superblock_record(struct wb_device *wb)
 {
 	int r;
 	struct superblock_record_device o;
@@ -545,9 +544,9 @@ static void update_superblock_record(struct wb_cache *cache)
 	struct dm_io_region region;
 
 	o.last_migrated_segment_id =
-		cpu_to_le64(atomic64_read(&cache->last_migrated_segment_id));
+		cpu_to_le64(atomic64_read(&wb->last_migrated_segment_id));
 
-	buf = mempool_alloc(cache->buf_1_pool, GFP_NOIO | __GFP_ZERO);
+	buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO | __GFP_ZERO);
 	memcpy(buf, &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
@@ -558,17 +557,17 @@ static void update_superblock_record(struct wb_cache *cache)
 		.mem.ptr.addr = buf,
 	};
 	region = (struct dm_io_region) {
-		.bdev = cache->cache_dev->bdev,
+		.bdev = wb->cache_dev->bdev,
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
-	mempool_free(buf, cache->buf_1_pool);
+	mempool_free(buf, wb->buf_1_pool);
 }
 
 int recorder_proc(void *data)
 {
-	struct wb_cache *cache = data;
+	struct wb_device *wb = data;
 
 	unsigned long intvl;
 
@@ -576,14 +575,14 @@ int recorder_proc(void *data)
 		stop_on_dead();
 
 		/* sec -> ms */
-		intvl = ACCESS_ONCE(cache->update_record_interval) * 1000;
+		intvl = ACCESS_ONCE(wb->update_record_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 
-		update_superblock_record(cache);
+		update_superblock_record(wb);
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
@@ -595,22 +594,22 @@ int recorder_proc(void *data)
 int sync_proc(void *data)
 {
 	int r;
-	struct wb_cache *cache = data;
+	struct wb_device *wb = data;
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
 		stop_on_dead();
 
 		/* sec -> ms */
-		intvl = ACCESS_ONCE(cache->sync_interval) * 1000;
+		intvl = ACCESS_ONCE(wb->sync_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
 
-		flush_current_buffer(cache);
-		IO(blkdev_issue_flush(cache->cache_dev->bdev, GFP_NOIO, NULL));
+		flush_current_buffer(wb);
+		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}

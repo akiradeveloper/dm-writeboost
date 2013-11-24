@@ -13,14 +13,14 @@ int flush_proc(void *);
 
 /*----------------------------------------------------------------*/
 
-void queue_barrier_io(struct wb_cache *, struct bio *);
+void queue_barrier_io(struct wb_device *, struct bio *);
 void barrier_deadline_proc(unsigned long data);
 void flush_barrier_ios(struct work_struct *);
 
 /*----------------------------------------------------------------*/
 
 int migrate_proc(void *);
-void wait_for_migration(struct wb_cache *, u64 id);
+void wait_for_migration(struct wb_device *, u64 id);
 
 /*----------------------------------------------------------------*/
 

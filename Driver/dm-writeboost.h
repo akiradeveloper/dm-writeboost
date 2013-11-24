@@ -237,10 +237,8 @@ enum RAMBUF_TYPE {
 	BUF_NV_RAM,
 };
 
-struct wb_cache {
+struct wb_device {
 	int type;
-
-	struct dm_target *ti;
 
 	mempool_t *buf_1_pool; /* 1 sector buffer pool */
 	mempool_t *buf_8_pool; /* 8 sector buffer pool */
@@ -383,9 +381,9 @@ struct per_bio_data {
 
 /*----------------------------------------------------------------*/
 
-void flush_current_buffer(struct wb_cache *);
-void inc_nr_dirty_caches(struct wb_cache *);
-void cleanup_mb_if_dirty(struct wb_cache *,
+void flush_current_buffer(struct wb_device *);
+void inc_nr_dirty_caches(struct wb_device *);
+void cleanup_mb_if_dirty(struct wb_device *,
 			 struct segment_header *,
 			 struct metablock *);
 u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
@@ -396,12 +394,12 @@ extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
 
 int dm_safe_io_internal(
-		struct wb_cache*,
+		struct wb_device *,
 		struct dm_io_request *,
 		unsigned num_regions, struct dm_io_region *,
 		unsigned long *err_bits, bool thread, const char *caller);
 #define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
-		dm_safe_io_internal(cache, (io_req), (num_regions), (regions), \
+		dm_safe_io_internal(wb, (io_req), (num_regions), (regions), \
 				    (err_bits), (thread), __func__);
 
 sector_t dm_devsize(struct dm_dev *);
@@ -428,7 +426,7 @@ sector_t dm_devsize(struct dm_dev *);
 
 #define LIVE_DEAD(proc_live, proc_dead) \
 	do { \
-		if (likely(!test_bit(WB_DEAD, &cache->flags))) { \
+		if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
 			proc_live; \
 		} else { \
 			proc_dead; \
@@ -437,14 +435,14 @@ sector_t dm_devsize(struct dm_dev *);
 
 #define LIVE(proc) \
 	do { \
-		if (likely(!test_bit(WB_DEAD, &cache->flags))) { \
+		if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
 			proc; \
 		} \
 	} while (0)
 
 #define DEAD(proc) \
 	do { \
-		if (unlikely(test_bit(WB_DEAD, &cache->flags))) { \
+		if (unlikely(test_bit(WB_DEAD, &wb->flags))) { \
 			proc; \
 		} \
 	} while (0)
@@ -469,8 +467,8 @@ sector_t dm_devsize(struct dm_dev *);
 		if (r == -EOPNOTSUPP) { \
 			r = 0; \
 		} else if (r == -EIO) { \
-			set_bit(WB_DEAD, &cache->flags); \
-			wake_up_all(&cache->dead_wait_queue); \
+			set_bit(WB_DEAD, &wb->flags); \
+			wake_up_all(&wb->dead_wait_queue); \
 			WBERR("marked as dead"); \
 		} else if (r == -ENOMEM) { \
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\

@@ -9,43 +9,43 @@
 
 /*----------------------------------------------------------------*/
 
-struct segment_header *get_segment_header_by_id(struct wb_cache *,
+struct segment_header *get_segment_header_by_id(struct wb_device *,
 						u64 segment_id);
-sector_t calc_mb_start_sector(struct wb_cache *,
+sector_t calc_mb_start_sector(struct wb_device *,
 			      struct segment_header *, u32 mb_idx);
-bool is_on_buffer(struct wb_cache *, u32 mb_idx);
+bool is_on_buffer(struct wb_device *, u32 mb_idx);
 
 /*----------------------------------------------------------------*/
 
-struct ht_head *ht_get_head(struct wb_cache *, struct lookup_key *);
-struct metablock *ht_lookup(struct wb_cache *,
+struct ht_head *ht_get_head(struct wb_device *, struct lookup_key *);
+struct metablock *ht_lookup(struct wb_device *,
 			    struct ht_head *, struct lookup_key *);
-void ht_register(struct wb_cache *, struct ht_head *,
+void ht_register(struct wb_device *, struct ht_head *,
 		 struct lookup_key *, struct metablock *);
-void ht_del(struct wb_cache *, struct metablock *);
-void discard_caches_inseg(struct wb_cache *, struct segment_header *);
+void ht_del(struct wb_device *, struct metablock *);
+void discard_caches_inseg(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/
 
-int __must_check audit_cache_device(struct dm_dev *, struct wb_cache *,
+int __must_check audit_cache_device(struct dm_dev *, struct wb_device *,
 				    bool *need_format, bool *allow_format);
-int __must_check format_cache_device(struct dm_dev *, struct wb_cache *);
+int __must_check format_cache_device(struct dm_dev *, struct wb_device *);
 
 /*----------------------------------------------------------------*/
 
 void prepare_segment_header_device(struct segment_header_device *dest,
-				   struct wb_cache *,
+				   struct wb_device *,
 				   struct segment_header *src);
 
 /*----------------------------------------------------------------*/
 
-int alloc_migration_buffer(struct wb_cache *cache, size_t nr_batch);
-void free_migration_buffer(struct wb_cache *cache);
+int alloc_migration_buffer(struct wb_device *, size_t nr_batch);
+void free_migration_buffer(struct wb_device *);
 
 /*----------------------------------------------------------------*/
 
-int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev);
-void free_cache(struct wb_cache *cache);
+int __must_check resume_cache(struct wb_device *, struct dm_dev *dev);
+void free_cache(struct wb_device *);
 
 /*----------------------------------------------------------------*/
 

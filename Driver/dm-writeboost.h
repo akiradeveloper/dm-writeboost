@@ -219,21 +219,38 @@ struct ht_head {
 	struct hlist_head ht_list;
 };
 
-struct wb_device;
-struct wb_cache {
-	struct wb_device *wb;
+enum WB_FLAG {
+	/*
+	 * The flag WB_DEAD set makes all the daemons
+	 * sleep and device return EIO on any requests.
+	 *
+	 * This flag is set when either one of the underlying
+	 * devices returned EIO and we must immediately
+	 * block up the whole to avoid further damage.
+	 */
+	WB_DEAD = 0,
+};
+
+enum RAMBUF_TYPE {
+	BUF_NORMAL = 0,
+	BUF_NV_BLK,
+	BUF_NV_RAM,
+};
+
+struct wb_device {
+	int type;
 
 	mempool_t *buf_1_pool; /* 1 sector buffer pool */
 	mempool_t *buf_8_pool; /* 8 sector buffer pool */
 	mempool_t *flush_job_pool;
 
-	struct dm_dev *device;
+	struct dm_dev *origin_dev;
+	struct dm_dev *cache_dev;
+
 	struct mutex io_lock;
-	u32 nr_caches; /* Const */
-	u32 nr_segments; /* Const */
+
 	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
-	struct large_array *segment_header_array;
 
 	/*
 	 * Chained hashtable
@@ -243,12 +260,15 @@ struct wb_cache {
 	 * Cache discarding often happedns
 	 * This structure fits our needs.
 	 */
+	u32 cursor; /* Index that has been written the most lately */
+	u32 nr_caches; /* Const */
 	struct large_array *htable;
 	size_t htsize;
 	struct ht_head *null_head;
 
-	u32 cursor; /* Index that has been written the most lately */
 	struct segment_header *current_seg;
+	u32 nr_segments; /* Const */
+	struct large_array *segment_header_array;
 
 	struct rambuffer *current_rambuf;
 	u32 rambuf_pool_amount; /* kB */
@@ -257,7 +277,6 @@ struct wb_cache {
 
 	atomic64_t last_migrated_segment_id;
 	atomic64_t last_flushed_segment_id;
-	int urge_migrate;
 
 	/*
 	 * Flush daemon
@@ -289,6 +308,7 @@ struct wb_cache {
 	 */
 	struct task_struct *migrate_daemon;
 	int allow_migrate; /* param */
+	int urge_migrate;
 
 	/*
 	 * Batched Migration
@@ -314,6 +334,7 @@ struct wb_cache {
 	 */
 	struct task_struct *modulator_daemon;
 	int enable_migration_modulator; /* param */
+	u8 migrate_threshold;
 
 	/*
 	 * Superblock Recorder
@@ -333,43 +354,11 @@ struct wb_cache {
 	struct task_struct *sync_daemon;
 	unsigned long sync_interval; /* param */
 
+	atomic64_t nr_dirty_caches;
 	atomic64_t stat[STATLEN];
 	atomic64_t count_non_full_flushed;
-};
-
-enum WB_FLAG {
-	/*
-	 * The flag WB_DEAD set makes all the daemons
-	 * sleep and device return EIO on any requests.
-	 *
-	 * This flag is set when either one of the underlying
-	 * devices returned EIO and we must immediately
-	 * block up the whole to avoid further damage.
-	 */
-	WB_DEAD = 0,
-};
-
-enum RAMBUF_TYPE {
-	BUF_NORMAL = 0,
-	BUF_NV_BLK,
-	BUF_NV_RAM,
-};
-
-struct wb_device {
-	int type;
-
-	struct dm_target *ti;
-
-	struct dm_dev *device;
-
-	struct wb_cache *cache;
-
-	u8 migrate_threshold;
-
-	atomic64_t nr_dirty_caches;
 
 	wait_queue_head_t dead_wait_queue;
-
 	unsigned long flags;
 };
 
@@ -392,9 +381,9 @@ struct per_bio_data {
 
 /*----------------------------------------------------------------*/
 
-void flush_current_buffer(struct wb_cache *);
+void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
-void cleanup_mb_if_dirty(struct wb_cache *,
+void cleanup_mb_if_dirty(struct wb_device *,
 			 struct segment_header *,
 			 struct metablock *);
 u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
@@ -405,7 +394,7 @@ extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
 
 int dm_safe_io_internal(
-		struct wb_device*,
+		struct wb_device *,
 		struct dm_io_request *,
 		unsigned num_regions, struct dm_io_region *,
 		unsigned long *err_bits, bool thread, const char *caller);

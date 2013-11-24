@@ -35,7 +35,7 @@ static void safe_io_proc(struct work_struct *work)
  * @thread run this operation in other thread to avoid deadlock.
  */
 int dm_safe_io_internal(
-		struct wb_device *wb,
+		struct wb_cache *cache,
 		struct dm_io_request *io_req,
 		unsigned num_regions, struct dm_io_region *regions,
 		unsigned long *err_bits, bool thread, const char *caller)
@@ -241,16 +241,16 @@ void flush_current_buffer(struct wb_cache *cache)
 
 /*----------------------------------------------------------------*/
 
-void inc_nr_dirty_caches(struct wb_device *wb)
+void inc_nr_dirty_caches(struct wb_cache *cache)
 {
-	BUG_ON(!wb);
-	atomic64_inc(&wb->nr_dirty_caches);
+	BUG_ON(!cache);
+	atomic64_inc(&cache->nr_dirty_caches);
 }
 
-static void dec_nr_dirty_caches(struct wb_device *wb)
+static void dec_nr_dirty_caches(struct wb_cache *cache)
 {
-	BUG_ON(!wb);
-	atomic64_dec(&wb->nr_dirty_caches);
+	BUG_ON(!cache);
+	atomic64_dec(&cache->nr_dirty_caches);
 }
 
 void cleanup_mb_if_dirty(struct wb_cache *cache,
@@ -268,7 +268,7 @@ void cleanup_mb_if_dirty(struct wb_cache *cache,
 	unlockseg(seg, flags);
 
 	if (b)
-		dec_nr_dirty_caches(cache->wb);
+		dec_nr_dirty_caches(cache);
 }
 
 u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
@@ -318,7 +318,6 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 		       struct metablock *mb, u8 dirty_bits, bool thread)
 {
 	int r;
-	struct wb_device *wb = cache->wb;
 
 	if (!dirty_bits)
 		return;
@@ -336,7 +335,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.mem.ptr.addr = buf,
 		};
 		region_r = (struct dm_io_region) {
-			.bdev = cache->device->bdev,
+			.bdev = cache->cache_dev->bdev,
 			.sector = calc_mb_start_sector(cache, seg, mb->idx),
 			.count = (1 << 3),
 		};
@@ -350,7 +349,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			.mem.ptr.addr = buf,
 		};
 		region_w = (struct dm_io_region) {
-			.bdev = wb->device->bdev,
+			.bdev = cache->origin_dev->bdev,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
@@ -379,7 +378,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 			/* A tmp variable just to avoid 80 cols rule */
 			src = calc_mb_start_sector(cache, seg, mb->idx) + i;
 			region_r = (struct dm_io_region) {
-				.bdev = cache->device->bdev,
+				.bdev = cache->cache_dev->bdev,
 				.sector = src,
 				.count = 1,
 			};
@@ -393,7 +392,7 @@ static void migrate_mb(struct wb_cache *cache, struct segment_header *seg,
 				.mem.ptr.addr = buf,
 			};
 			region_w = (struct dm_io_region) {
-				.bdev = wb->device->bdev,
+				.bdev = cache->origin_dev->bdev,
 				.sector = mb->sector + 1 * i,
 				.count = 1,
 			};
@@ -411,7 +410,6 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 				struct metablock *mb, u8 dirty_bits)
 {
 	int r;
-	struct wb_device *wb = cache->wb;
 	u8 i;
 	sector_t offset;
 	void *buf;
@@ -445,7 +443,7 @@ static void migrate_buffered_mb(struct wb_cache *cache,
 
 		dest = mb->sector + 1 * i;
 		region = (struct dm_io_region) {
-			.bdev = wb->device->bdev,
+			.bdev = cache->origin_dev->bdev,
 			.sector = dest,
 			.count = 1,
 		};
@@ -485,9 +483,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	size_t start;
 	void *data;
 
-	struct wb_device *wb = ti->private;
-	struct wb_cache *cache = wb->cache;
-	struct dm_dev *orig = wb->device;
+	struct wb_cache *cache = ti->private;
+	struct dm_dev *orig = cache->origin_dev;
 
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
 	map_context->ptr = NULL;
@@ -643,7 +640,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 		if (likely(dirty_bits == 255)) {
 			bio_remap(bio,
-				  cache->device,
+				  cache->cache_dev,
 				  calc_mb_start_sector(cache, seg, mb->idx)
 				  + bio_offset);
 			map_context->ptr = seg;
@@ -768,7 +765,7 @@ write_on_buffer:
 	unlockseg(seg, flags);
 
 	if (b)
-		inc_nr_dirty_caches(wb);
+		inc_nr_dirty_caches(cache);
 
 	start = s << SECTOR_SHIFT;
 	data = bio_data(bio);
@@ -841,7 +838,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	int r = 0;
 	struct dm_arg_set as;
 	bool need_format, allow_format;
-	struct wb_device *wb;
 	struct wb_cache *cache;
 	struct dm_dev *origdev, *cachedev;
 	unsigned opt_argc, tmp;
@@ -862,36 +858,28 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return r;
 	}
 
-	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
-	if (!wb) {
-		ti->error = "couldn't allocate wb";
+	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
+	if (!cache) {
+		ti->error = "couldn't allocate cache";
 		return -ENOMEM;
 	}
-	atomic64_set(&wb->nr_dirty_caches, 0);
+
+	atomic64_set(&cache->nr_dirty_caches, 0);
 
 	/*
 	 * EMC's textbook on storage system says
 	 * storage should keep its disk util less
 	 * than 70%.
 	 */
-	wb->migrate_threshold = 70;
+	cache->migrate_threshold = 70;
 
-	init_waitqueue_head(&wb->dead_wait_queue);
-	clear_bit(WB_DEAD, &wb->flags);
-
-	cache = kzalloc(sizeof(*cache), GFP_KERNEL);
-	if (!cache) {
-		r = -ENOMEM;
-		ti->error = "couldn't allocate cache";
-		goto bad_alloc_cache;
-	}
-	wb->cache = cache;
-	wb->cache->wb = wb;
+	init_waitqueue_head(&cache->dead_wait_queue);
+	clear_bit(WB_DEAD, &cache->flags);
 
 	r = dm_read_arg(_args, &as, &tmp, &ti->error);
 	if (r)
 		goto bad_type;
-	wb->type = tmp;
+	cache->type = tmp;
 
 	r = dm_get_device(ti, dm_shift_arg(&as), dm_table_get_mode(ti->table),
 			  &origdev);
@@ -899,7 +887,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		ti->error = "couldn't get backing dev";
 		goto bad_get_device_orig;
 	}
-	wb->device = origdev;
+	cache->origin_dev = origdev;
 
 	r = dm_get_device(ti, dm_shift_arg(&as), dm_table_get_mode(ti->table),
 			  &cachedev);
@@ -978,8 +966,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	clear_stat(cache);
 	atomic64_set(&cache->count_non_full_flushed, 0);
 
-	wb->ti = ti;
-	ti->private = wb;
+	cache->ti = ti;
+	ti->private = cache;
 
 	ti->per_bio_data_size = sizeof(struct per_bio_data);
 
@@ -1014,27 +1002,24 @@ bad_get_device_cache:
 bad_get_device_orig:
 bad_type:
 	kfree(cache);
-bad_alloc_cache:
-	kfree(wb);
 	return r;
 }
 
 static void writeboost_dtr(struct dm_target *ti)
 {
-	struct wb_device *wb = ti->private;
-	struct wb_cache *cache = wb->cache;
+	struct wb_cache *cache = ti->private;
 
-	set_bit(WB_DEAD, &wb->flags);
-	wake_up_all(&wb->dead_wait_queue);
+	set_bit(WB_DEAD, &cache->flags);
+	wake_up_all(&cache->dead_wait_queue);
 
 	free_cache(cache);
 	kfree(cache);
 
-	dm_put_device(wb->ti, cache->device);
-	dm_put_device(ti, wb->device);
+	dm_put_device(ti, cache->cache_dev);
+	dm_put_device(ti, cache->origin_dev);
 
 	ti->private = NULL;
-	kfree(wb);
+	kfree(cache);
 }
 
 /*
@@ -1045,25 +1030,22 @@ static void writeboost_postsuspend(struct dm_target *ti)
 {
 	int r;
 
-	struct wb_device *wb = ti->private;
-	struct wb_cache *cache = wb->cache;
+	struct wb_cache *cache = ti->private;
 
 	flush_current_buffer(cache);
-	IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
+	IO(blkdev_issue_flush(cache->cache_dev->bdev, GFP_NOIO, NULL));
 }
 
 static void writeboost_resume(struct dm_target *ti) {}
 
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {
-	struct wb_device *wb = ti->private;
-	struct wb_cache *cache = wb->cache;
+	struct wb_cache *cache = ti->private;
 
 	char *cmd = argv[0];
 	unsigned long tmp;
 
 	if (!strcasecmp(cmd, "clear_stat")) {
-		struct wb_cache *cache = wb->cache;
 		clear_stat(cache);
 		return 0;
 	}
@@ -1100,7 +1082,7 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	if (!strcasecmp(cmd, "migrate_threshold")) {
-		wb->migrate_threshold = tmp;
+		cache->migrate_threshold = tmp;
 		return 0;
 	}
 
@@ -1120,8 +1102,8 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 static int writeboost_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
 			    struct bio_vec *biovec, int max_size)
 {
-	struct wb_device *wb = ti->private;
-	struct dm_dev *device = wb->device;
+	struct wb_cache *cache = ti->private;
+	struct dm_dev *device = cache->origin_dev;
 	struct request_queue *q = bdev_get_queue(device->bdev);
 
 	if (!q->merge_bvec_fn)
@@ -1134,8 +1116,8 @@ static int writeboost_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
 static int writeboost_iterate_devices(struct dm_target *ti,
 				      iterate_devices_callout_fn fn, void *data)
 {
-	struct wb_device *wb = ti->private;
-	struct dm_dev *orig = wb->device;
+	struct wb_cache *cache = ti->private;
+	struct dm_dev *orig = cache->origin_dev;
 	sector_t start = 0;
 	sector_t len = dm_devsize(orig);
 	return fn(ti, orig, start, len, data);
@@ -1152,8 +1134,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 			      unsigned flags, char *result, unsigned maxlen)
 {
 	unsigned int sz = 0;
-	struct wb_device *wb = ti->private;
-	struct wb_cache *cache = wb->cache;
+	struct wb_cache *cache = ti->private;
 	size_t i;
 
 	switch (type) {
@@ -1172,7 +1153,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		       (long long unsigned int)
 		       atomic64_read(&cache->last_migrated_segment_id),
 		       (long long unsigned int)
-		       atomic64_read(&wb->nr_dirty_caches));
+		       atomic64_read(&cache->nr_dirty_caches));
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v = &cache->stat[i];
@@ -1188,7 +1169,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		DMEMIT("enable_migration_modulator %d ",
 		       cache->enable_migration_modulator ? 1 : 0);
 		DMEMIT("migrate_threshold %d ",
-		       wb->migrate_threshold);
+		       cache->migrate_threshold);
 		DMEMIT("nr_cur_batched_migration %u ",
 		       cache->nr_cur_batched_migration);
 		DMEMIT("sync_interval %lu ",
@@ -1199,8 +1180,8 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 	case STATUSTYPE_TABLE:
 		DMEMIT("0 %s %s 4 segment_size_order %u rambuf_pool_amount %u",
-		       wb->device->name,
-		       wb->cache->device->name,
+		       cache->origin_dev->name,
+		       cache->cache_dev->name,
 		       cache->segment_size_order,
 		       cache->rambuf_pool_amount);
 		break;

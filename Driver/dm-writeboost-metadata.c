@@ -332,7 +332,6 @@ static int read_superblock_header(struct wb_cache *cache,
 	int r = 0;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
-	struct wb_device *wb = cache->wb;
 
 	void *buf = kmalloc(1 << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
@@ -406,7 +405,6 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_cache *cache,
 static int format_superblock_header(struct dm_dev *dev, struct wb_cache *cache)
 {
 	int r = 0;
-	struct wb_device *wb = cache->wb;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
 
@@ -466,7 +464,6 @@ static void format_segmd_endio(unsigned long error, void *__context)
 int __must_check format_cache_device(struct dm_dev *dev, struct wb_cache *cache)
 {
 	u32 i, nr_segments = calc_nr_segments(dev, cache);
-	struct wb_device *wb = cache->wb;
 	struct format_segmd_context context;
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
@@ -570,7 +567,6 @@ read_superblock_record(struct superblock_record_device *record,
 		       struct wb_cache *cache)
 {
 	int r = 0;
-	struct wb_device *wb = cache->wb;
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 
@@ -588,7 +584,7 @@ read_superblock_record(struct superblock_record_device *record,
 		.mem.ptr.addr = buf,
 	};
 	region = (struct dm_io_region) {
-		.bdev = cache->device->bdev,
+		.bdev = cache->cache_dev->bdev,
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
@@ -611,7 +607,6 @@ read_segment_header_device(struct segment_header_device *dest,
 			   struct wb_cache *cache, u32 segment_idx)
 {
 	int r = 0;
-	struct wb_device *wb = cache->wb;
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 	void *buf = kmalloc(1 << 12, GFP_KERNEL);
@@ -628,7 +623,7 @@ read_segment_header_device(struct segment_header_device *dest,
 		.mem.ptr.addr = buf,
 	};
 	region = (struct dm_io_region) {
-		.bdev = cache->device->bdev,
+		.bdev = cache->cache_dev->bdev,
 		.sector = calc_segment_header_start(cache, segment_idx),
 		.count = (1 << 3),
 	};
@@ -732,7 +727,7 @@ static void update_by_segment_header_device(struct wb_cache *cache,
 		mb->sector = le64_to_cpu(mbdev->sector);
 		mb->dirty_bits = mbdev->dirty_bits;
 
-		inc_nr_dirty_caches(cache->wb);
+		inc_nr_dirty_caches(cache);
 
 		key = (struct lookup_key) {
 			.sector = mb->sector,
@@ -1016,8 +1011,8 @@ int __must_check resume_cache(struct wb_cache *cache, struct dm_dev *dev)
 	int r = 0;
 	size_t nr_batch;
 
-	cache->device = dev;
-	cache->nr_segments = calc_nr_segments(cache->device, cache);
+	cache->cache_dev = dev;
+	cache->nr_segments = calc_nr_segments(cache->cache_dev, cache);
 	/*
 	 * The first 4KB (1<<3 sectors) in segment
 	 * is for metadata.

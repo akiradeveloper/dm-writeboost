@@ -30,8 +30,8 @@
 #define stop_on_dead() \
 	do { \
 		DEAD(WBERR("daemon stop")); \
-		wait_event_interruptible(wb->dead_wait_queue, \
-					 !test_bit(WB_DEAD, &wb->flags) || \
+		wait_event_interruptible(cache->dead_wait_queue, \
+					 !test_bit(WB_DEAD, &cache->flags) || \
 					 kthread_should_stop()); \
 	} while (0)
 
@@ -79,7 +79,6 @@ int flush_proc(void *data)
 	unsigned long flags;
 
 	struct wb_cache *cache = data;
-	struct wb_device *wb = cache->wb;
 
 	while (true) {
 		struct flush_job *job;
@@ -125,7 +124,7 @@ int flush_proc(void *data)
 		};
 
 		region = (struct dm_io_region) {
-			.bdev = cache->device->bdev,
+			.bdev = cache->cache_dev->bdev,
 			.sector = seg->start_sector,
 			.count = (seg->length + 1) << 3,
 		};
@@ -143,7 +142,7 @@ int flush_proc(void *data)
 		if (!bio_list_empty(&job->barrier_ios)) {
 			struct bio *bio;
 
-			IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
+			IO(blkdev_issue_flush(cache->cache_dev->bdev, GFP_NOIO, NULL));
 
 			while ((bio = bio_list_pop(&job->barrier_ios))) {
 				LIVE_DEAD(
@@ -193,7 +192,6 @@ static void submit_migrate_io(struct wb_cache *cache,
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
 
-		struct wb_device *wb = cache->wb;
 		u8 dirty_bits = *(cache->dirtiness_snapshot + (a + i));
 
 		unsigned long offset;
@@ -219,7 +217,7 @@ static void submit_migrate_io(struct wb_cache *cache,
 				.mem.ptr.vma = addr,
 			};
 			region_w = (struct dm_io_region) {
-				.bdev = wb->device->bdev,
+				.bdev = cache->origin_dev->bdev,
 				.sector = mb->sector,
 				.count = (1 << 3),
 			};
@@ -240,7 +238,7 @@ static void submit_migrate_io(struct wb_cache *cache,
 					.mem.ptr.vma = addr,
 				};
 				region_w = (struct dm_io_region) {
-					.bdev = wb->device->bdev,
+					.bdev = cache->origin_dev->bdev,
 					.sector = mb->sector + j,
 					.count = 1,
 				};
@@ -256,7 +254,6 @@ static void memorize_dirty_state(struct wb_cache *cache,
 {
 	int r;
 	u8 i, j;
-	struct wb_device *wb = cache->wb;
 	size_t a = cache->nr_caches_inseg * k;
 	void *p = cache->migrate_buffer + (cache->nr_caches_inseg << 12) * k;
 	struct metablock *mb;
@@ -269,7 +266,7 @@ static void memorize_dirty_state(struct wb_cache *cache,
 		.mem.ptr.vma = p,
 	};
 	struct dm_io_region region_r = {
-		.bdev = cache->device->bdev,
+		.bdev = cache->cache_dev->bdev,
 		.sector = seg->start_sector + (1 << 3),
 		.count = seg->length << 3,
 	};
@@ -321,7 +318,6 @@ static void cleanup_segment(struct wb_cache *cache, struct segment_header *seg)
 
 static void migrate_linked_segments(struct wb_cache *cache)
 {
-	struct wb_device *wb = cache->wb;
 	int r;
 	struct segment_header *seg;
 	size_t k, migrate_io_count = 0;
@@ -380,7 +376,7 @@ migrate_write:
 	 * on this issue by always
 	 * migrating those data persistently.
 	 */
-	IO(blkdev_issue_flush(cache->wb->device->bdev, GFP_NOIO, NULL));
+	IO(blkdev_issue_flush(cache->origin_dev->bdev, GFP_NOIO, NULL));
 
 	/*
 	 * Discarding the migrated regions
@@ -395,7 +391,7 @@ migrate_write:
 	 * will craze the cache.
 	 */
 	list_for_each_entry(seg, &cache->migrate_list, migrate_list) {
-		IO(blkdev_issue_discard(cache->device->bdev,
+		IO(blkdev_issue_discard(cache->cache_dev->bdev,
 					seg->start_sector + (1 << 3),
 					seg->length << 3,
 					GFP_NOIO, 0));
@@ -510,9 +506,8 @@ void wait_for_migration(struct wb_cache *cache, u64 id)
 int modulator_proc(void *data)
 {
 	struct wb_cache *cache = data;
-	struct wb_device *wb = cache->wb;
 
-	struct hd_struct *hd = wb->device->bdev->bd_part;
+	struct hd_struct *hd = cache->origin_dev->bdev->bd_part;
 	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 
@@ -526,7 +521,7 @@ int modulator_proc(void *data)
 
 		util = div_u64(100 * (new - old), 1000);
 
-		if (util < ACCESS_ONCE(wb->migrate_threshold))
+		if (util < ACCESS_ONCE(cache->migrate_threshold))
 			cache->allow_migrate = true;
 		else
 			cache->allow_migrate = false;
@@ -544,7 +539,6 @@ modulator_update:
 static void update_superblock_record(struct wb_cache *cache)
 {
 	int r;
-	struct wb_device *wb = cache->wb;
 	struct superblock_record_device o;
 	void *buf;
 	struct dm_io_request io_req;
@@ -564,7 +558,7 @@ static void update_superblock_record(struct wb_cache *cache)
 		.mem.ptr.addr = buf,
 	};
 	region = (struct dm_io_region) {
-		.bdev = cache->device->bdev,
+		.bdev = cache->cache_dev->bdev,
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
@@ -575,7 +569,6 @@ static void update_superblock_record(struct wb_cache *cache)
 int recorder_proc(void *data)
 {
 	struct wb_cache *cache = data;
-	struct wb_device *wb = cache->wb;
 
 	unsigned long intvl;
 
@@ -603,7 +596,6 @@ int sync_proc(void *data)
 {
 	int r;
 	struct wb_cache *cache = data;
-	struct wb_device *wb = cache->wb;
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
@@ -618,7 +610,7 @@ int sync_proc(void *data)
 		}
 
 		flush_current_buffer(cache);
-		IO(blkdev_issue_flush(cache->device->bdev, GFP_NOIO, NULL));
+		IO(blkdev_issue_flush(cache->cache_dev->bdev, GFP_NOIO, NULL));
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}

@@ -27,9 +27,9 @@ void discard_caches_inseg(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/
 
-int __must_check audit_cache_device(struct dm_dev *, struct wb_device *,
+int __must_check audit_cache_device(struct wb_device *,
 				    bool *need_format, bool *allow_format);
-int __must_check format_cache_device(struct dm_dev *, struct wb_device *);
+int __must_check format_cache_device(struct wb_device *);
 
 /*----------------------------------------------------------------*/
 
@@ -44,7 +44,7 @@ void free_migration_buffer(struct wb_device *);
 
 /*----------------------------------------------------------------*/
 
-int __must_check resume_cache(struct wb_device *, struct dm_dev *dev);
+int __must_check resume_cache(struct wb_device *);
 void free_cache(struct wb_device *);
 
 /*----------------------------------------------------------------*/

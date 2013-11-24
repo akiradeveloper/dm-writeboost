@@ -240,6 +240,8 @@ enum RAMBUF_TYPE {
 struct wb_device {
 	int type;
 
+	struct dm_target *ti;
+
 	mempool_t *buf_1_pool; /* 1 sector buffer pool */
 	mempool_t *buf_8_pool; /* 8 sector buffer pool */
 	mempool_t *flush_job_pool;

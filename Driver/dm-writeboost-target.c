@@ -817,6 +817,149 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	return 0;
 }
 
+static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
+{
+	static struct dm_arg _args[] = {
+		{0, 0, "invalid buffer type"},
+	};
+
+	struct dm_target *ti = wb->ti;
+	int r = 0;
+	unsigned tmp;
+
+	r = dm_read_arg(_args, as, &tmp, &ti->error);
+	if (r)
+		return r;
+	wb->type = tmp;
+
+	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
+			  &wb->origin_dev);
+	if (r) {
+		ti->error = "couldn't get origin dev";
+		return r;
+	}
+
+	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
+			  &wb->cache_dev);
+	if (r) {
+		ti->error = "couldn't get cache dev";
+		goto bad;
+	}
+
+	return r;
+
+bad:
+	dm_put_device(ti, wb->origin_dev);
+	return r;
+}
+
+#define consume_kv(name, nr) \
+	if (!strcasecmp(key, #name)) { \
+		if (!argc) \
+			break; \
+		r = dm_read_arg(_args + (nr), as, &tmp, &ti->error); \
+		if (r) \
+			break; \
+		wb->name = tmp; \
+	 }
+
+static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
+{
+	static struct dm_arg _args[] = {
+		{0, 4, "invalid optional argc"},
+		{4, 10, "invalid segment_size_order"},
+		{512, UINT_MAX, "invalid rambuf_pool_amount"},
+	};
+
+	struct dm_target *ti = wb->ti;
+	int r = 0;
+	unsigned argc = 0, tmp;
+	if (as->argc) {
+		r = dm_read_arg_group(_args, as, &argc, &ti->error);
+		if (r)
+			return r;
+	}
+
+	while (argc) {
+		const char *key = dm_shift_arg(as);
+		argc--;
+
+		r = -EINVAL;
+
+		consume_kv(segment_size_order, 1);
+		consume_kv(rambuf_pool_amount, 2);
+
+		if (!r) {
+			argc--;
+		} else {
+			ti->error = "invalid optional key";
+			break;
+		}
+	}
+
+	return r;
+}
+
+static int do_consume_tunable_argv(struct wb_device *wb,
+				   struct dm_arg_set *as, unsigned argc)
+{
+	static struct dm_arg _args[] = {
+		{0, 1, "invalid allow_migrate"},
+		{0, 1, "invalid enable_migration_modulator"},
+		{1, 1000, "invalid barrier_deadline_ms"},
+		{1, 1000, "invalid nr_max_batched_migration"},
+		{0, 100, "invalid migrate_threshold"},
+		{0, 3600, "invalid update_record_interval"},
+		{0, 3600, "invalid sync_interval"},
+	};
+
+	struct dm_target *ti = wb->ti;
+	int r = 0;
+	unsigned tmp;
+
+	while (argc) {
+		const char *key = dm_shift_arg(as);
+		argc--;
+
+		r = -EINVAL;
+
+		consume_kv(allow_migrate, 0);
+		consume_kv(enable_migration_modulator, 1);
+		consume_kv(barrier_deadline_ms, 2);
+		consume_kv(nr_max_batched_migration, 3);
+		consume_kv(migrate_threshold, 4);
+		consume_kv(update_record_interval, 5);
+		consume_kv(sync_interval, 6);
+
+		if (!r) {
+			argc--;
+		} else {
+			ti->error = "invalid optional key";
+			break;
+		}
+	}
+
+	return r;
+}
+
+static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
+{
+	static struct dm_arg _args[] = {
+		{0, 7, "invalid tunable argc"},
+	};
+
+	struct dm_target *ti = wb->ti;
+	int r = 0;
+	unsigned argc = 0;
+	if (as->argc) {
+		r = dm_read_arg_group(_args, as, &argc, &ti->error);
+		if (r)
+			return r;
+	}
+
+	return do_consume_tunable_argv(wb, as, argc);
+}
+
 /*
  * Create a device
  * dm-writeboost supports 3 types of buffer
@@ -836,139 +979,18 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r = 0;
-	struct dm_arg_set as;
 	bool need_format, allow_format;
 	struct wb_device *wb;
-	struct dm_dev *origin_dev, *cache_dev;
-	unsigned opt_argc, tmp;
 
-	static struct dm_arg _args[] = {
-		{0, 0, "invalid buffer type"},
-		{0, 4, "invalid optional argc"},
-		{4, 10, "invalid segment size order"},
-		{512, UINT_MAX, "invalid rambuf pool amount"},
-	};
-
+	struct dm_arg_set as;
 	as.argc = argc;
 	as.argv = argv;
 
 	r = dm_set_target_max_io_len(ti, (1 << 3));
 	if (r) {
-		ti->error = "settting max io len failed";
+		ti->error = "failed to set max_io_len";
 		return r;
 	}
-
-	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
-	if (!wb) {
-		ti->error = "couldn't allocate wb";
-		return -ENOMEM;
-	}
-
-	atomic64_set(&wb->nr_dirty_caches, 0);
-
-	/*
-	 * EMC's textbook on storage system says
-	 * storage should keep its disk util less
-	 * than 70%.
-	 */
-	wb->migrate_threshold = 70;
-
-	init_waitqueue_head(&wb->dead_wait_queue);
-	clear_bit(WB_DEAD, &wb->flags);
-
-	r = dm_read_arg(_args, &as, &tmp, &ti->error);
-	if (r)
-		goto bad_type;
-	wb->type = tmp;
-
-	r = dm_get_device(ti, dm_shift_arg(&as), dm_table_get_mode(ti->table),
-			  &origin_dev);
-	if (r) {
-		ti->error = "couldn't get origin dev";
-		goto bad_get_device_orig;
-	}
-	wb->origin_dev = origin_dev;
-
-	r = dm_get_device(ti, dm_shift_arg(&as), dm_table_get_mode(ti->table),
-			  &cache_dev);
-	if (r) {
-		ti->error =  "couldn't get cache dev";
-		goto bad_get_device_cache;
-	}
-
-	/* Optional Parameters */
-	wb->segment_size_order = 7;
-	wb->rambuf_pool_amount = 2048;
-
-	opt_argc = 0;
-	if (as.argc) {
-		r = dm_read_arg_group(_args + 1, &as, &opt_argc, &ti->error);
-		if (r)
-			goto bad_opt_arg;
-	}
-
-	while (opt_argc) {
-		const char *key = dm_shift_arg(&as);
-		opt_argc--;
-
-		if (!strcasecmp(key, "segment_size_order")) {
-			r = dm_read_arg(_args + 2, &as, &tmp, &ti->error);
-			if (r)
-				goto bad_opt_arg;
-			opt_argc--;
-			wb->segment_size_order = tmp;
-		}
-
-		if (!strcasecmp(key, "rambuf_pool_amount")) {
-			r = dm_read_arg(_args + 3, &as, &tmp, &ti->error);
-			if (r)
-				goto bad_opt_arg;
-			opt_argc--;
-			wb->rambuf_pool_amount = tmp;
-		}
-
-		r = -EINVAL;
-		ti->error = "invalid optional arg key";
-		goto bad_opt_arg;
-	}
-
-	r = audit_cache_device(cache_dev, wb, &need_format, &allow_format);
-	if (r) {
-		ti->error = "failed to audit cache device";
-		/*
-		 * If something happens in auditing the cache
-		 * such as read io error either go formatting
-		 * or resume it trusting the cache is valid
-		 * are dangerous. So we quit.
-		 */
-		goto bad_audit_cache;
-	}
-
-	if (need_format) {
-		if (allow_format) {
-			r = format_cache_device(cache_dev, wb);
-			if (r) {
-				ti->error = "format cache device failed";
-				goto bad_format_cache;
-			}
-		} else {
-			r = -EINVAL;
-			ti->error = "cache device not allowed to format";
-			goto bad_audit_cache;
-		}
-	}
-
-	r = resume_cache(wb, cache_dev);
-	if (r) {
-		ti->error = "failed to resume cache";
-		goto bad_resume_cache;
-	}
-	clear_stat(wb);
-	atomic64_set(&wb->count_non_full_flushed, 0);
-
-	ti->private = wb;
-
-	ti->per_bio_data_size = sizeof(struct per_bio_data);
 
 	/*
 	 * Any write barrier requests should
@@ -986,20 +1008,80 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
-
 	ti->discard_zeroes_data_unsupported = true;
+	ti->per_bio_data_size = sizeof(struct per_bio_data);
 
-	return 0;
+	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
+	if (!wb) {
+		ti->error = "couldn't allocate wb";
+		return -ENOMEM;
+	}
+	ti->private = wb;
+	wb->ti = ti;
 
+	atomic64_set(&wb->nr_dirty_caches, 0);
+
+	init_waitqueue_head(&wb->dead_wait_queue);
+	clear_bit(WB_DEAD, &wb->flags);
+
+	r = consume_essential_argv(wb, &as);
+	if (r)
+		goto bad_essential_argv;
+
+	wb->segment_size_order = 7;
+	wb->rambuf_pool_amount = 2048;
+	r = consume_optional_argv(wb, &as);
+	if (r)
+		goto bad_optional_argv;
+
+	r = audit_cache_device(wb, &need_format, &allow_format);
+	if (r) {
+		ti->error = "failed to audit cache device";
+		/*
+		 * If something happens in auditing the cache
+		 * such as read io error either go formatting
+		 * or resume it trusting the cache is valid
+		 * are dangerous. So we quit.
+		 */
+		goto bad_resume_cache;
+	}
+
+	if (need_format) {
+		if (allow_format) {
+			r = format_cache_device(wb);
+			if (r) {
+				ti->error = "failed to format cache device";
+				goto bad_resume_cache;
+			}
+		} else {
+			r = -EINVAL;
+			ti->error = "cache device not allowed to format";
+			goto bad_resume_cache;
+		}
+	}
+
+	r = resume_cache(wb);
+	if (r) {
+		ti->error = "failed to resume cache";
+		goto bad_resume_cache;
+	}
+	clear_stat(wb);
+	atomic64_set(&wb->count_non_full_flushed, 0);
+
+	wbdebug("here");
+	r = consume_tunable_argv(wb, &as);
+	if (r)
+		goto bad_tunable_argv;
+
+	return r;
+
+bad_tunable_argv:
+	free_cache(wb);
 bad_resume_cache:
-bad_format_cache:
-bad_audit_cache:
-bad_opt_arg:
-	dm_put_device(ti, cache_dev);
-bad_get_device_cache:
-	dm_put_device(ti, origin_dev);
-bad_get_device_orig:
-bad_type:
+bad_optional_argv:
+	dm_put_device(ti, wb->cache_dev);
+	dm_put_device(ti, wb->origin_dev);
+bad_essential_argv:
 	kfree(wb);
 	return r;
 }
@@ -1041,61 +1123,16 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct wb_device *wb = ti->private;
 
-	char *cmd = argv[0];
-	unsigned long tmp;
+	struct dm_arg_set as;
+	as.argc = argc;
+	as.argv = argv;
 
-	if (!strcasecmp(cmd, "clear_stat")) {
+	if (!strcasecmp(argv[0], "clear_stat")) {
 		clear_stat(wb);
 		return 0;
 	}
 
-	if (kstrtoul(argv[1], 10, &tmp))
-		return -EINVAL;
-
-	if (!strcasecmp(cmd, "allow_migrate")) {
-		if (tmp > 1)
-			return -EINVAL;
-		wb->allow_migrate = tmp;
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "enable_migration_modulator")) {
-		if (tmp > 1)
-			return -EINVAL;
-		wb->enable_migration_modulator = tmp;
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "barrier_deadline_ms")) {
-		if (tmp < 1)
-			return -EINVAL;
-		wb->barrier_deadline_ms = tmp;
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "nr_max_batched_migration")) {
-		if (tmp < 1)
-			return -EINVAL;
-		wb->nr_max_batched_migration = tmp;
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "migrate_threshold")) {
-		wb->migrate_threshold = tmp;
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "update_record_interval")) {
-		wb->update_record_interval = tmp;
-		return 0;
-	}
-
-	if (!strcasecmp(cmd, "sync_interval")) {
-		wb->sync_interval = tmp;
-		return 0;
-	}
-
-	return -EINVAL;
+	return do_consume_tunable_argv(wb, &as, 2);
 }
 
 static int writeboost_merge(struct dm_target *ti, struct bvec_merge_data *bvm,

@@ -325,9 +325,8 @@ void discard_caches_inseg(struct wb_device *wb, struct segment_header *seg)
 
 /*----------------------------------------------------------------*/
 
-static int read_superblock_header(struct wb_device *wb,
-				  struct superblock_header_device *sup,
-				  struct dm_dev *dev)
+static int read_superblock_header(struct superblock_header_device *sup,
+				  struct wb_device *wb)
 {
 	int r = 0;
 	struct dm_io_request io_req_sup;
@@ -347,7 +346,7 @@ static int read_superblock_header(struct wb_device *wb,
 		.mem.ptr.addr = buf,
 	};
 	region_sup = (struct dm_io_region) {
-		.bdev = dev->bdev,
+		.bdev = wb->cache_dev->bdev,
 		.sector = 0,
 		.count = 1,
 	};
@@ -371,12 +370,12 @@ bad_io:
  * cache_valid is stored true iff the cache device
  * is formatted and needs not to be re-fomatted.
  */
-int __must_check audit_cache_device(struct dm_dev *dev, struct wb_device *wb,
+int __must_check audit_cache_device(struct wb_device *wb,
 				    bool *need_format, bool *allow_format)
 {
 	int r = 0;
 	struct superblock_header_device sup;
-	r = read_superblock_header(wb, &sup, dev);
+	r = read_superblock_header(&sup, wb);
 	if (r) {
 		WBERR("failed to read superblock header");
 		return r;
@@ -402,7 +401,7 @@ int __must_check audit_cache_device(struct dm_dev *dev, struct wb_device *wb,
 	return r;
 }
 
-static int format_superblock_header(struct dm_dev *dev, struct wb_device *wb)
+static int format_superblock_header(struct wb_device *wb)
 {
 	int r = 0;
 	struct dm_io_request io_req_sup;
@@ -429,7 +428,7 @@ static int format_superblock_header(struct dm_dev *dev, struct wb_device *wb)
 		.mem.ptr.addr = buf,
 	};
 	region_sup = (struct dm_io_region) {
-		.bdev = dev->bdev,
+		.bdev = wb->cache_dev->bdev,
 		.sector = 0,
 		.count = 1,
 	};
@@ -461,8 +460,9 @@ static void format_segmd_endio(unsigned long error, void *__context)
  * Format superblock header and
  * all the metadata regions over the cache device.
  */
-int __must_check format_cache_device(struct dm_dev *dev, struct wb_device *wb)
+int __must_check format_cache_device(struct wb_device *wb)
 {
+	struct dm_dev *dev = wb->cache_dev;
 	u32 i, nr_segments = calc_nr_segments(dev, wb);
 	struct format_segmd_context context;
 	struct dm_io_request io_req_sup;
@@ -500,7 +500,7 @@ int __must_check format_cache_device(struct dm_dev *dev, struct wb_device *wb)
 		return r;
 	}
 
-	format_superblock_header(dev, wb);
+	format_superblock_header(wb);
 
 	/* Format the metadata regions */
 
@@ -1006,12 +1006,11 @@ void free_migration_buffer(struct wb_device *wb)
 		wake_up_process(wb->name##_daemon); \
 	} while (0)
 
-int __must_check resume_cache(struct wb_device *wb, struct dm_dev *dev)
+int __must_check resume_cache(struct wb_device *wb)
 {
 	int r = 0;
 	size_t nr_batch;
 
-	wb->cache_dev = dev;
 	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
 	/*
 	 * The first 4KB (1<<3 sectors) in segment
@@ -1131,6 +1130,12 @@ int __must_check resume_cache(struct wb_device *wb, struct dm_dev *dev)
 	INIT_WORK(&wb->barrier_deadline_work, flush_barrier_ios);
 
 	/* Migartion Modulator */
+	/*
+	 * EMC's textbook on storage system says
+	 * storage should keep its disk util less
+	 * than 70%.
+	 */
+	wb->migrate_threshold = 70;
 	wb->enable_migration_modulator = true;
 	CREATE_DAEMON(modulator);
 

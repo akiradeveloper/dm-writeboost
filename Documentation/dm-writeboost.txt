@@ -75,16 +75,18 @@ type
 2: non-volatile ram buffer (persistent memory)
 
 writeboost 0 <backing dev> <cache dev>
-           #optional args
-           [segment_size_order val]
-           [rambuf_pool_amount val]
+           #optional args [optional args]
+	   #tunable args [tunable args] (see below 'Messages')
 
-backing dev        : slow device holding original data blocks.
-cache dev          : fast device holding cached data and its metadata.
-segment size order : the size of RAM buffer
+backing dev        : Slow device holding original data blocks.
+cache dev          : Fast device holding cached data and its metadata.
+
+Optional Arguments
+------------------
+segment_size_order : The size of RAM buffer
                      1 << n (sectors), 4 <= n <= 10
                      default 7
-rambuf pool amount : The amount of the RAM buffer pool (kB).
+rambuf_pool_amount : The amount of the RAM buffer pool (kB).
                      Too fewer amount may cause waiting for new buffer
                      to become available again.
                      But too much doesn't affect the performance.
@@ -96,16 +98,15 @@ if the first sector of the cache device is zeroed out.
 Status
 ------
 <cursor pos>
-<# cache blocks>
-<# segments>
+<#cache blocks>
+<#segments>
 <current id>
 <lastly flushed id>
 <lastly migrated id>
-<# dirty cache blocks>
+<#dirty cache blocks>
 <stat info (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
 <stat count not full flushed>
-<# tunable args>
-[tunable params]* (see below "Messages")
+<#tunable args> [tunable args]
 
 Messages
 --------
@@ -145,7 +146,10 @@ The superblock record is updated every update_record_interval seconds.
 
 Example
 =======
-dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
-sz=`blockdev --getsize ${BACKING}`
-dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE} 4 \
-                                       rambuf_pool_amount 8192 segment_size_order 8"
+dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE}"
+dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE} \
+                                       4 rambuf_pool_amount 8192 segment_size_order 8 \
+				       2 allow_migrate 1"
+dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE} \
+                                       0 \
+				       2 allow_migrate 1"

@@ -475,6 +475,7 @@ sector_t dm_devsize(struct dm_dev *);
 			wake_up_all(&wb->dead_wait_queue); \
 			WBERR("marked as dead"); \
 		} else if (r == -ENOMEM) { \
+			WBERR("I/O failed by ENOMEM"); \
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
 		} else if (r) { \
 			r = 0;\

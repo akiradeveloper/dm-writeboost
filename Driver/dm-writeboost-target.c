@@ -967,20 +967,15 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 
 /*
  * Create a device
- * dm-writeboost supports 3 types of buffer
- * relevant to what-it-is.
- * The first argument decides it and
- * the following arguments change with the type.
  *
- * With volatile RAM as the buffer
- * 0 <backing dev> <cache dev>
- * #optional args
- * [segment_size_order val]
- * [rambuf_pool_amount val]
+ * <type>
+ * <essential args>*
+ * <#optional args> <optional args>*
+ * <#tunable args> <tunable args>*
+ * optionals are tunables are unordered lists of k-v pair.
  *
- * With a block device as the buffer (TODO future work)
- * 1 <backing dev> <cache dev> <buffer dev>
- */
+ * See Documentation for detail.
+  */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
 	int r = 0;

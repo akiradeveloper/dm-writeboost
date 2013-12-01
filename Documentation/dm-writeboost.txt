@@ -66,23 +66,28 @@ All the operations are via dmsetup command.
 
 Constructor
 -----------
-The first argument is the type of the buffer.
-The following arguments alter along with it.
+<type>
+<essential args>*
+<#optional args> <optional args>*
+<#tunable args> <tunable args>* (see 'Message')
 
-type
+Optionals are tunables are unordered lists of k-v pair.
+
+Essential args and optional args are different
+for different buffer type.
+
+<type> (the type of the buffer)
 0: volatile ram buffer (DRAM)
-1: non-volatile buffer backed by block device
+1: non-volatile buffer backed by a block device
 2: non-volatile ram buffer (persistent memory)
 
-writeboost 0 <backing dev> <cache dev>
-           #optional args [optional args]
-	   #tunable args [tunable args] (see below 'Messages')
+type 0
+------
+<essential args>
+backing_dev        : Slow device holding original data blocks.
+cache_dev          : Fast device holding cached data and its metadata.
 
-backing dev        : Slow device holding original data blocks.
-cache dev          : Fast device holding cached data and its metadata.
-
-Optional Arguments
-------------------
+<optional args>
 segment_size_order : The size of RAM buffer
                      1 << n (sectors), 4 <= n <= 10
                      default 7

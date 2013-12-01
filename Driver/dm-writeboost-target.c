@@ -955,6 +955,11 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 		r = dm_read_arg_group(_args, as, &argc, &ti->error);
 		if (r)
 			return r;
+		/*
+		 * tunables are emitted only if
+		 * they were origianlly passed.
+		 */
+		wb->should_emit_tunables = true;
 	}
 
 	return do_consume_tunable_argv(wb, as, argc);
@@ -1020,6 +1025,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	wb->ti = ti;
 
 	atomic64_set(&wb->nr_dirty_caches, 0);
+
+	wb->should_emit_tunables = false;
 
 	init_waitqueue_head(&wb->dead_wait_queue);
 	clear_bit(WB_DEAD, &wb->flags);
@@ -1164,8 +1171,6 @@ static void writeboost_io_hints(struct dm_target *ti,
 	blk_limits_io_opt(limits, 4096);
 }
 
-
-
 static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
 {
 	ssize_t sz = 0;
@@ -1192,6 +1197,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 			      unsigned flags, char *result, unsigned maxlen)
 {
 	ssize_t sz = 0;
+	char buf[BDEVNAME_SIZE];
 	struct wb_device *wb = ti->private;
 	size_t i;
 
@@ -1219,15 +1225,19 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		}
 		DMEMIT(" %llu", (unsigned long long) atomic64_read(&wb->count_non_full_flushed));
 		emit_tunables(wb, result + sz, maxlen - sz);
-
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("0 %s %s 4 segment_size_order %u rambuf_pool_amount %u",
-		       wb->origin_dev->name,
-		       wb->cache_dev->name,
+		DMEMIT("0");
+		format_dev_t(buf, wb->origin_dev->bdev->bd_dev),
+		DMEMIT(" %s", buf);
+		format_dev_t(buf, wb->cache_dev->bdev->bd_dev),
+		DMEMIT(" %s", buf);
+		DMEMIT(" 4 segment_size_order %u rambuf_pool_amount %u",
 		       wb->segment_size_order,
 		       wb->rambuf_pool_amount);
+		if (wb->should_emit_tunables)
+			emit_tunables(wb, result + sz, maxlen - sz);
 		break;
 	}
 }

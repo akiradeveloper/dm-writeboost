@@ -360,6 +360,8 @@ struct wb_device {
 	atomic64_t stat[STATLEN];
 	atomic64_t count_non_full_flushed;
 
+	bool should_emit_tunables;
+
 	wait_queue_head_t dead_wait_queue;
 	unsigned long flags;
 };

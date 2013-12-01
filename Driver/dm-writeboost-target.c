@@ -1068,7 +1068,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	clear_stat(wb);
 	atomic64_set(&wb->count_non_full_flushed, 0);
 
-	wbdebug("here");
 	r = consume_tunable_argv(wb, &as);
 	if (r)
 		goto bad_tunable_argv;
@@ -1094,7 +1093,6 @@ static void writeboost_dtr(struct dm_target *ti)
 	wake_up_all(&wb->dead_wait_queue);
 
 	free_cache(wb);
-	kfree(wb);
 
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->origin_dev);

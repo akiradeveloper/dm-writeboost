@@ -1164,16 +1164,40 @@ static void writeboost_io_hints(struct dm_target *ti,
 	blk_limits_io_opt(limits, 4096);
 }
 
+
+
+static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
+{
+	ssize_t sz = 0;
+
+	DMEMIT(" %d", 14);
+	DMEMIT(" barrier_deadline_ms %lu",
+	       wb->barrier_deadline_ms);
+	DMEMIT(" allow_migrate %d",
+	       wb->allow_migrate ? 1 : 0);
+	DMEMIT(" enable_migration_modulator %d",
+	       wb->enable_migration_modulator ? 1 : 0);
+	DMEMIT(" migrate_threshold %d",
+	       wb->migrate_threshold);
+	DMEMIT(" nr_cur_batched_migration %u",
+	       wb->nr_cur_batched_migration);
+	DMEMIT(" sync_interval %lu",
+	       wb->sync_interval);
+	DMEMIT(" update_record_interval %lu",
+	       wb->update_record_interval);
+}
+
+
 static void writeboost_status(struct dm_target *ti, status_type_t type,
 			      unsigned flags, char *result, unsigned maxlen)
 {
-	unsigned int sz = 0;
+	ssize_t sz = 0;
 	struct wb_device *wb = ti->private;
 	size_t i;
 
 	switch (type) {
 	case STATUSTYPE_INFO:
-		DMEMIT("%u %u %llu %llu %llu %llu %llu ",
+		DMEMIT("%u %u %llu %llu %llu %llu %llu",
 		       (unsigned int)
 		       wb->cursor,
 		       (unsigned int)
@@ -1191,25 +1215,11 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 		for (i = 0; i < STATLEN; i++) {
 			atomic64_t *v = &wb->stat[i];
-			DMEMIT("%llu ", (unsigned long long) atomic64_read(v));
+			DMEMIT(" %llu", (unsigned long long) atomic64_read(v));
 		}
-		DMEMIT("%llu ", (unsigned long long) atomic64_read(&wb->count_non_full_flushed));
+		DMEMIT(" %llu", (unsigned long long) atomic64_read(&wb->count_non_full_flushed));
+		emit_tunables(wb, result + sz, maxlen - sz);
 
-		DMEMIT("%d ", 14);
-		DMEMIT("barrier_deadline_ms %lu ",
-		       wb->barrier_deadline_ms);
-		DMEMIT("allow_migrate %d ",
-		       wb->allow_migrate ? 1 : 0);
-		DMEMIT("enable_migration_modulator %d ",
-		       wb->enable_migration_modulator ? 1 : 0);
-		DMEMIT("migrate_threshold %d ",
-		       wb->migrate_threshold);
-		DMEMIT("nr_cur_batched_migration %u ",
-		       wb->nr_cur_batched_migration);
-		DMEMIT("sync_interval %lu ",
-		       wb->sync_interval);
-		DMEMIT("update_record_interval %lu ",
-		       wb->update_record_interval);
 		break;
 
 	case STATUSTYPE_TABLE:

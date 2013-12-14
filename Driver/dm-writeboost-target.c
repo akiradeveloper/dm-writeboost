@@ -250,7 +250,8 @@ void inc_nr_dirty_caches(struct wb_device *wb)
 static void dec_nr_dirty_caches(struct wb_device *wb)
 {
 	BUG_ON(!wb);
-	atomic64_dec(&wb->nr_dirty_caches);
+	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
+		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
 void cleanup_mb_if_dirty(struct wb_device *wb,

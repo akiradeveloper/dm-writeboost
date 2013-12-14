@@ -1135,7 +1135,7 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (!strcasecmp(argv[0], "drop_caches")) {
 		return wait_event_interruptible(wb->migrate_wait_queue,
-						atomic64_read(&wb->nr_dirty_caches) == 0);
+						!atomic64_read(&wb->nr_dirty_caches));
 	}
 
 	return do_consume_tunable_argv(wb, &as, 2);

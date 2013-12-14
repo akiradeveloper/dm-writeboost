@@ -178,6 +178,14 @@ struct segment_header *get_segment_header_by_id(struct wb_device *wb,
 	return large_array_at(wb->segment_header_array, idx);
 }
 
+static struct segment_header *get_segment_header_by_mb_idx(struct wb_device *wb,
+							   u32 mb_idx)
+{
+	u32 idx;
+	div_u64_rem(mb_idx, wb->nr_caches_inseg, &idx);
+	return large_array_at(wb->segment_header_array, idx);
+}
+
 static int __must_check init_segment_header_array(struct wb_device *wb)
 {
 	u32 segment_idx, nr_segments = wb->nr_segments;
@@ -736,8 +744,12 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		head = ht_get_head(wb, &key);
 
 		found = ht_lookup(wb, head, &key);
-		if (found)
-			ht_del(wb, found);
+		if (found) {
+			struct segment_header *seg = get_segment_header_by_mb_idx(wb, found->idx);
+			bool overwrite_fullsize = (mb->dirty_bits == 255);
+			invalidate_previous_cache(wb, seg, found, overwrite_fullsize);
+		}
+
 		ht_register(wb, head, &key, mb);
 	}
 }

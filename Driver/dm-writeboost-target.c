@@ -465,17 +465,49 @@ static sector_t calc_cache_alignment(struct wb_device *wb,
 	return div_u64(bio_sector, 1 << 3) * (1 << 3);
 }
 
+void invalidate_previous_cache(struct wb_device *wb,
+			       struct segment_header *seg,
+			       struct metablock *old_mb,
+			       bool overwrite_fullsize)
+{
+	u8 dirty_bits = atomic_read_mb_dirtiness(seg, old_mb);
+
+	/*
+	 * First clean up the previous cache
+	 * and migrate the cache if needed.
+	 */
+	bool needs_cleanup_prev_cache =
+		!overwrite_fullsize || !(dirty_bits == 255);
+
+	/*
+	 * Migration works in background and may have
+	 * cleaned up the metablock. If the metablock
+	 * is clean we need not to migrate.
+	 */
+	if (!dirty_bits)
+		needs_cleanup_prev_cache = false;
+
+	if (unlikely(needs_cleanup_prev_cache)) {
+		wait_for_completion(&seg->flush_done);
+		migrate_mb(wb, seg, old_mb, dirty_bits, true);
+	}
+
+	cleanup_mb_if_dirty(wb, seg, old_mb);
+
+	ht_del(wb, old_mb);
+}
+
 static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	unsigned long flags;
 	struct segment_header *uninitialized_var(seg);
 	struct metablock *mb, *new_mb;
 	struct per_bio_data *map_context;
-	sector_t bio_count, s;
+	sector_t bio_count, start_sector;
 	u8 bio_offset;
 	u32 tmp32;
 	bool bio_fullsize, found, on_buffer,
-	     refresh_segment, b;
+	     refresh_segment, is_clean;
 	int rw;
 	struct lookup_key key;
 	struct ht_head *head;
@@ -655,43 +687,13 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	}
 
 	if (found) {
-
 		if (unlikely(on_buffer)) {
 			mutex_unlock(&wb->io_lock);
 
 			update_mb_idx = mb->idx;
 			goto write_on_buffer;
 		} else {
-			u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
-
-			/*
-			 * First clean up the previous cache
-			 * and migrate the cache if needed.
-			 */
-			bool needs_cleanup_prev_cache =
-				!bio_fullsize || !(dirty_bits == 255);
-
-			/*
-			 * Migration works in background and may have
-			 * cleaned up the metablock. If the metablock
-			 * is clean we need not to migrate.
-			 */
-			if (!dirty_bits)
-				needs_cleanup_prev_cache = false;
-
-			if (unlikely(needs_cleanup_prev_cache)) {
-				wait_for_completion(&seg->flush_done);
-				migrate_mb(wb, seg, mb, dirty_bits, true);
-			}
-
-			/*
-			 * Fullsize dirty cache can be discarded
-			 * without migration.
-			 */
-			cleanup_mb_if_dirty(wb, seg, mb);
-
-			ht_del(wb, mb);
-
+			invalidate_previous_cache(wb, seg, mb, bio_fullsize);
 			atomic_dec(&seg->nr_inflight_ios);
 			goto write_not_found;
 		}
@@ -733,41 +735,40 @@ write_not_found:
 
 write_on_buffer:
 	;
+
+	div_u64_rem(update_mb_idx, wb->nr_caches_inseg, &tmp32);
 	/*
 	 * The first 4KB of the segment is
 	 * used for metadata.
 	 */
-	div_u64_rem(update_mb_idx, wb->nr_caches_inseg, &tmp32);
-	s = (tmp32 + 1) << 3;
+	start_sector = (tmp32 + 1) << 3;
 
-	b = false;
+	is_clean = false;
+
 	lockseg(seg, flags);
 	if (!mb->dirty_bits) {
 		seg->length++;
 		BUG_ON(seg->length > wb->nr_caches_inseg);
-		b = true;
+		is_clean = true;
 	}
-
 	if (likely(bio_fullsize)) {
 		mb->dirty_bits = 255;
 	} else {
 		u8 i;
 		u8 acc_bits = 0;
-		s += bio_offset;
+		start_sector += bio_offset;
 		for (i = bio_offset; i < (bio_offset + bio_count); i++)
 			acc_bits += (1 << i);
 
 		mb->dirty_bits |= acc_bits;
 	}
-
 	BUG_ON(!mb->dirty_bits);
-
 	unlockseg(seg, flags);
 
-	if (b)
+	if (is_clean)
 		inc_nr_dirty_caches(wb);
 
-	start = s << SECTOR_SHIFT;
+	start = start_sector << SECTOR_SHIFT;
 	data = bio_data(bio);
 
 	/*

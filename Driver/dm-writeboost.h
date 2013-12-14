@@ -391,6 +391,10 @@ void cleanup_mb_if_dirty(struct wb_device *,
 			 struct segment_header *,
 			 struct metablock *);
 u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
+void invalidate_previous_cache(struct wb_device *wb,
+			       struct segment_header *seg,
+			       struct metablock *old_mb,
+			       bool overwrite_fullsize);
 
 /*----------------------------------------------------------------*/
 

@@ -346,7 +346,7 @@ migrate_write:
 
 	LIVE_DEAD(
 		wait_event_interruptible(wb->migrate_wait_queue,
-					 atomic_read(&wb->migrate_io_count) == 0),
+					 !atomic_read(&wb->migrate_io_count)),
 		atomic_set(&wb->migrate_io_count, 0));
 
 	if (atomic_read(&wb->migrate_fail_count)) {

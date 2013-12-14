@@ -319,6 +319,7 @@ struct wb_device {
 	 * with number of segments batched.
 	 */
 	wait_queue_head_t migrate_wait_queue;
+	wait_queue_head_t wait_drop_caches;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
 	struct list_head migrate_list;

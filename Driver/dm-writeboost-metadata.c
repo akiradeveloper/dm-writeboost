@@ -178,14 +178,6 @@ struct segment_header *get_segment_header_by_id(struct wb_device *wb,
 	return large_array_at(wb->segment_header_array, idx);
 }
 
-static struct segment_header *get_segment_header_by_mb_idx(struct wb_device *wb,
-							   u32 mb_idx)
-{
-	u32 idx;
-	div_u64_rem(mb_idx, wb->nr_caches_inseg, &idx);
-	return large_array_at(wb->segment_header_array, idx);
-}
-
 static int __must_check init_segment_header_array(struct wb_device *wb)
 {
 	u32 segment_idx, nr_segments = wb->nr_segments;
@@ -725,6 +717,8 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		if (le32_to_cpu(mbdev->lap) != seg_lap)
 			break;
 
+		seg->length++;
+
 		/*
 		 * How could this be happened? But no harm.
 		 * We only recover dirty caches.
@@ -745,7 +739,6 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		found = ht_lookup(wb, head, &key);
 		if (found) {
-			struct segment_header *seg = get_segment_header_by_mb_idx(wb, found->idx);
 			bool overwrite_fullsize = (mb->dirty_bits == 255);
 			invalidate_previous_cache(wb, seg, found, overwrite_fullsize);
 		}
@@ -1101,6 +1094,7 @@ int __must_check resume_cache(struct wb_device *wb)
 	}
 
 	init_waitqueue_head(&wb->migrate_wait_queue);
+	init_waitqueue_head(&wb->wait_drop_caches);
 	INIT_LIST_HEAD(&wb->migrate_list);
 
 	wb->allow_migrate = true;

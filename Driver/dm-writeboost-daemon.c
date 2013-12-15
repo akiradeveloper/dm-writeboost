@@ -73,6 +73,13 @@ void flush_barrier_ios(struct work_struct *work)
 
 /*----------------------------------------------------------------*/
 
+void wait_for_flushing(struct wb_device *wb, struct segment_header *seg)
+{
+	if (try_wait_for_completion(&seg->flush_done))
+		return;
+	wait_for_completion(&seg->flush_done);
+}
+
 int flush_proc(void *data)
 {
 	int r;
@@ -484,9 +491,10 @@ int migrate_proc(void *data)
  * Wait for a segment of given ID
  * finishes its migration.
  */
-void wait_for_migration(struct wb_device *wb, u64 id)
+void wait_for_migration(struct wb_device *wb, struct segment_header *seg)
 {
-	struct segment_header *seg = get_segment_header_by_id(wb, id);
+	if (try_wait_for_completion(&seg->migrate_done))
+			return;
 
 	/*
 	 * Set urge_migrate to true

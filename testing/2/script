@@ -23,15 +23,15 @@ umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
 # dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 0 allow_migrate 0"
 
 echo "drop writeboost caches"
-dmsetup message writeboost-vol 0 drop_caches
+# dmsetup message writeboost-vol 0 drop_caches
 
 echo "drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches
 
-dmsetup status writeboost-vol
+dmsetup status writeboost-vol > log
 
 sleep 3
 

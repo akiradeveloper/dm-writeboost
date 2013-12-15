@@ -883,14 +883,9 @@ setup_init_segment:
 	 * All metadata are recovered from the cache device.
 	 */
 
-	/*
-	 * We start migrate daemon to obtain a
-	 * new segment on cache device.
-	 */
-	/* wb->allow_migrate = true; */
-	wait_for_migration(wb, seg->global_id);
-
+	wait_for_migration(wb, seg);
 	discard_caches_inseg(wb, seg);
+
 	/*
 	 * cursor is set to the first element of the segment.
 	 * This means that we will not use the element.

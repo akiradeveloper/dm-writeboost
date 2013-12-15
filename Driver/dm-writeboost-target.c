@@ -162,7 +162,11 @@ static void queue_head_job(struct wb_device *wb)
 		wake_up_process(wb->flush_daemon);
 }
 
-static void init_rambuffer(struct wb_device *wb) {}
+static void init_rambuffer(struct wb_device *wb)
+{
+	/* zeroing the header */
+	memset(wb->current_rambuf->data, 0, 1 << 12);
+}
 
 static void acquire_rambuffer(struct wb_device *wb)
 {
@@ -233,6 +237,7 @@ static void queue_current_buffer(struct wb_device *wb)
  */
 void flush_current_buffer(struct wb_device *wb)
 {
+	wbdebug("flush current buffer");
 	struct segment_header *old_seg;
 	/* u32 tmp32; */
 

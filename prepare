@@ -26,6 +26,8 @@ dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 echo create writeboost-vol ...
 SEGMENT_SIZE_ORDER=8
 dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 rambuf_pool_amount 8192 segment_size_order ${SEGMENT_SIZE_ORDER}"
+# dmsetup message writeboost-vol 0 enable_migration_modulator 0
+# dmsetup message writeboost-vol 0 allow_migrate 0
 # dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 rambuf_pool_amount 8192 segment_size_order 8 2 allow_migrate 1"
 # dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 0 2 allow_migrate 1"
 # dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 0 0"

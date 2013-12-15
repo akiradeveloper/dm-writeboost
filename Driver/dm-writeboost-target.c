@@ -231,6 +231,7 @@ void flush_current_buffer(struct wb_device *wb)
 	old_seg = wb->current_seg;
 
 	queue_current_buffer(wb);
+	/* TODO use seg->start_idx */
 	div_u64_rem(wb->cursor + 1, wb->nr_caches, &tmp32);
 	wb->cursor = tmp32;
 	wb->current_seg->length = 1;
@@ -466,10 +467,8 @@ static sector_t calc_cache_alignment(struct wb_device *wb,
 	return div_u64(bio_sector, 1 << 3) * (1 << 3);
 }
 
-void invalidate_previous_cache(struct wb_device *wb,
-			       struct segment_header *seg,
-			       struct metablock *old_mb,
-			       bool overwrite_fullsize)
+void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
+			       struct metablock *old_mb, bool overwrite_fullsize)
 {
 	u8 dirty_bits = atomic_read_mb_dirtiness(seg, old_mb);
 
@@ -486,6 +485,9 @@ void invalidate_previous_cache(struct wb_device *wb,
 	 * is clean we need not to migrate.
 	 */
 	if (!dirty_bits)
+		needs_cleanup_prev_cache = false;
+
+	if (overwrite_fullsize)
 		needs_cleanup_prev_cache = false;
 
 	if (unlikely(needs_cleanup_prev_cache)) {

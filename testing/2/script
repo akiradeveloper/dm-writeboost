@@ -4,6 +4,7 @@ dmsetup message writeboost-vol 0 enable_migration_modulator 0
 dmsetup message writeboost-vol 0 allow_migrate 0
 
 mkfs.xfs -f /dev/mapper/writeboost-vol
+# mkfs.ext4 /dev/mapper/writeboost-vol
 
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
@@ -21,6 +22,7 @@ fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
+# dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
 dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
 
 echo "drop writeboost caches"
@@ -30,6 +32,8 @@ echo "drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches
 
 dmsetup status writeboost-vol
+
+sleep 3
 
 echo "mounting the device"
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol

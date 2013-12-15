@@ -879,10 +879,18 @@ setup_init_segment:
 	if (record_id > atomic64_read(&wb->last_migrated_segment_id))
 		atomic64_set(&wb->last_migrated_segment_id, record_id);
 
+	/*
+	 * All metadata are recovered from the cache device.
+	 */
+
+	/*
+	 * We start migrate daemon to obtain a
+	 * new segment on cache device.
+	 */
+	/* wb->allow_migrate = true; */
 	wait_for_migration(wb, seg->global_id);
 
 	discard_caches_inseg(wb, seg);
-
 	/*
 	 * cursor is set to the first element of the segment.
 	 * This means that we will not use the element.
@@ -891,7 +899,6 @@ setup_init_segment:
 	seg->length = 1;
 
 	wb->current_seg = seg;
-
 	return 0;
 }
 
@@ -1097,7 +1104,11 @@ int __must_check resume_cache(struct wb_device *wb)
 	init_waitqueue_head(&wb->wait_drop_caches);
 	INIT_LIST_HEAD(&wb->migrate_list);
 
-	wb->allow_migrate = true;
+	/*
+	 * We stop migrate daemon so that
+	 * any migration don't happen while recovering.
+	 */
+	wb->allow_migrate = false;
 	wb->urge_migrate = false;
 	CREATE_DAEMON(migrate);
 

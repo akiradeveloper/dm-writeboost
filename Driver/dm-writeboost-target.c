@@ -563,6 +563,7 @@ static void dirtify_metadata(struct wb_device *wb, struct segment_header *seg,
 
 		mb->dirty_bits |= acc_bits;
 	}
+	BUG_ON(!io_count(bio));
 	BUG_ON(!mb->dirty_bits);
 	unlockseg(seg, flags);
 

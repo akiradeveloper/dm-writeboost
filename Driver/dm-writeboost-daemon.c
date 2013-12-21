@@ -398,10 +398,17 @@ migrate_write:
 	 * will craze the cache.
 	 */
 	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
-		IO(blkdev_issue_discard(wb->cache_dev->bdev,
-					seg->start_sector + (1 << 3),
-					seg->length << 3,
-					GFP_NOIO, 0));
+		/*
+		 * TODO
+		 * We should not purge these lines
+		 * because the discarded blockes will
+		 * return uncertain values when it is
+		 * read on migration in recovery.
+		 */
+//		IO(blkdev_issue_discard(wb->cache_dev->bdev,
+//					seg->start_sector + (1 << 3),
+//					seg->length << 3,
+//					GFP_NOIO, 0));
 	}
 }
 

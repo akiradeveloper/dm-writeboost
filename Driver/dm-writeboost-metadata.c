@@ -668,6 +668,10 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 		/* struct metablock_device *mbdev = &dest->mbarr[i]; */
 		struct metablock_device *mbdev = dest->mbarr + i;
 
+		/* TODO adding these lines will fix but why... */
+		if (!mb->dirty_bits)
+			continue;
+
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
 		mbdev->lap = cpu_to_le32(calc_segment_lap(wb, src->global_id));
@@ -693,7 +697,7 @@ static void update_by_segment_header_device(struct wb_device *wb,
 	for (i = 0 ; i < wb->nr_caches_inseg; i++) {
 		struct lookup_key key;
 		struct ht_head *head;
-		struct metablock *found, *mb = seg->mb_array + i;
+		struct metablock *found = NULL, *mb = seg->mb_array + i;
 		/* struct metablock_device *mbdev = &src->mbarr[i]; */
 		struct metablock_device *mbdev = src->mbarr + i;
 
@@ -726,18 +730,19 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		seg->length++;
 
+		mb->sector = le64_to_cpu(mbdev->sector);
+		mb->dirty_bits = mbdev->dirty_bits;
+		wbdebug("%u, dirtiness:%u, sector=%u", i, mb->dirty_bits, mb->sector);
+
 		/*
 		 * We recover only dirty caches.
 		 * An instance of non-dirty cache is
 		 * null cache.
 		 */
-		if (!mbdev->dirty_bits) {
-			wbdebug("len:%u", seg->length);
+		if (!mb->dirty_bits) {
+			/* wbdebug("len:%u", seg->length); */
 			continue;
 		}
-
-		mb->sector = le64_to_cpu(mbdev->sector);
-		mb->dirty_bits = mbdev->dirty_bits;
 
 		inc_nr_dirty_caches(wb);
 

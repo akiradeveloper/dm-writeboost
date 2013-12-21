@@ -9,9 +9,10 @@ mkfs.xfs -f /dev/mapper/writeboost-vol
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362
-cp ../1/${RUBY}.tar.gz /mnt/writeboost-vol
+#cp ../1/${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
-tar xvfz ${RUBY}.tar.gz
+#tar xvfz ${RUBY}.tar.gz
+#dd if=/dev/urandom of=./myfile bs=512 count=1
 
 cd
 
@@ -31,16 +32,16 @@ echo "drop writeboost caches"
 echo "drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches
 
-dmsetup status writeboost-vol > log
+dmsetup status writeboost-vol
 
 sleep 3
 
 echo "mounting the device"
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 cd /mnt/writeboost-vol
-cd ${RUBY}
 
-./configure
+#cd ${RUBY}
+#./configure
 
 make -j 8
 echo 3 > /proc/sys/vm/drop_caches

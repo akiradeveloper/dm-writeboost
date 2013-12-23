@@ -1,18 +1,21 @@
 #!/sin/sh
 
-dmsetup message writeboost-vol 0 enable_migration_modulator 0
-dmsetup message writeboost-vol 0 allow_migrate 0
+. ../../config
+
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
+sz=`blockdev --getsize ${BACKING}`
+
+echo Create device \(migration OFF\)
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 6 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 
 mkfs.xfs -f /dev/mapper/writeboost-vol
-# mkfs.ext4 /dev/mapper/writeboost-vol
 
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362
-cp ../1/${RUBY}.tar.gz /mnt/writeboost-vol
+cp ../${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
-tar xvfz ${RUBY}.tar.gz
-dd if=/dev/urandom of=./myfile bs=512 count=1
+tar xvfz ${RUBY}.tar.gz > /dev/null
 
 cd
 
@@ -23,29 +26,33 @@ fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
-# dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
+echo Create device \(migration ON\)
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 6 8 enable_migration_modulator 1 allow_migrate 1 sync_interval 1 update_record_interval 1"
 
-echo "drop writeboost caches"
+echo "Drop writeboost caches"
 dmsetup message writeboost-vol 0 drop_caches
 
-echo "drop RAM caches"
+echo "Drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches
-
-dmsetup status writeboost-vol
 
 sleep 3
 
-echo "mounting the device"
+echo "Mounting the device"
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 cd /mnt/writeboost-vol
 
 cd ${RUBY}
-./configure
+echo configure
+./configure > /dev/null 2>&1
 
-make -j 8
+echo make
+make -j 5 > /dev/null 2>&1
+
 echo 3 > /proc/sys/vm/drop_caches
-make test
+
+echo make test
+make test > /dev/null
 
 fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
+dmsetup remove writeboost-vol

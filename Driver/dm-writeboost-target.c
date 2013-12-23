@@ -978,7 +978,7 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
 	static struct dm_arg _args[] = {
-		{0, 7, "invalid tunable argc"},
+		{0, 14, "invalid tunable argc"},
 	};
 
 	struct dm_target *ti = wb->ti;

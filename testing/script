@@ -1,0 +1,8 @@
+#!/bin/sh
+TR=`pwd`
+for i in 1 2 3 4
+do 
+    echo Testing No.$i
+    cd $TR/$i
+    . ./script
+done

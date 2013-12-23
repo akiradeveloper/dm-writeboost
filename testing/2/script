@@ -9,10 +9,10 @@ mkfs.xfs -f /dev/mapper/writeboost-vol
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362
-#cp ../1/${RUBY}.tar.gz /mnt/writeboost-vol
+cp ../1/${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
-#tar xvfz ${RUBY}.tar.gz
-#dd if=/dev/urandom of=./myfile bs=512 count=1
+tar xvfz ${RUBY}.tar.gz
+dd if=/dev/urandom of=./myfile bs=512 count=1
 
 cd
 
@@ -23,11 +23,11 @@ fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
-# dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 4 enable_migration_modulator 1 allow_migrate 1"
+# dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order ${SEGMENT_SIZE_ORDER} 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
 
 echo "drop writeboost caches"
-# dmsetup message writeboost-vol 0 drop_caches
+dmsetup message writeboost-vol 0 drop_caches
 
 echo "drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches
@@ -40,8 +40,8 @@ echo "mounting the device"
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 cd /mnt/writeboost-vol
 
-#cd ${RUBY}
-#./configure
+cd ${RUBY}
+./configure
 
 make -j 8
 echo 3 > /proc/sys/vm/drop_caches

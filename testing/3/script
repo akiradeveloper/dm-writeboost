@@ -28,7 +28,7 @@ dmsetup resume writeboost-vol
 
 echo Write to seek 1
 dd if=./1sec-2 of=/dev/mapper/writeboost-vol bs=512 count=1 seek=1 oflag=direct
- 
+
 echo Suspend and Resume
 dmsetup suspend writeboost-vol
 dmsetup resume writeboost-vol

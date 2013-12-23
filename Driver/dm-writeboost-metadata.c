@@ -124,7 +124,6 @@ static void mb_array_empty_init(struct wb_device *wb)
 
 		mb->idx = i;
 		mb->dirty_bits = 0;
-		mb->sector = 0; /* needless? */
 	}
 }
 
@@ -650,7 +649,6 @@ read_segment_header_device(struct segment_header_device *dest,
 		goto bad_io;
 	}
 
-	/* memset(dest, 0, sizeof_segment_header_device(wb)); */
 	memcpy(dest, buf, sizeof_segment_header_device(wb));
 
 bad_io:
@@ -678,21 +676,13 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 	right = tmp32;
 	BUG_ON(left != right);
 
-	wbdebug("id:%u, length:%u", src->global_id, src->length);
-
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
-		/* struct metablock_device *mbdev = &dest->mbarr[i]; */
 		struct metablock_device *mbdev = dest->mbarr + i;
 
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
 		mbdev->lap = cpu_to_le32(calc_segment_lap(wb, src->global_id));
-
-		if (!mb->dirty_bits) {
-			wbdebug("write mb i:%u/%u", i, src->length);
-			continue;
-		}
 	}
 }
 
@@ -708,7 +698,6 @@ static void update_by_segment_header_device(struct wb_device *wb,
 	u64 id = le64_to_cpu(src->global_id);
 	struct segment_header *seg = get_segment_header_by_id(wb, id);
 	u32 seg_lap = calc_segment_lap(wb, id);
-	/* wbdebug("seg_lap:%u", seg_lap); */
 
 	INIT_COMPLETION(seg->migrate_done);
 
@@ -716,7 +705,6 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		struct lookup_key key;
 		struct ht_head *head;
 		struct metablock *found = NULL, *mb = seg->mb_array + i;
-		/* struct metablock_device *mbdev = &src->mbarr[i]; */
 		struct metablock_device *mbdev = src->mbarr + i;
 
 		/*
@@ -742,7 +730,6 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		 * Therefore, metadata is not lost and is still on
 		 * the buffer.
 		 */
-		/* wbdebug("lap:%u", le32_to_cpu(mbdev->lap)); */
 		if (le32_to_cpu(mbdev->lap) != seg_lap)
 			break;
 
@@ -750,17 +737,14 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		mb->sector = le64_to_cpu(mbdev->sector);
 		mb->dirty_bits = mbdev->dirty_bits;
-		wbdebug("%u, dirtiness:%u, sector=%u", i, mb->dirty_bits, mb->sector);
 
 		/*
 		 * We recover only dirty caches.
 		 * An instance of non-dirty cache is
 		 * null cache.
 		 */
-		if (!mb->dirty_bits) {
-			/* wbdebug("len:%u", seg->length); */
+		if (!mb->dirty_bits)
 			continue;
-		}
 
 		inc_nr_dirty_caches(wb);
 
@@ -772,7 +756,6 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		found = ht_lookup(wb, head, &key);
 		if (found) {
-			wbdebug();
 			bool overwrite_fullsize = (mb->dirty_bits == 255);
 			invalidate_previous_cache(wb, mb_to_seg(wb, found), found,
 						  overwrite_fullsize);
@@ -780,7 +763,6 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		ht_register(wb, head, &key, mb);
 	}
-	wbdebug("id:%u, length:%u", id, seg->length);
 }
 
 static int __must_check recover_cache(struct wb_device *wb)
@@ -831,8 +813,6 @@ static int __must_check recover_cache(struct wb_device *wb)
 		}
 	}
 
-	/* wbdebug("oldest_id:%u", oldest_id); */
-
 	last_flushed_id = 0;
 
 	/*
@@ -849,7 +829,6 @@ static int __must_check recover_cache(struct wb_device *wb)
 	if (oldest_id == max_id)
 		goto setup_init_segment;
 
-	/* wbdebug("last flushed id:%u", last_flushed_id); */
 	/*
 	 * What we have to do in the next loop is to
 	 * revive the segments that are
@@ -867,7 +846,6 @@ static int __must_check recover_cache(struct wb_device *wb)
 	 */
 	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
 		div_u64_rem(i, nr_segments, &j);
-		/* memset(header, 0, sizeof_segment_header_device(wb)); */
 		r = read_segment_header_device(header, wb, j);
 		if (r) {
 			WBERR();
@@ -876,7 +854,6 @@ static int __must_check recover_cache(struct wb_device *wb)
 		}
 		header_id = le64_to_cpu(header->global_id);
 
-		/* wbdebug("last_flush_id:%u", last_flushed_id); */
 		/*
 		 * Valid global_id > 0.
 		 * We encounter header with global_id = 0 and
@@ -885,8 +862,6 @@ static int __must_check recover_cache(struct wb_device *wb)
 		 */
 		if (header_id <= last_flushed_id)
 			break;
-
-		/* wbdebug("header id:%u, last_flushed_id:%u", header_id, last_flushed_id); */
 
 		/*
 		 * Now the header is proven valid.
@@ -1156,9 +1131,6 @@ int __must_check resume_cache(struct wb_device *wb)
 		WBERR("recovering cache metadata failed");
 		goto bad_recover;
 	}
-	/* wbdebug("ram size:%u", sizeof_segment_header(wb)); */
-	/* wbdebug("device size:%u", sizeof_segment_header_device(wb)); */
-
 
 	/*
 	 * (3) Misc Initializations

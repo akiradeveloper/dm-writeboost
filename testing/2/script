@@ -17,10 +17,10 @@ cp ../${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
 tar xvfz ${RUBY}.tar.gz > /dev/null
 
-cd
-
 dmsetup suspend writeboost-vol
 dmsetup resume writeboost-vol
+
+cd
 
 fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
@@ -52,6 +52,8 @@ echo 3 > /proc/sys/vm/drop_caches
 
 echo make test
 make test > /dev/null
+
+cd
 
 fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol

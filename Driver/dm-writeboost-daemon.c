@@ -294,11 +294,7 @@ static void memorize_dirty_state(struct wb_device *wb,
 	}
 
 	for (i = 0; i < seg->length; i++) {
-		u8 dirty_bits;
-
-		mb = seg->mb_array + i; /* not used */
-
-		dirty_bits = *(wb->dirtiness_snapshot + (a + i));
+		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
 
 		if (!dirty_bits)
 			continue;
@@ -384,32 +380,6 @@ migrate_write:
 	 * migrating those data persistently.
 	 */
 	IO(blkdev_issue_flush(wb->origin_dev->bdev, GFP_NOIO, NULL));
-
-	/*
-	 * Discarding the migrated regions
-	 * can avoid unnecessary wear amplifier in the future.
-	 *
-	 * But note that we should not discard
-	 * the metablock region because
-	 * whether or not to ensure
-	 * the discarded block returns certain value
-	 * is depends on venders
-	 * and unexpected metablock data
-	 * will craze the cache.
-	 */
-	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
-		/*
-		 * TODO
-		 * We should not purge these lines
-		 * because the discarded blockes will
-		 * return uncertain values when it is
-		 * read on migration in recovery.
-		 */
-//		IO(blkdev_issue_discard(wb->cache_dev->bdev,
-//					seg->start_sector + (1 << 3),
-//					seg->length << 3,
-//					GFP_NOIO, 0));
-	}
 }
 
 int migrate_proc(void *data)

@@ -1,23 +1,35 @@
 #!/bin/sh
 
-mkfs.xfs -f /dev/mapper/writeboost-vol
-# OPTIONS="-o nobarrier"
+. ../../config
 
-# mkfs.ext4 /dev/mapper/writeboost-vol
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
+sz=`blockdev --getsize ${BACKING}`
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 8 enable_migration_modulator 1 sync_interval 1 update_record_interval 1 barrier_deadline_ms 3"
+
+mkfs.ext4 /dev/mapper/writeboost-vol > /dev/null
 
 mount ${OPTIONS} /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362
-cp ${RUBY}.tar.gz /mnt/writeboost-vol
+cp ../${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
-tar xvfz ${RUBY}.tar.gz
+
+echo untar
+tar xvfz ${RUBY}.tar.gz > /dev/null
 cd ${RUBY}
 
-./configure
+echo configure
+./configure > /dev/null 2>&1
 
-make -j 8
+echo make
+make -j 4 > /dev/null 2>&1
 echo 3 > /proc/sys/vm/drop_caches
-make test
+
+echo make test
+make test > /dev/null
+
+cd
 
 fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
+dmsetup remove writeboost-vol

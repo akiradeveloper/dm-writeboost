@@ -154,6 +154,22 @@ sector_t calc_mb_start_sector(struct wb_device *wb,
 	return seg->start_sector + ((1 + idx) << 3);
 }
 
+u32 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
+{
+	u32 tmp32;
+	div_u64_rem(mb_idx, wb->nr_caches_inseg, &tmp32);
+	return tmp32;
+}
+
+struct segment_header *mb_to_seg(struct wb_device *wb, struct metablock *mb)
+{
+	struct segment_header *seg;
+	seg = ((void *) mb)
+	      - mb_idx_inseg(wb, mb->idx) * sizeof(struct metablock)
+	      - sizeof(struct segment_header);
+	return seg;
+}
+
 bool is_on_buffer(struct wb_device *wb, u32 mb_idx)
 {
 	u32 start = wb->current_seg->start_idx;
@@ -175,14 +191,6 @@ struct segment_header *get_segment_header_by_id(struct wb_device *wb,
 {
 	u32 idx;
 	div_u64_rem(segment_id - 1, wb->nr_segments, &idx);
-	return large_array_at(wb->segment_header_array, idx);
-}
-
-static struct segment_header *get_segment_header_by_mb_idx(struct wb_device *wb,
-							   u32 mb_idx)
-{
-	u32 idx;
-	div_u64_rem(mb_idx, wb->nr_caches_inseg, &idx);
 	return large_array_at(wb->segment_header_array, idx);
 }
 
@@ -670,7 +678,7 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
-		struct metablock_device *mbdev = &dest->mbarr[i];
+		struct metablock_device *mbdev = dest->mbarr + i;
 
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
@@ -696,8 +704,8 @@ static void update_by_segment_header_device(struct wb_device *wb,
 	for (i = 0 ; i < wb->nr_caches_inseg; i++) {
 		struct lookup_key key;
 		struct ht_head *head;
-		struct metablock *found, *mb = seg->mb_array + i;
-		struct metablock_device *mbdev = &src->mbarr[i];
+		struct metablock *found = NULL, *mb = seg->mb_array + i;
+		struct metablock_device *mbdev = src->mbarr + i;
 
 		/*
 		 * lap is kind of checksum.
@@ -725,15 +733,18 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		if (le32_to_cpu(mbdev->lap) != seg_lap)
 			break;
 
-		/*
-		 * How could this be happened? But no harm.
-		 * We only recover dirty caches.
-		 */
-		if (!mbdev->dirty_bits)
-			continue;
+		seg->length++;
 
 		mb->sector = le64_to_cpu(mbdev->sector);
 		mb->dirty_bits = mbdev->dirty_bits;
+
+		/*
+		 * We recover only dirty caches.
+		 * An instance of non-dirty cache is
+		 * null cache.
+		 */
+		if (!mb->dirty_bits)
+			continue;
 
 		inc_nr_dirty_caches(wb);
 
@@ -745,9 +756,9 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		found = ht_lookup(wb, head, &key);
 		if (found) {
-			struct segment_header *seg = get_segment_header_by_mb_idx(wb, found->idx);
 			bool overwrite_fullsize = (mb->dirty_bits == 255);
-			invalidate_previous_cache(wb, seg, found, overwrite_fullsize);
+			invalidate_previous_cache(wb, mb_to_seg(wb, found), found,
+						  overwrite_fullsize);
 		}
 
 		ht_register(wb, head, &key, mb);
@@ -886,19 +897,22 @@ setup_init_segment:
 	if (record_id > atomic64_read(&wb->last_migrated_segment_id))
 		atomic64_set(&wb->last_migrated_segment_id, record_id);
 
-	wait_for_migration(wb, seg->global_id);
+	/*
+	 * All metadata are recovered from the cache device.
+	 */
 
+	wait_for_migration(wb, seg);
 	discard_caches_inseg(wb, seg);
 
 	/*
+	 * null cache for integrity
 	 * cursor is set to the first element of the segment.
-	 * This means that we will not use the element.
+	 * This cache is clean and we won't use this.
 	 */
 	wb->cursor = seg->start_idx;
 	seg->length = 1;
 
 	wb->current_seg = seg;
-
 	return 0;
 }
 
@@ -919,7 +933,7 @@ static int __must_check init_rambuf_pool(struct wb_device *wb)
 
 	wb->nr_rambuf_pool = nr;
 	wb->rambuf_pool = kmalloc(sizeof(struct rambuffer) * nr,
-				     GFP_KERNEL);
+				  GFP_KERNEL);
 	if (!wb->rambuf_pool) {
 		WBERR();
 		return -ENOMEM;
@@ -1101,9 +1115,14 @@ int __must_check resume_cache(struct wb_device *wb)
 	}
 
 	init_waitqueue_head(&wb->migrate_wait_queue);
+	init_waitqueue_head(&wb->wait_drop_caches);
 	INIT_LIST_HEAD(&wb->migrate_list);
 
-	wb->allow_migrate = true;
+	/*
+	 * We stop migrate daemon so that
+	 * any migration don't happen while recovering.
+	 */
+	wb->allow_migrate = false;
 	wb->urge_migrate = false;
 	CREATE_DAEMON(migrate);
 
@@ -1112,7 +1131,6 @@ int __must_check resume_cache(struct wb_device *wb)
 		WBERR("recovering cache metadata failed");
 		goto bad_recover;
 	}
-
 
 	/*
 	 * (3) Misc Initializations

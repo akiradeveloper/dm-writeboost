@@ -10,6 +10,7 @@
 /*----------------------------------------------------------------*/
 
 int flush_proc(void *);
+void wait_for_flushing(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/
 
@@ -20,7 +21,7 @@ void flush_barrier_ios(struct work_struct *);
 /*----------------------------------------------------------------*/
 
 int migrate_proc(void *);
-void wait_for_migration(struct wb_device *, u64 id);
+void wait_for_migration(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/
 

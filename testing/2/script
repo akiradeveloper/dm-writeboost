@@ -1,0 +1,60 @@
+#!/sin/sh
+
+. ../../config
+
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
+sz=`blockdev --getsize ${BACKING}`
+
+echo Create device \(migration OFF\)
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 6 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+
+mkfs.xfs -f /dev/mapper/writeboost-vol
+
+mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
+rm -rf /mnt/writeboost-vol/*
+RUBY=ruby-1.9.3-p362
+cp ../${RUBY}.tar.gz /mnt/writeboost-vol
+cd /mnt/writeboost-vol
+tar xvfz ${RUBY}.tar.gz > /dev/null
+
+dmsetup suspend writeboost-vol
+dmsetup resume writeboost-vol
+
+cd
+
+fuser -muv /mnt/writeboost-vol
+umount -l /mnt/writeboost-vol
+dmsetup remove writeboost-vol
+
+echo Create device \(migration ON\)
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 6 8 enable_migration_modulator 1 allow_migrate 1 sync_interval 1 update_record_interval 1"
+
+echo "Drop writeboost caches"
+dmsetup message writeboost-vol 0 drop_caches
+
+echo "Drop RAM caches"
+echo 3 > /proc/sys/vm/drop_caches
+
+sleep 3
+
+echo "Mounting the device"
+mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
+cd /mnt/writeboost-vol
+
+cd ${RUBY}
+echo configure
+./configure > /dev/null 2>&1
+
+echo make
+make -j 5 > /dev/null 2>&1
+
+echo 3 > /proc/sys/vm/drop_caches
+
+echo make test
+make test > /dev/null
+
+cd
+
+fuser -muv /mnt/writeboost-vol
+umount -l /mnt/writeboost-vol
+dmsetup remove writeboost-vol

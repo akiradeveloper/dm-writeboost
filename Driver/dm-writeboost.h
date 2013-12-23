@@ -74,7 +74,7 @@
 #define WRITEBOOST_MAGIC 0x57427374
 struct superblock_header_device {
 	__le32 magic;
-	u8 segment_size_order;
+	__u8 segment_size_order;
 } __packed;
 
 /*
@@ -122,8 +122,8 @@ struct metablock {
 struct metablock_device {
 	__le64 sector;
 	__le32 lap;
-	u8 dirty_bits;
-	u8 padding[16 - (8 + 4 + 1)]; /* 16B */
+	__u8 dirty_bits;
+	__u8 padding[16 - (8 + 4 + 1)]; /* 16B */
 } __packed;
 
 #define SZ_MAX (~(size_t)0)
@@ -193,7 +193,7 @@ struct segment_header_device {
 	 * segments in cache device.
 	 */
 	__le32 lap;
-	u8 padding[512 - (8 + 4)]; /* 512B */
+	__u8 padding[512 - (8 + 4)]; /* 512B */
 	/* - TO -------------------------------------- */
 	struct metablock_device mbarr[0]; /* 16B * N */
 } __packed;
@@ -319,6 +319,7 @@ struct wb_device {
 	 * with number of segments batched.
 	 */
 	wait_queue_head_t migrate_wait_queue;
+	wait_queue_head_t wait_drop_caches;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
 	struct list_head migrate_list;
@@ -391,10 +392,8 @@ void cleanup_mb_if_dirty(struct wb_device *,
 			 struct segment_header *,
 			 struct metablock *);
 u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
-void invalidate_previous_cache(struct wb_device *wb,
-			       struct segment_header *seg,
-			       struct metablock *old_mb,
-			       bool overwrite_fullsize);
+void invalidate_previous_cache(struct wb_device *, struct segment_header *,
+			       struct metablock *old_mb, bool overwrite_fullsize);
 
 /*----------------------------------------------------------------*/
 

@@ -124,6 +124,7 @@ static void mb_array_empty_init(struct wb_device *wb)
 
 		mb->idx = i;
 		mb->dirty_bits = 0;
+		mb->sector = 0; /* needless? */
 	}
 }
 
@@ -152,6 +153,22 @@ sector_t calc_mb_start_sector(struct wb_device *wb,
 	u32 idx;
 	div_u64_rem(mb_idx, wb->nr_caches_inseg, &idx);
 	return seg->start_sector + ((1 + idx) << 3);
+}
+
+u32 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
+{
+	u32 tmp32;
+	div_u64_rem(mb_idx, wb->nr_caches_inseg, &tmp32);
+	return tmp32;
+}
+
+struct segment_header *mb_to_seg(struct wb_device *wb, struct metablock *mb)
+{
+	struct segment_header *seg;
+	seg = ((void *) mb)
+	      - mb_idx_inseg(wb, mb->idx) * sizeof(struct metablock)
+	      - sizeof(struct segment_header);
+	return seg;
 }
 
 bool is_on_buffer(struct wb_device *wb, u32 mb_idx)
@@ -668,13 +685,14 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 		/* struct metablock_device *mbdev = &dest->mbarr[i]; */
 		struct metablock_device *mbdev = dest->mbarr + i;
 
-		/* TODO adding these lines will fix but why... */
-		if (!mb->dirty_bits)
-			continue;
-
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
 		mbdev->lap = cpu_to_le32(calc_segment_lap(wb, src->global_id));
+
+		if (!mb->dirty_bits) {
+			wbdebug("write mb i:%u/%u", i, src->length);
+			continue;
+		}
 	}
 }
 
@@ -754,8 +772,10 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 		found = ht_lookup(wb, head, &key);
 		if (found) {
+			wbdebug();
 			bool overwrite_fullsize = (mb->dirty_bits == 255);
-			invalidate_previous_cache(wb, seg, found, overwrite_fullsize);
+			invalidate_previous_cache(wb, mb_to_seg(wb, found), found,
+						  overwrite_fullsize);
 		}
 
 		ht_register(wb, head, &key, mb);

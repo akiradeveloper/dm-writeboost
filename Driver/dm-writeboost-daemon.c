@@ -296,7 +296,7 @@ static void memorize_dirty_state(struct wb_device *wb,
 	for (i = 0; i < seg->length; i++) {
 		u8 dirty_bits;
 
-		mb = seg->mb_array + i;
+		mb = seg->mb_array + i; /* not used */
 
 		dirty_bits = *(wb->dirtiness_snapshot + (a + i));
 

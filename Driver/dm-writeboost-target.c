@@ -386,6 +386,8 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 			if (!bit_on)
 				continue;
 
+			wbdebug("i:%u", i);
+
 			io_req_r = (struct dm_io_request) {
 				.client = wb_io_client,
 				.bi_rw = READ,
@@ -395,6 +397,7 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 			};
 			/* A tmp variable just to avoid 80 cols rule */
 			src = calc_mb_start_sector(wb, seg, mb->idx) + i;
+			wbdebug("from:%u", src);
 			region_r = (struct dm_io_region) {
 				.bdev = wb->cache_dev->bdev,
 				.sector = src,
@@ -409,22 +412,16 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = buf,
 			};
+			wbdebug("to:%u", mb->sector + i);
 			region_w = (struct dm_io_region) {
 				.bdev = wb->origin_dev->bdev,
-				.sector = mb->sector + 1 * i,
+				.sector = mb->sector + i,
 				.count = 1,
 			};
 			IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, thread));
 		}
 		mempool_free(buf, wb->buf_1_pool);
 	}
-}
-
-static u32 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
-{
-	u32 tmp32;
-	div_u64_rem(mb_idx, wb->nr_caches_inseg, &tmp32);
-	return tmp32;
 }
 
 /*
@@ -489,6 +486,7 @@ static sector_t calc_cache_alignment(struct wb_device *wb,
 void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 			       struct metablock *old_mb, bool overwrite_fullsize)
 {
+	wbdebug();
 	u8 dirty_bits = atomic_read_mb_dirtiness(seg, old_mb);
 
 	/*
@@ -510,6 +508,7 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 		needs_cleanup_prev_cache = false;
 
 	if (unlikely(needs_cleanup_prev_cache)) {
+		wbdebug(" sector:%u, dirty:%u", old_mb->sector, dirty_bits);
 		wait_for_flushing(wb, seg);
 		migrate_mb(wb, seg, old_mb, dirty_bits, true);
 	}
@@ -589,6 +588,8 @@ static void advance_cursor(struct wb_device *wb)
 	wb->cursor = tmp32;
 }
 
+
+
 static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	struct segment_header *uninitialized_var(found_seg);
@@ -663,10 +664,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	mutex_lock(&wb->io_lock);
 	mb = ht_lookup(wb, head, &key);
 	if (mb) {
-		/* div_u64_rem(mb->idx, wb->nr_caches_inseg, &tmp32); */
-		found_seg = ((void *) mb)
-			- mb_idx_inseg(wb, mb->idx) * sizeof(struct metablock)
-			- sizeof(struct segment_header);
+		found_seg = mb_to_seg(wb, mb);
 		atomic_inc(&found_seg->nr_inflight_ios);
 	}
 
@@ -751,6 +749,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		 */
 		wait_for_flushing(wb, found_seg);
 
+		wbdebug("read hit %u", dirty_bits);
 		if (likely(dirty_bits == 255)) {
 			bio_remap(bio,
 				  wb->cache_dev,
@@ -772,6 +771,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			mutex_unlock(&wb->io_lock);
 			goto write_on_buffer;
 		} else {
+			wbdebug();
 			invalidate_previous_cache(wb, found_seg, mb,
 						  io_fullsize(bio));
 			atomic_dec(&found_seg->nr_inflight_ios);

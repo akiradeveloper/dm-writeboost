@@ -196,10 +196,6 @@ get_segment_header_by_id(struct wb_device *wb, u64 segment_id)
 	return segment_at(wb, k);
 }
 
-#define sizeof_segment_header(wb) \
-	(sizeof(struct segment_header) + \
-	 sizeof(struct metablock) * (wb)->nr_caches_inseg)
-
 static int __must_check init_segment_header_array(struct wb_device *wb)
 {
 	u32 segment_idx;
@@ -762,7 +758,7 @@ static int replay_log(struct wb_device *wb)
 	}
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
 
-	rambuf = kmalloc(1 >> (wb->segment_size_order + SECTOR_SHIFT),
+	rambuf = kmalloc(1 << (wb->segment_size_order + SECTOR_SHIFT),
 			 GFP_KERNEL);
 
 	for (i = 0; i < wb->nr_segments; i++) {

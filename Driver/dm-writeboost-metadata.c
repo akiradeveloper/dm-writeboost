@@ -665,9 +665,24 @@ bad_io:
 }
 
 static int __must_check
-read_segment(void *buffer, struct wb_device *wb, u64 k)
+read_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
 {
-	return 0;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
+	io_req = (struct dm_io_request) {
+		.client = wb_io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	region = (struct dm_io_region) {
+		.bdev = wb->cache_dev->bdev,
+		.sector = seg->start_sector,
+		.count = 1 << wb->segment_size_order,
+	};
+	return dm_safe_io(&io_req, 1, &region, NULL, false);
 }
 
 static u32 calc_checksum(void *rambuffer, u8 length)
@@ -809,7 +824,9 @@ static int replay_log(struct wb_device *wb)
 	for (i = start_idx; i < (start_idx + wb->nr_segments); i++) {
 		u32 checksum1, checksum2, k;
 		div_u64_rem(i, wb->nr_segments, &k);
-		r = read_segment(rambuf, wb, k);
+		seg = segment_at(wb, k);
+
+		r = read_segment(rambuf, wb, seg);
 		if (r) {
 			kfree(rambuf);
 			return r;
@@ -826,7 +843,6 @@ static int replay_log(struct wb_device *wb)
 			continue;
 		}
 
-		seg = segment_at(wb, k);
 		update_by_segment_header_device(wb, seg, header);
 		max_id = le64_to_cpu(header->id);
 

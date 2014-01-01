@@ -625,59 +625,21 @@ bad_io:
 	return r;
 }
 
+/*
+ * Read whole segment on the cache device
+ * to a preallocated buffer.
+ */
 static int __must_check
-read_segment_header_device(struct segment_header_device *dest,
-			   struct wb_device *wb, u32 segment_idx)
+read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
 {
-	int r = 0;
-	struct dm_io_request io_req;
-	struct dm_io_region region;
-	void *buf = kmalloc(1 << 12, GFP_KERNEL);
-	if (!buf) {
-		WBERR();
-		return -ENOMEM;
-	}
-
-	io_req = (struct dm_io_request) {
+	struct dm_io_request io_req = {
 		.client = wb_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	region = (struct dm_io_region) {
-		.bdev = wb->cache_dev->bdev,
-		.sector = calc_segment_header_start(wb, segment_idx),
-		.count = (1 << 3),
-	};
-	r = dm_safe_io(&io_req, 1, &region, NULL, false);
-	if (r) {
-		WBERR();
-		goto bad_io;
-	}
-
-	memcpy(dest, buf, sizeof_segment_header_device(wb));
-
-bad_io:
-	kfree(buf);
-
-	return r;
-}
-
-static int __must_check
-read_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
-{
-	struct dm_io_request io_req;
-	struct dm_io_region region;
-
-	io_req = (struct dm_io_request) {
-		.client = wb_io_client,
-		.bi_rw = READ,
-		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = buf,
-	};
-	region = (struct dm_io_region) {
+	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
 		.sector = seg->start_sector,
 		.count = 1 << wb->segment_size_order,
@@ -782,14 +744,15 @@ static int writeback_non_volatile_buffers(struct wb_device *wb)
  */
 static int replay_log(struct wb_device *wb)
 {
-	int r = 0;
-	struct superblock_record_device uninitialized_var(record);
 	void *rambuf;
 	struct segment_header *seg;
 	struct segment_header_device *header;
+
+	int r = 0;
 	u32 i, start_idx;
 	u64 max_id = 0, record_id, init_segment_id;
 
+	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, wb);
 	if (r) {
 		WBERR();
@@ -797,22 +760,18 @@ static int replay_log(struct wb_device *wb)
 	}
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
 
-	header = kmalloc(sizeof_segment_header_device(wb), GFP_KERNEL);
-	if (!header) {
-		WBERR();
-		return -ENOMEM;
-	}
-
 	rambuf = kmalloc(1 >> (wb->segment_size_order + SECTOR_SHIFT),
 			 GFP_KERNEL);
 
 	for (i = 0; i < wb->nr_segments; i++) {
-		r = read_segment_header_device(header, wb, i);
+		seg = segment_at(wb, i);
+		r = read_whole_segment(rambuf, wb, seg);
 		if (r) {
-			kfree(header);
+			kfree(rambuf);
 			return r;
 		}
 
+		header = rambuf;
 		if (le64_to_cpu(header->id) > max_id) {
 			max_id = le64_to_cpu(header->id);
 		}
@@ -826,12 +785,13 @@ static int replay_log(struct wb_device *wb)
 		div_u64_rem(i, wb->nr_segments, &k);
 		seg = segment_at(wb, k);
 
-		r = read_segment(rambuf, wb, seg);
+		r = read_whole_segment(rambuf, wb, seg);
 		if (r) {
 			kfree(rambuf);
 			return r;
 		}
-		memcpy(header, rambuf, sizeof_segment_header_device(wb));
+
+		header = rambuf;
 
 		if (!le32_to_cpu(header->id))
 			continue;
@@ -850,7 +810,6 @@ static int replay_log(struct wb_device *wb)
 		INIT_COMPLETION(seg->migrate_done);
 	}
 
-	kfree(header);
 	kfree(rambuf);
 
 	init_segment_id = max_id + 1;

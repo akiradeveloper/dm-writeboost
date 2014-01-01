@@ -97,14 +97,6 @@ static void *large_array_at(struct large_array *arr, u64 i)
 
 /*----------------------------------------------------------------*/
 
-#define sizeof_segment_header(wb) \
-	(sizeof(struct segment_header) + \
-	 sizeof(struct metablock) * (wb)->nr_caches_inseg)
-
-#define sizeof_segment_header_device(wb) \
-	(sizeof(struct segment_header_device) + \
-	 sizeof(struct metablock_device) * (wb)->nr_caches_inseg)
-
 /*
  * Get the in-core metablock of the given index.
  */
@@ -129,8 +121,10 @@ static void mb_array_empty_init(struct wb_device *wb)
 	}
 }
 
-static sector_t calc_segment_header_start(struct wb_device *wb,
-					  u32 segment_idx)
+/*
+ * Calc the starting sector of a segment
+ */
+static sector_t calc_segment_header_start(struct wb_device *wb, u32 segment_idx)
 {
 	return (1 << 11) + (1 << wb->segment_size_order) * (segment_idx);
 }
@@ -141,9 +135,10 @@ static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 	return div_u64(devsize - (1 << 11), 1 << wb->segment_size_order);
 }
 
-sector_t calc_mb_start_sector(struct wb_device *wb,
-			      struct segment_header *seg,
-			      u32 mb_idx)
+/*
+ * Calc the starting sector of the mb_idx th cache block
+ */
+sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg, u32 mb_idx)
 {
 	u32 idx;
 	div_u64_rem(mb_idx, wb->nr_caches_inseg, &idx);
@@ -194,29 +189,36 @@ static struct segment_header *segment_at(struct wb_device *wb, u32 k)
  * Get the segment from the segment id.
  * The Index of the segment is calculated from the segment id.
  */
-struct segment_header *get_segment_header_by_id(struct wb_device *wb,
-						u64 segment_id)
+struct segment_header *
+get_segment_header_by_id(struct wb_device *wb, u64 segment_id)
 {
 	u32 k = segment_id_to_idx(wb, segment_id);
 	return segment_at(wb, k);
 }
 
+#define sizeof_segment_header(wb) \
+	(sizeof(struct segment_header) + \
+	 sizeof(struct metablock) * (wb)->nr_caches_inseg)
+
 static int __must_check init_segment_header_array(struct wb_device *wb)
 {
-	u32 segment_idx, nr_segments = wb->nr_segments;
-	wb->segment_header_array =
-		large_array_alloc(sizeof_segment_header(wb), nr_segments);
+	u32 segment_idx;
+
+	wb->segment_header_array = large_array_alloc(
+			sizeof(struct segment_header) +
+			sizeof(struct metablock) * wb->nr_caches_inseg,
+			wb->nr_segments);
 	if (!wb->segment_header_array) {
 		WBERR();
 		return -ENOMEM;
 	}
 
-	for (segment_idx = 0; segment_idx < nr_segments; segment_idx++) {
+	for (segment_idx = 0; segment_idx < wb->nr_segments; segment_idx++) {
 		struct segment_header *seg =
 			large_array_at(wb->segment_header_array, segment_idx);
+
 		seg->start_idx = wb->nr_caches_inseg * segment_idx;
-		seg->start_sector =
-			calc_segment_header_start(wb, segment_idx);
+		seg->start_sector = calc_segment_header_start(wb, segment_idx);
 
 		seg->length = 0;
 

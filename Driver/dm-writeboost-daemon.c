@@ -137,7 +137,7 @@ int flush_proc(void *data)
 		};
 
 		IO(dm_safe_io(&io_req, 1, &region, NULL, false));
-		atomic64_set(&wb->last_flushed_segment_id, seg->global_id);
+		atomic64_set(&wb->last_flushed_segment_id, seg->id);
 
 		complete_all(&seg->flush_done);
 

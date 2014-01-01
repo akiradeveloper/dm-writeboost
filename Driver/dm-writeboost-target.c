@@ -104,11 +104,81 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 	return count;
 }
 
-static void prepare_meta_rambuffer(void *rambuffer,
-				   struct wb_device *wb,
-				   struct segment_header *seg)
+/*
+ * Prepare the kmalloc-ed RAM buffer.
+ * dm_io requires RAM buffer for its I/O buffer.
+ * Even if we uses PRAM we have to copy the data to the
+ * volatile buffer when we come to submit I/O.
+ */
+static void prepare_rambuffer(struct rambuffer *rambuf,
+			      struct wb_device *wb,
+			      struct segment_header *seg)
 {
-	prepare_segment_header_device(rambuffer, wb, seg);
+	prepare_segment_header_device(rambuf->data, wb, seg);
+}
+
+static void init_rambuffer(struct wb_device *wb)
+{
+	/* zeroing the header */
+	memset(wb->current_rambuf->data, 0, 1 << 12);
+}
+
+static void acquire_rambuffer(struct wb_device *wb)
+{
+	struct rambuffer *next_rambuf;
+	u32 tmp32;
+
+	div_u64_rem(wb->current_seg->id,
+		    wb->nr_rambuf_pool, &tmp32);
+	next_rambuf = wb->rambuf_pool + tmp32;
+
+	wait_for_completion(&next_rambuf->done);
+	INIT_COMPLETION(next_rambuf->done);
+
+	wb->current_rambuf = next_rambuf;
+
+	/* hook for persistent rambuffer */
+	init_rambuffer(wb);
+}
+
+static void acquire_new_seg(struct wb_device *wb)
+{
+	struct segment_header *new_seg;
+	size_t rep;
+
+	u64 next_id = wb->current_seg->id + 1;
+	new_seg = get_segment_header_by_id(wb, next_id);
+	new_seg->id = next_id;
+
+	/*
+	 * We wait for all requests to the new segment
+	 * is consumed. Mutex taken gurantees that
+	 * no new I/O the this semgnet is coming.
+	 */
+	while (atomic_read(&new_seg->nr_inflight_ios)) {
+		rep++;
+		if (rep == 1000)
+			WBWARN("inflight ios remained for new seg");
+		schedule_timeout_interruptible(msecs_to_jiffies(1));
+	}
+	BUG_ON(count_dirty_caches_remained(new_seg));
+
+	wait_for_flushing(wb, new_seg);
+
+	/* TODO dedup */
+	wait_for_migration(wb, new_seg);
+	discard_caches_inseg(wb, new_seg);
+
+	/* TODO dedup */
+	/*
+	 * Set the cursor to the last of the flushed segment.
+	 */
+	wb->cursor = new_seg->start_idx + (wb->nr_caches_inseg - 1);
+	new_seg->length = 0;
+
+	wb->current_seg = new_seg;
+
+	acquire_rambuffer(wb);
 }
 
 static void init_flush_job(struct flush_job *job, struct wb_device *wb)
@@ -139,8 +209,7 @@ static void queue_head_job(struct wb_device *wb)
 			WBWARN("inflight ios remained for current seg");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
-	prepare_meta_rambuffer(wb->current_rambuf->data, wb,
-			       wb->current_seg);
+	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
 	job = mempool_alloc(wb->flush_job_pool, GFP_NOIO);
 	init_flush_job(job, wb);
@@ -160,67 +229,6 @@ static void queue_head_job(struct wb_device *wb)
 
 	if (empty)
 		wake_up_process(wb->flush_daemon);
-}
-
-static void init_rambuffer(struct wb_device *wb)
-{
-	/* zeroing the header */
-	memset(wb->current_rambuf->data, 0, 1 << 12);
-}
-
-static void acquire_rambuffer(struct wb_device *wb)
-{
-	struct rambuffer *next_rambuf;
-	u32 tmp32;
-
-	div_u64_rem(wb->current_seg->global_id,
-		    wb->nr_rambuf_pool, &tmp32);
-	next_rambuf = wb->rambuf_pool + tmp32;
-
-	wait_for_completion(&next_rambuf->done);
-	INIT_COMPLETION(next_rambuf->done);
-
-	wb->current_rambuf = next_rambuf;
-
-	/* hook for persistent rambuffer */
-	init_rambuffer(wb);
-}
-
-static void acquire_new_seg(struct wb_device *wb)
-{
-	struct segment_header *new_seg;
-	size_t rep;
-
-	u64 next_id = wb->current_seg->global_id + 1;
-	new_seg = get_segment_header_by_id(wb, next_id);
-	new_seg->global_id = next_id;
-
-	/*
-	 * We wait for all requests to the new segment
-	 * is consumed. Mutex taken gurantees that
-	 * no new I/O the this semgnet is coming.
-	 */
-	while (atomic_read(&new_seg->nr_inflight_ios)) {
-		rep++;
-		if (rep == 1000)
-			WBWARN("inflight ios remained for new seg");
-		schedule_timeout_interruptible(msecs_to_jiffies(1));
-	}
-	BUG_ON(count_dirty_caches_remained(new_seg));
-
-	wait_for_flushing(wb, new_seg);
-	wait_for_migration(wb, new_seg);
-	discard_caches_inseg(wb, new_seg);
-
-	/*
-	 * Set the cursor to the last of the flushed segment.
-	 */
-	wb->cursor = new_seg->start_idx + (wb->nr_caches_inseg - 1);
-	new_seg->length = 0;
-
-	wb->current_seg = new_seg;
-
-	acquire_rambuffer(wb);
 }
 
 static void queue_current_buffer(struct wb_device *wb)
@@ -1231,7 +1239,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		       (long long unsigned int)
 		       wb->nr_segments,
 		       (long long unsigned int)
-		       wb->current_seg->global_id,
+		       wb->current_seg->id,
 		       (long long unsigned int)
 		       atomic64_read(&wb->last_flushed_segment_id),
 		       (long long unsigned int)

@@ -8,6 +8,8 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+#include <linux/crc32c.h>
+
 /*----------------------------------------------------------------*/
 
 struct part {
@@ -95,14 +97,6 @@ static void *large_array_at(struct large_array *arr, u64 i)
 
 /*----------------------------------------------------------------*/
 
-#define sizeof_segment_header(wb) \
-	(sizeof(struct segment_header) + \
-	 sizeof(struct metablock) * (wb)->nr_caches_inseg)
-
-#define sizeof_segment_header_device(wb) \
-	(sizeof(struct segment_header_device) + \
-	 sizeof(struct metablock_device) * (wb)->nr_caches_inseg)
-
 /*
  * Get the in-core metablock of the given index.
  */
@@ -127,17 +121,13 @@ static void mb_array_empty_init(struct wb_device *wb)
 	}
 }
 
-static sector_t calc_segment_header_start(struct wb_device *wb,
-					  u32 segment_idx)
+/*
+ * Calc the starting sector of a segment
+ */
+static sector_t calc_segment_header_start(struct wb_device *wb, u32 segment_idx)
 {
 	return (1 << 11) + (1 << wb->segment_size_order) * (segment_idx);
 }
-
-static u32 calc_segment_lap(struct wb_device *wb, u64 segment_id)
-{
-	u64 a = div_u64(segment_id - 1, wb->nr_segments);
-	return a + 1;
-};
 
 static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 {
@@ -145,9 +135,10 @@ static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 	return div_u64(devsize - (1 << 11), 1 << wb->segment_size_order);
 }
 
-sector_t calc_mb_start_sector(struct wb_device *wb,
-			      struct segment_header *seg,
-			      u32 mb_idx)
+/*
+ * Calc the starting sector of the mb_idx th cache block
+ */
+sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg, u32 mb_idx)
 {
 	u32 idx;
 	div_u64_rem(mb_idx, wb->nr_caches_inseg, &idx);
@@ -182,34 +173,48 @@ bool is_on_buffer(struct wb_device *wb, u32 mb_idx)
 	return true;
 }
 
+static u32 segment_id_to_idx(struct wb_device *wb, u64 segment_id)
+{
+	u32 idx;
+	div_u64_rem(segment_id - 1, wb->nr_segments, &idx);
+	return idx;
+}
+
+static struct segment_header *segment_at(struct wb_device *wb, u32 k)
+{
+	return large_array_at(wb->segment_header_array, k);
+}
+
 /*
  * Get the segment from the segment id.
  * The Index of the segment is calculated from the segment id.
  */
-struct segment_header *get_segment_header_by_id(struct wb_device *wb,
-						u64 segment_id)
+struct segment_header *
+get_segment_header_by_id(struct wb_device *wb, u64 segment_id)
 {
-	u32 idx;
-	div_u64_rem(segment_id - 1, wb->nr_segments, &idx);
-	return large_array_at(wb->segment_header_array, idx);
+	u32 k = segment_id_to_idx(wb, segment_id);
+	return segment_at(wb, k);
 }
 
 static int __must_check init_segment_header_array(struct wb_device *wb)
 {
-	u32 segment_idx, nr_segments = wb->nr_segments;
-	wb->segment_header_array =
-		large_array_alloc(sizeof_segment_header(wb), nr_segments);
+	u32 segment_idx;
+
+	wb->segment_header_array = large_array_alloc(
+			sizeof(struct segment_header) +
+			sizeof(struct metablock) * wb->nr_caches_inseg,
+			wb->nr_segments);
 	if (!wb->segment_header_array) {
 		WBERR();
 		return -ENOMEM;
 	}
 
-	for (segment_idx = 0; segment_idx < nr_segments; segment_idx++) {
+	for (segment_idx = 0; segment_idx < wb->nr_segments; segment_idx++) {
 		struct segment_header *seg =
 			large_array_at(wb->segment_header_array, segment_idx);
+
 		seg->start_idx = wb->nr_caches_inseg * segment_idx;
-		seg->start_sector =
-			calc_segment_header_start(wb, segment_idx);
+		seg->start_sector = calc_segment_header_start(wb, segment_idx);
 
 		seg->length = 0;
 
@@ -400,7 +405,7 @@ int __must_check audit_cache_device(struct wb_device *wb,
 	*need_format = true;
 	*allow_format = false;
 
-	if (le32_to_cpu(sup.magic) != WRITEBOOST_MAGIC) {
+	if (le32_to_cpu(sup.magic) != WB_MAGIC) {
 		*allow_format = true;
 		WBERR("superblock header: magic number invalid");
 		return 0;
@@ -424,7 +429,7 @@ static int format_superblock_header(struct wb_device *wb)
 	struct dm_io_region region_sup;
 
 	struct superblock_header_device sup = {
-		.magic = cpu_to_le32(WRITEBOOST_MAGIC),
+		.magic = cpu_to_le32(WB_MAGIC),
 		.segment_size_order = wb->segment_size_order,
 	};
 
@@ -618,63 +623,46 @@ bad_io:
 	return r;
 }
 
+/*
+ * Read whole segment on the cache device
+ * to a preallocated buffer.
+ */
 static int __must_check
-read_segment_header_device(struct segment_header_device *dest,
-			   struct wb_device *wb, u32 segment_idx)
+read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
 {
-	int r = 0;
-	struct dm_io_request io_req;
-	struct dm_io_region region;
-	void *buf = kmalloc(1 << 12, GFP_KERNEL);
-	if (!buf) {
-		WBERR();
-		return -ENOMEM;
-	}
-
-	io_req = (struct dm_io_request) {
+	struct dm_io_request io_req = {
 		.client = wb_io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
 	};
-	region = (struct dm_io_region) {
+	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
-		.sector = calc_segment_header_start(wb, segment_idx),
-		.count = (1 << 3),
+		.sector = seg->start_sector,
+		.count = 1 << wb->segment_size_order,
 	};
-	r = dm_safe_io(&io_req, 1, &region, NULL, false);
-	if (r) {
-		WBERR();
-		goto bad_io;
-	}
+	return dm_safe_io(&io_req, 1, &region, NULL, false);
+}
 
-	memcpy(dest, buf, sizeof_segment_header_device(wb));
-
-bad_io:
-	kfree(buf);
-
-	return r;
+static u32 calc_checksum(void *rambuffer, u8 length)
+{
+	unsigned int len = (4096 - 512) + 4096 * length;
+	return crc32c(WB_CKSUM_SEED, rambuffer + 512, len);
 }
 
 /*
  * Make a metadata in segment data to flush.
  * @dest The metadata part of the segment to flush
  */
-void prepare_segment_header_device(struct segment_header_device *dest,
+void prepare_segment_header_device(void *rambuffer,
 				   struct wb_device *wb,
 				   struct segment_header *src)
 {
-	u8 left, right;
-	u32 i, tmp32;
+	struct segment_header_device *dest = rambuffer;
+	u32 i;
 
-	dest->global_id = cpu_to_le64(src->global_id);
-
-	/* just a tiny validation */
-	left = src->length - 1;
-	div_u64_rem(wb->cursor, wb->nr_caches_inseg, &tmp32);
-	right = tmp32;
-	BUG_ON(left != right);
+	BUG_ON((src->length - 1) != mb_idx_inseg(wb, wb->cursor));
 
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
@@ -682,8 +670,11 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->lap = cpu_to_le32(calc_segment_lap(wb, src->global_id));
 	}
+
+	dest->id = cpu_to_le64(src->id);
+	dest->checksum = cpu_to_le32(calc_checksum(rambuffer, src->length));
+	dest->length = src->length;
 }
 
 /*
@@ -692,48 +683,18 @@ void prepare_segment_header_device(struct segment_header_device *dest,
  * like Hash Table.
  */
 static void update_by_segment_header_device(struct wb_device *wb,
+					    struct segment_header *seg,
 					    struct segment_header_device *src)
 {
-	u32 i;
-	u64 id = le64_to_cpu(src->global_id);
-	struct segment_header *seg = get_segment_header_by_id(wb, id);
-	u32 seg_lap = calc_segment_lap(wb, id);
+	u8 i;
 
-	INIT_COMPLETION(seg->migrate_done);
+	seg->length = src->length;
 
-	for (i = 0 ; i < wb->nr_caches_inseg; i++) {
+	for (i = 0 ; i < src->length; i++) {
 		struct lookup_key key;
 		struct ht_head *head;
 		struct metablock *found = NULL, *mb = seg->mb_array + i;
 		struct metablock_device *mbdev = src->mbarr + i;
-
-		/*
-		 * lap is kind of checksum.
-		 * If the checksum are the same between
-		 * original (seg_lap) and the dumped on
-		 * the metadata the metadata is considered valid.
-		 *
-		 * This algorithm doesn't care the case
-		 * metadata are partially written but it is OK.
-		 *
-		 * The cases are splitted by the volatility of
-		 * the buffer.
-		 *
-		 * If the buffer is volatile, ACK to the barrier
-		 * will only be done after completion of flushing
-		 * to the cache device. Therefore, these metadata
-		 * lost are ignored doesn't violate the semantics.
-		 *
-		 * If the buffer is non-volatile, ACK to the barrier
-		 * is already done. However, only after FUA write to
-		 * the cache device the buffer is ready to be reused.
-		 * Therefore, metadata is not lost and is still on
-		 * the buffer.
-		 */
-		if (le32_to_cpu(mbdev->lap) != seg_lap)
-			break;
-
-		seg->length++;
 
 		mb->sector = le64_to_cpu(mbdev->sector);
 		mb->dirty_bits = mbdev->dirty_bits;
@@ -744,7 +705,9 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		 * null cache.
 		 */
 		if (!mb->dirty_bits)
-			continue;
+			continue; /* FIXME BUG? */
+
+		/* BUG_ON(!mb->dirty_bits) */
 
 		inc_nr_dirty_caches(wb);
 
@@ -765,14 +728,43 @@ static void update_by_segment_header_device(struct wb_device *wb,
 	}
 }
 
-static int __must_check recover_cache(struct wb_device *wb)
+/*
+ * If the RAM buffer is non-volatile
+ * we first write back all the valid buffers on them.
+ * By doing this, replay algorithm is only discussed
+ * in cache device.
+ */
+static int writeback_non_volatile_buffers(struct wb_device *wb)
+{
+	return 0;
+}
+
+/*
+ * Replay all the log on the cache device.
+ *
+ * Algorithm:
+ * 1. find the maxium id
+ * 2. start from the right. iterate all the log.
+ * 3. skip if id=0 or checkum invalid
+ * 4. merge otherwise.
+ *
+ * This algorithm is robust for floppy SSD
+ * that may write a segment partially or
+ * lose data on its buffer on power fault.
+ *
+ * If number of threads flush segments in parallel
+ * and some of them loses atomicity because of
+ * power fault this elegant algorithm works.
+ */
+static int replay_log_on_cache(struct wb_device *wb)
 {
 	int r = 0;
-	struct segment_header_device *header;
+	u32 i, k, start_idx;
+	u64 max_id = 0, record_id, init_segment_id;
+
+	void *rambuf;
 	struct segment_header *seg;
-	u64 max_id, oldest_id, last_flushed_id, init_segment_id,
-	    header_id, record_id;
-	u32 i, j, oldest_idx, nr_segments = wb->nr_segments;
+	struct segment_header_device *header;
 
 	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, wb);
@@ -782,113 +774,67 @@ static int __must_check recover_cache(struct wb_device *wb)
 	}
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
 
-	header = kmalloc(sizeof_segment_header_device(wb), GFP_KERNEL);
-	if (!header) {
-		WBERR();
-		return -ENOMEM;
-	}
+	rambuf = kmalloc(1 << (wb->segment_size_order + SECTOR_SHIFT),
+			 GFP_KERNEL);
 
-	/*
-	 * Finding the oldest, non-zero id and its index.
-	 */
-
-	max_id = SZ_MAX;
-	oldest_id = max_id;
-	oldest_idx = 0;
-	for (i = 0; i < nr_segments; i++) {
-		r = read_segment_header_device(header, wb, i);
+	for (k = 0; k < wb->nr_segments; k++) {
+		seg = segment_at(wb, k);
+		r = read_whole_segment(rambuf, wb, seg);
 		if (r) {
-			WBERR();
-			kfree(header);
+			kfree(rambuf);
 			return r;
 		}
-		header_id = le64_to_cpu(header->global_id);
 
-		if (header_id < 1)
-			continue;
-
-		if (header_id < oldest_id) {
-			oldest_idx = i;
-			oldest_id = header_id;
+		header = rambuf;
+		if (le64_to_cpu(header->id) > max_id) {
+			max_id = le64_to_cpu(header->id);
 		}
 	}
 
-	last_flushed_id = 0;
+	start_idx = segment_id_to_idx(wb, max_id + 1);
+	max_id = 0;
 
-	/*
-	 * This is an invariant.
-	 * We always start from the segment
-	 * that is right after the last_flush_id.
-	 */
-	init_segment_id = last_flushed_id + 1;
+	for (i = start_idx; i < (start_idx + wb->nr_segments); i++) {
+		u32 checksum1, checksum2, k;
+		div_u64_rem(i, wb->nr_segments, &k);
+		seg = segment_at(wb, k);
 
-	/*
-	 * If no segment was flushed
-	 * then there is nothing to recover.
-	 */
-	if (oldest_id == max_id)
-		goto setup_init_segment;
-
-	/*
-	 * What we have to do in the next loop is to
-	 * revive the segments that are
-	 * flushed but yet not migrated.
-	 */
-
-	/*
-	 * Example:
-	 * There are only 5 segments.
-	 * The segments we will consider are of id k+2 and k+3
-	 * because they are dirty but not migrated.
-	 *
-	 * id: [     k+3    ][  k+4   ][   k    ][     k+1     ][  K+2  ]
-	 *      last_flushed  init_seg  migrated  last_migrated  flushed
-	 */
-	for (i = oldest_idx; i < (nr_segments + oldest_idx); i++) {
-		div_u64_rem(i, nr_segments, &j);
-		r = read_segment_header_device(header, wb, j);
+		r = read_whole_segment(rambuf, wb, seg);
 		if (r) {
-			WBERR();
-			kfree(header);
+			kfree(rambuf);
 			return r;
 		}
-		header_id = le64_to_cpu(header->global_id);
 
-		/*
-		 * Valid global_id > 0.
-		 * We encounter header with global_id = 0 and
-		 * we can consider
-		 * this and the followings are all invalid.
-		 */
-		if (header_id <= last_flushed_id)
-			break;
+		header = rambuf;
 
-		/*
-		 * Now the header is proven valid.
-		 */
-
-		last_flushed_id = header_id;
-		init_segment_id = last_flushed_id + 1;
-
-		/*
-		 * If the data is already on the backing store,
-		 * we ignore the segment.
-		 */
-		if (header_id <= record_id)
+		if (!le64_to_cpu(header->id))
 			continue;
 
-		update_by_segment_header_device(wb, header);
+		checksum1 = le32_to_cpu(header->checksum);
+		checksum2 = calc_checksum(rambuf, header->length);
+		if (checksum1 != checksum2) {
+			DMWARN("checksum inconsistent id:%llu checksum:%u != %u",
+			       (long long unsigned int) le64_to_cpu(header->id),
+			       checksum1, checksum2);
+			continue;
+		}
+
+		update_by_segment_header_device(wb, seg, header);
+		max_id = le64_to_cpu(header->id);
+
+		/* FIXME WTF? */
+		INIT_COMPLETION(seg->migrate_done);
 	}
 
-setup_init_segment:
-	kfree(header);
+	kfree(rambuf);
+
+	init_segment_id = max_id + 1;
 
 	seg = get_segment_header_by_id(wb, init_segment_id);
-	seg->global_id = init_segment_id;
-	atomic_set(&seg->nr_inflight_ios, 0);
+	seg->id = init_segment_id;
+	wb->current_seg = seg;
 
-	atomic64_set(&wb->last_flushed_segment_id,
-		     seg->global_id - 1);
+	atomic64_set(&wb->last_flushed_segment_id, max_id);
 
 	atomic64_set(&wb->last_migrated_segment_id,
 		atomic64_read(&wb->last_flushed_segment_id) > wb->nr_segments ?
@@ -897,9 +843,12 @@ setup_init_segment:
 	if (record_id > atomic64_read(&wb->last_migrated_segment_id))
 		atomic64_set(&wb->last_migrated_segment_id, record_id);
 
-	/*
-	 * All metadata are recovered from the cache device.
-	 */
+	return r;
+}
+
+static void init_first_segment(struct wb_device *wb)
+{
+	struct segment_header *seg = wb->current_seg;
 
 	wait_for_migration(wb, seg);
 	discard_caches_inseg(wb, seg);
@@ -911,8 +860,30 @@ setup_init_segment:
 	 */
 	wb->cursor = seg->start_idx;
 	seg->length = 1;
+}
 
-	wb->current_seg = seg;
+/*
+ * Recover all the cache state from the
+ * persistent devices (non-volatile RAM and SSD).
+ */
+static int __must_check recover_cache(struct wb_device *wb)
+{
+	int r = 0;
+
+	r = writeback_non_volatile_buffers(wb);
+	if (r) {
+		WBERR("failed to write back all the persistent \
+		      data on non-volatile RAM");
+		return r;
+	}
+
+	r = replay_log_on_cache(wb);
+	if (r) {
+		WBERR("failed to replay log");
+		return r;
+	}
+
+	init_first_segment(wb);
 	return 0;
 }
 

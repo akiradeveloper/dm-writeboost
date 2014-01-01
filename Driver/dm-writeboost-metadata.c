@@ -823,7 +823,7 @@ static int replay_log_on_cache(struct wb_device *wb)
 		max_id = le64_to_cpu(header->id);
 
 		/* FIXME WTF? */
-		INIT_COMPLETION(seg->migrate_done);
+		reinit_completion(&seg->migrate_done);
 	}
 
 	kfree(rambuf);

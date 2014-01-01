@@ -133,7 +133,7 @@ static void acquire_rambuffer(struct wb_device *wb)
 	next_rambuf = wb->rambuf_pool + tmp32;
 
 	wait_for_completion(&next_rambuf->done);
-	INIT_COMPLETION(next_rambuf->done);
+	reinit_completion(&next_rambuf->done);
 
 	wb->current_rambuf = next_rambuf;
 
@@ -185,8 +185,8 @@ static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 {
 	INIT_LIST_HEAD(&job->flush_queue);
 
-	INIT_COMPLETION(wb->current_seg->migrate_done);
-	INIT_COMPLETION(wb->current_seg->flush_done);
+	reinit_completion(&wb->current_seg->migrate_done);
+	reinit_completion(&wb->current_seg->flush_done);
 	job->seg = wb->current_seg;
 
 	job->rambuf = wb->current_rambuf;

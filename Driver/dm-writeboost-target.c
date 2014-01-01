@@ -164,9 +164,12 @@ static void acquire_new_seg(struct wb_device *wb)
 	BUG_ON(count_dirty_caches_remained(new_seg));
 
 	wait_for_flushing(wb, new_seg);
+
+	/* TODO dedup */
 	wait_for_migration(wb, new_seg);
 	discard_caches_inseg(wb, new_seg);
 
+	/* TODO dedup */
 	/*
 	 * Set the cursor to the last of the flushed segment.
 	 */

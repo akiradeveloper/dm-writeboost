@@ -132,7 +132,7 @@ struct segment_header {
 	 * ID 0 is used to tell that the segment is invalid
 	 * and valid id >= 1.
 	 */
-	u64 global_id;
+	u64 id;
 
 	/*
 	 * Segment can be flushed half-done.
@@ -186,7 +186,7 @@ struct segment_header {
 #define WB_CKSUM_SEED (~(u32)0)
 struct segment_header_device {
 	/* - FROM ------------------------------------ */
-	__le64 global_id;
+	__le64 id;
 	__le32 checksum;
 	__u8 length;
 	__u8 padding[512 - (8 + 4 + 1)]; /* 512B */

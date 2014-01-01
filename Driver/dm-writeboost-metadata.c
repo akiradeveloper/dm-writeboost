@@ -697,7 +697,7 @@ void prepare_segment_header_device(void *rambuffer,
 		mbdev->dirty_bits = mb->dirty_bits;
 	}
 
-	dest->global_id = cpu_to_le64(src->global_id);
+	dest->id = cpu_to_le64(src->id);
 	dest->checksum = cpu_to_le32(calc_checksum(rambuffer, src->length));
 	dest->length = src->length;
 }
@@ -798,8 +798,8 @@ static int replay_log(struct wb_device *wb)
 			return r;
 		}
 
-		if (le64_to_cpu(header->global_id) > max_id) {
-			max_id = le64_to_cpu(header->global_id);
+		if (le64_to_cpu(header->id) > max_id) {
+			max_id = le64_to_cpu(header->id);
 		}
 	}
 
@@ -816,7 +816,7 @@ static int replay_log(struct wb_device *wb)
 		}
 		memcpy(header, rambuf, sizeof_segment_header_device(wb));
 
-		if (!le32_to_cpu(header->global_id))
+		if (!le32_to_cpu(header->id))
 			continue;
 
 		checksum1 = le32_to_cpu(header->checksum);
@@ -828,7 +828,7 @@ static int replay_log(struct wb_device *wb)
 
 		seg = segment_at(wb, k);
 		update_by_segment_header_device(wb, seg, header);
-		max_id = le64_to_cpu(header->global_id);
+		max_id = le64_to_cpu(header->id);
 
 		/* FIXME WTF? */
 		INIT_COMPLETION(seg->migrate_done);
@@ -840,7 +840,7 @@ static int replay_log(struct wb_device *wb)
 	init_segment_id = max_id + 1;
 
 	seg = get_segment_header_by_id(wb, init_segment_id);
-	seg->global_id = init_segment_id;
+	seg->id = init_segment_id;
 	wb->current_seg = seg;
 
 	atomic64_set(&wb->last_flushed_segment_id, max_id);

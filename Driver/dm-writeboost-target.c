@@ -128,7 +128,7 @@ static void acquire_rambuffer(struct wb_device *wb)
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
 
-	div_u64_rem(wb->current_seg->global_id,
+	div_u64_rem(wb->current_seg->id,
 		    wb->nr_rambuf_pool, &tmp32);
 	next_rambuf = wb->rambuf_pool + tmp32;
 
@@ -146,9 +146,9 @@ static void acquire_new_seg(struct wb_device *wb)
 	struct segment_header *new_seg;
 	size_t rep;
 
-	u64 next_id = wb->current_seg->global_id + 1;
+	u64 next_id = wb->current_seg->id + 1;
 	new_seg = get_segment_header_by_id(wb, next_id);
-	new_seg->global_id = next_id;
+	new_seg->id = next_id;
 
 	/*
 	 * We wait for all requests to the new segment
@@ -1239,7 +1239,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		       (long long unsigned int)
 		       wb->nr_segments,
 		       (long long unsigned int)
-		       wb->current_seg->global_id,
+		       wb->current_seg->id,
 		       (long long unsigned int)
 		       atomic64_read(&wb->last_flushed_segment_id),
 		       (long long unsigned int)

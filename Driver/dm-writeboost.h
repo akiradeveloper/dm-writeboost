@@ -122,7 +122,7 @@ struct metablock {
 struct metablock_device {
 	__le64 sector;
 	__u8 dirty_bits;
-	__u8 padding[16 - (8 +  1)]; /* 16B */
+	__u8 padding[16 - (8 + 1)]; /* 16B */
 } __packed;
 
 #define SZ_MAX (~(size_t)0)

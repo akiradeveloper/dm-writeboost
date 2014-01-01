@@ -707,6 +707,8 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		if (!mb->dirty_bits)
 			continue; /* FIXME BUG? */
 
+		/* BUG_ON(!mb->dirty_bits) */
+
 		inc_nr_dirty_caches(wb);
 
 		key = (struct lookup_key) {
@@ -739,16 +741,30 @@ static int writeback_non_volatile_buffers(struct wb_device *wb)
 
 /*
  * Replay all the log on the cache device.
+ *
+ * Algorithm:
+ * 1. find the maxium id
+ * 2. start from the right. iterate all the log.
+ * 3. skip if id=0 or checkum invalid
+ * 4. merge otherwise.
+ *
+ * This algorithm is robust for floppy SSD
+ * that may write a segment partially or
+ * lose data on its buffer on power fault.
+ *
+ * If number of threads flush segments in parallel
+ * and some of them loses atomicity because of
+ * power fault this elegant algorithm works.
  */
-static int replay_log(struct wb_device *wb)
+static int replay_log_on_cache(struct wb_device *wb)
 {
+	int r = 0;
+	u32 i, k, start_idx;
+	u64 max_id = 0, record_id, init_segment_id;
+
 	void *rambuf;
 	struct segment_header *seg;
 	struct segment_header_device *header;
-
-	int r = 0;
-	u32 i, start_idx;
-	u64 max_id = 0, record_id, init_segment_id;
 
 	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, wb);
@@ -761,8 +777,8 @@ static int replay_log(struct wb_device *wb)
 	rambuf = kmalloc(1 << (wb->segment_size_order + SECTOR_SHIFT),
 			 GFP_KERNEL);
 
-	for (i = 0; i < wb->nr_segments; i++) {
-		seg = segment_at(wb, i);
+	for (k = 0; k < wb->nr_segments; k++) {
+		seg = segment_at(wb, k);
 		r = read_whole_segment(rambuf, wb, seg);
 		if (r) {
 			kfree(rambuf);
@@ -791,13 +807,15 @@ static int replay_log(struct wb_device *wb)
 
 		header = rambuf;
 
-		if (!le32_to_cpu(header->id))
+		if (!le64_to_cpu(header->id))
 			continue;
 
 		checksum1 = le32_to_cpu(header->checksum);
 		checksum2 = calc_checksum(rambuf, header->length);
 		if (checksum1 != checksum2) {
-			DMWARN("checksum inconsistent"); /* TODO */
+			DMWARN("checksum inconsistent id:%llu checksum:%u != %u",
+			       (long long unsigned int) le64_to_cpu(header->id),
+			       checksum1, checksum2);
 			continue;
 		}
 
@@ -844,17 +862,26 @@ static void init_first_segment(struct wb_device *wb)
 	seg->length = 1;
 }
 
+/*
+ * Recover all the cache state from the
+ * persistent devices (non-volatile RAM and SSD).
+ */
 static int __must_check recover_cache(struct wb_device *wb)
 {
 	int r = 0;
 
 	r = writeback_non_volatile_buffers(wb);
-	if (r)
+	if (r) {
+		WBERR("failed to write back all the persistent \
+		      data on non-volatile RAM");
 		return r;
+	}
 
-	r = replay_log(wb);
-	if (r)
+	r = replay_log_on_cache(wb);
+	if (r) {
+		WBERR("failed to replay log");
 		return r;
+	}
 
 	init_first_segment(wb);
 	return 0;

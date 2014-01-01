@@ -35,7 +35,7 @@ int __must_check format_cache_device(struct wb_device *);
 
 /*----------------------------------------------------------------*/
 
-void prepare_segment_header_device(struct segment_header_device *dest,
+void prepare_segment_header_device(void *rambuffer,
 				   struct wb_device *,
 				   struct segment_header *src);
 

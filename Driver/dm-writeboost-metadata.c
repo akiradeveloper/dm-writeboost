@@ -8,6 +8,8 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+#include <linux/crc32c.h>
+
 /*----------------------------------------------------------------*/
 
 struct part {
@@ -132,12 +134,6 @@ static sector_t calc_segment_header_start(struct wb_device *wb,
 {
 	return (1 << 11) + (1 << wb->segment_size_order) * (segment_idx);
 }
-
-static u32 calc_segment_lap(struct wb_device *wb, u64 segment_id)
-{
-	u64 a = div_u64(segment_id - 1, wb->nr_segments);
-	return a + 1;
-};
 
 static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 {
@@ -400,7 +396,7 @@ int __must_check audit_cache_device(struct wb_device *wb,
 	*need_format = true;
 	*allow_format = false;
 
-	if (le32_to_cpu(sup.magic) != WRITEBOOST_MAGIC) {
+	if (le32_to_cpu(sup.magic) != WB_MAGIC) {
 		*allow_format = true;
 		WBERR("superblock header: magic number invalid");
 		return 0;
@@ -424,7 +420,7 @@ static int format_superblock_header(struct wb_device *wb)
 	struct dm_io_region region_sup;
 
 	struct superblock_header_device sup = {
-		.magic = cpu_to_le32(WRITEBOOST_MAGIC),
+		.magic = cpu_to_le32(WB_MAGIC),
 		.segment_size_order = wb->segment_size_order,
 	};
 
@@ -657,24 +653,24 @@ bad_io:
 	return r;
 }
 
+static u32 calc_checksum(void *rambuffer, u8 length)
+{
+	unsigned int len = (4096 - 512) + 4096 * length;
+	return crc32c(WB_CKSUM_SEED, rambuffer + 512, len);
+}
+
 /*
  * Make a metadata in segment data to flush.
  * @dest The metadata part of the segment to flush
  */
-void prepare_segment_header_device(struct segment_header_device *dest,
+void prepare_segment_header_device(void *rambuffer,
 				   struct wb_device *wb,
 				   struct segment_header *src)
 {
-	u8 left, right;
-	u32 i, tmp32;
+	struct segment_header_device *dest = rambuffer;
+	u32 i;
 
-	dest->global_id = cpu_to_le64(src->global_id);
-
-	/* just a tiny validation */
-	left = src->length - 1;
-	div_u64_rem(wb->cursor, wb->nr_caches_inseg, &tmp32);
-	right = tmp32;
-	BUG_ON(left != right);
+	BUG_ON((src->length - 1) != mb_idx_inseg(wb, wb->cursor));
 
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
@@ -682,8 +678,11 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 
 		mbdev->sector = cpu_to_le64(mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
-		mbdev->lap = cpu_to_le32(calc_segment_lap(wb, src->global_id));
 	}
+
+	dest->global_id = cpu_to_le64(src->global_id);
+	dest->checksum = cpu_to_le32(calc_checksum(rambuffer, src->length));
+	dest->length = src->length;
 }
 
 /*
@@ -694,46 +693,25 @@ void prepare_segment_header_device(struct segment_header_device *dest,
 static void update_by_segment_header_device(struct wb_device *wb,
 					    struct segment_header_device *src)
 {
-	u32 i;
+	u8 i;
 	u64 id = le64_to_cpu(src->global_id);
-	struct segment_header *seg = get_segment_header_by_id(wb, id);
-	u32 seg_lap = calc_segment_lap(wb, id);
 
+	struct segment_header *seg = get_segment_header_by_id(wb, id);
+
+	/*
+	 * FIXME
+	 * should initizlize here?
+	 */
+	seg->length = src->length;
+
+	/* FIXME WTF? */
 	INIT_COMPLETION(seg->migrate_done);
 
-	for (i = 0 ; i < wb->nr_caches_inseg; i++) {
+	for (i = 0 ; i < src->length; i++) {
 		struct lookup_key key;
 		struct ht_head *head;
 		struct metablock *found = NULL, *mb = seg->mb_array + i;
 		struct metablock_device *mbdev = src->mbarr + i;
-
-		/*
-		 * lap is kind of checksum.
-		 * If the checksum are the same between
-		 * original (seg_lap) and the dumped on
-		 * the metadata the metadata is considered valid.
-		 *
-		 * This algorithm doesn't care the case
-		 * metadata are partially written but it is OK.
-		 *
-		 * The cases are splitted by the volatility of
-		 * the buffer.
-		 *
-		 * If the buffer is volatile, ACK to the barrier
-		 * will only be done after completion of flushing
-		 * to the cache device. Therefore, these metadata
-		 * lost are ignored doesn't violate the semantics.
-		 *
-		 * If the buffer is non-volatile, ACK to the barrier
-		 * is already done. However, only after FUA write to
-		 * the cache device the buffer is ready to be reused.
-		 * Therefore, metadata is not lost and is still on
-		 * the buffer.
-		 */
-		if (le32_to_cpu(mbdev->lap) != seg_lap)
-			break;
-
-		seg->length++;
 
 		mb->sector = le64_to_cpu(mbdev->sector);
 		mb->dirty_bits = mbdev->dirty_bits;
@@ -744,7 +722,7 @@ static void update_by_segment_header_device(struct wb_device *wb,
 		 * null cache.
 		 */
 		if (!mb->dirty_bits)
-			continue;
+			continue; /* FIXME BUG? */
 
 		inc_nr_dirty_caches(wb);
 

@@ -71,7 +71,7 @@
   * Magic Number
   * "WBst"
   */
-#define WRITEBOOST_MAGIC 0x57427374
+#define WB_MAGIC 0x57427374
 struct superblock_header_device {
 	__le32 magic;
 	__u8 segment_size_order;
@@ -121,9 +121,8 @@ struct metablock {
  */
 struct metablock_device {
 	__le64 sector;
-	__le32 lap;
 	__u8 dirty_bits;
-	__u8 padding[16 - (8 + 4 + 1)]; /* 16B */
+	__u8 padding[16 - (8 +  1)]; /* 16B */
 } __packed;
 
 #define SZ_MAX (~(size_t)0)
@@ -184,16 +183,13 @@ struct segment_header {
  *
  * Must be at most 4KB large.
  */
+#define WB_CKSUM_SEED (~(u32)0)
 struct segment_header_device {
 	/* - FROM ------------------------------------ */
 	__le64 global_id;
-	/*
-	 * On what lap in rorating on cache device
-	 * used to find the head and tail in the
-	 * segments in cache device.
-	 */
-	__le32 lap;
-	__u8 padding[512 - (8 + 4)]; /* 512B */
+	__le32 checksum;
+	__u8 length;
+	__u8 padding[512 - (8 + 4 + 1)]; /* 512B */
 	/* - TO -------------------------------------- */
 	struct metablock_device mbarr[0]; /* 16B * N */
 } __packed;

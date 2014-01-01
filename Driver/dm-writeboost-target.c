@@ -104,62 +104,17 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 	return count;
 }
 
-static void prepare_meta_rambuffer(void *rambuffer,
-				   struct wb_device *wb,
-				   struct segment_header *seg)
+/*
+ * Prepare the kmalloc-ed RAM buffer.
+ * dm_io requires RAM buffer for its I/O buffer.
+ * Even if we uses PRAM we have to copy the data to the
+ * volatile buffer when we come to submit I/O.
+ */
+static void prepare_rambuffer(struct rambuffer *rambuf,
+			      struct wb_device *wb,
+			      struct segment_header *seg)
 {
-	prepare_segment_header_device(rambuffer, wb, seg);
-}
-
-static void init_flush_job(struct flush_job *job, struct wb_device *wb)
-{
-	INIT_LIST_HEAD(&job->flush_queue);
-
-	INIT_COMPLETION(wb->current_seg->migrate_done);
-	INIT_COMPLETION(wb->current_seg->flush_done);
-	job->seg = wb->current_seg;
-
-	job->rambuf = wb->current_rambuf;
-
-	bio_list_init(&job->barrier_ios);
-	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
-	bio_list_init(&wb->barrier_ios);
-}
-
-static void queue_head_job(struct wb_device *wb)
-{
-	unsigned long flags;
-	struct flush_job *job;
-	bool empty;
-	size_t rep = 0;
-
-	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
-		rep++;
-		if (rep == 1000)
-			WBWARN("inflight ios remained for current seg");
-		schedule_timeout_interruptible(msecs_to_jiffies(1));
-	}
-	prepare_meta_rambuffer(wb->current_rambuf->data, wb,
-			       wb->current_seg);
-
-	job = mempool_alloc(wb->flush_job_pool, GFP_NOIO);
-	init_flush_job(job, wb);
-
-	/*
-	 * Queuing imcomplete flush job
-	 * will let flush daemon go wild.
-	 * We put write barrier to make sure
-	 * that job is completely initizalied.
-	 */
-	smp_wmb();
-
-	spin_lock_irqsave(&wb->flush_queue_lock, flags);
-	empty = list_empty(&wb->flush_queue);
-	list_add_tail(&job->flush_queue, &wb->flush_queue);
-	spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
-
-	if (empty)
-		wake_up_process(wb->flush_daemon);
+	prepare_segment_header_device(rambuf->data, wb, seg);
 }
 
 static void init_rambuffer(struct wb_device *wb)
@@ -221,6 +176,56 @@ static void acquire_new_seg(struct wb_device *wb)
 	wb->current_seg = new_seg;
 
 	acquire_rambuffer(wb);
+}
+
+static void init_flush_job(struct flush_job *job, struct wb_device *wb)
+{
+	INIT_LIST_HEAD(&job->flush_queue);
+
+	INIT_COMPLETION(wb->current_seg->migrate_done);
+	INIT_COMPLETION(wb->current_seg->flush_done);
+	job->seg = wb->current_seg;
+
+	job->rambuf = wb->current_rambuf;
+
+	bio_list_init(&job->barrier_ios);
+	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
+	bio_list_init(&wb->barrier_ios);
+}
+
+static void queue_head_job(struct wb_device *wb)
+{
+	unsigned long flags;
+	struct flush_job *job;
+	bool empty;
+	size_t rep = 0;
+
+	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
+		rep++;
+		if (rep == 1000)
+			WBWARN("inflight ios remained for current seg");
+		schedule_timeout_interruptible(msecs_to_jiffies(1));
+	}
+	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
+
+	job = mempool_alloc(wb->flush_job_pool, GFP_NOIO);
+	init_flush_job(job, wb);
+
+	/*
+	 * Queuing imcomplete flush job
+	 * will let flush daemon go wild.
+	 * We put write barrier to make sure
+	 * that job is completely initizalied.
+	 */
+	smp_wmb();
+
+	spin_lock_irqsave(&wb->flush_queue_lock, flags);
+	empty = list_empty(&wb->flush_queue);
+	list_add_tail(&job->flush_queue, &wb->flush_queue);
+	spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
+
+	if (empty)
+		wake_up_process(wb->flush_daemon);
 }
 
 static void queue_current_buffer(struct wb_device *wb)

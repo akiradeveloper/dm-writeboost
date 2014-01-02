@@ -1113,7 +1113,8 @@ int __must_check resume_cache(struct wb_device *wb)
 	 */
 
 	/* Flush Daemon */
-	wb->flusher_wq = create_workqueue("flusher");
+	wb->flusher_wq = alloc_workqueue(
+		"%s", WQ_MEM_RECLAIM | WQ_SYSFS, 1, "wbflusher");
 	if (!wb->flusher_wq) {
 		goto bad_flush_daemon;
 	}

@@ -29,14 +29,7 @@ void discard_caches_inseg(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/
 
-int __must_check audit_cache_device(struct wb_device *,
-				    bool *need_format, bool *allow_format);
-int __must_check format_cache_device(struct wb_device *);
-
-/*----------------------------------------------------------------*/
-
-void prepare_segment_header_device(void *rambuffer,
-				   struct wb_device *,
+void prepare_segment_header_device(void *rambuffer, struct wb_device *,
 				   struct segment_header *src);
 
 /*----------------------------------------------------------------*/

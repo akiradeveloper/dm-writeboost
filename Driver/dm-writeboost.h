@@ -286,6 +286,7 @@ struct wb_device {
 	struct task_struct *flush_daemon;
 	spinlock_t flush_queue_lock;
 	struct list_head flush_queue;
+	wait_queue_head_t flush_wait_queue;
 
 	/*
 	 * Deferred ACK for barriers.

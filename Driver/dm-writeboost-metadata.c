@@ -1113,6 +1113,7 @@ int __must_check resume_cache(struct wb_device *wb)
 	spin_lock_init(&wb->flush_queue_lock);
 	INIT_LIST_HEAD(&wb->flush_queue);
 	CREATE_DAEMON(flush);
+	init_waitqueue_head(&wb->flush_wait_queue);
 
 	/* Deferred ACK for barrier writes */
 

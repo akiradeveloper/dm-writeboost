@@ -110,14 +110,16 @@ int flush_proc(void *data)
 		}
 
 		/*
-		 * Pop a fluch_context from a list
-		 * and flush it.
+		 * Pop a fluch_context from a list and flush it.
 		 */
 		job = list_first_entry(
 			&wb->flush_queue, struct flush_job, flush_queue);
 		list_del(&job->flush_queue);
 		spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
 
+		/*
+		 * Corresponding to the wmb in queuing a flush job.
+		 */
 		smp_rmb();
 
 		seg = job->seg;
@@ -137,11 +139,14 @@ int flush_proc(void *data)
 		};
 
 		IO(dm_safe_io(&io_req, 1, &region, NULL, false));
-		atomic64_set(&wb->last_flushed_segment_id, seg->id);
 
-		complete_all(&seg->flush_done);
-
-		complete_all(&job->rambuf->done);
+		/*
+		 * To serialize barrier ACK in logging
+		 * we wait for the previous segment to be
+		 * persistently (if needed).
+		 */
+		wait_event_interruptible(wb->flush_wait_queue,
+			 seg->id - atomic64_read(&wb->last_flushed_segment_id) == 1);
 
 		/*
 		 * Deferred ACK
@@ -160,6 +165,11 @@ int flush_proc(void *data)
 
 			update_barrier_deadline(wb);
 		}
+
+		atomic64_set(&wb->last_flushed_segment_id, seg->id);
+
+		complete_all(&seg->flush_done);
+		complete_all(&job->rambuf->done);
 
 		mempool_free(job, wb->flush_job_pool);
 	}
@@ -439,9 +449,8 @@ int migrate_proc(void *data)
 		}
 
 		/*
-		 * We insert write barrier here
-		 * to make sure that migrate list
-		 * is complete.
+		 * We insert write barrier here to make sure that migrate list
+		 * is prepared completely.
 		 */
 		smp_wmb();
 

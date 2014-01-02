@@ -1003,6 +1003,11 @@ void free_migration_buffer(struct wb_device *wb)
 		wake_up_process(wb->name##_daemon); \
 	} while (0)
 
+static void select_any_rambuf(struct wb_device *wb)
+{
+	wb->current_rambuf = wb->rambuf_pool + 0;
+}
+
 int __must_check resume_cache(struct wb_device *wb)
 {
 	int r = 0;
@@ -1039,16 +1044,14 @@ int __must_check resume_cache(struct wb_device *wb)
 		WBERR("couldn't alloc rambuf pool");
 		goto bad_init_rambuf_pool;
 	}
-	wb->flush_job_pool = mempool_create_kmalloc_pool(wb->nr_rambuf_pool,
-							    sizeof(struct flush_job));
+	wb->flush_job_pool = mempool_create_kmalloc_pool(
+				wb->nr_rambuf_pool, sizeof(struct flush_job));
 	if (!wb->flush_job_pool) {
 		r = -ENOMEM;
 		WBERR("couldn't alloc flush job pool");
 		goto bad_flush_job_pool;
 	}
-
-	/* Select arbitrary one as the initial rambuffer. */
-	wb->current_rambuf = wb->rambuf_pool + 0;
+	select_any_rambuf(wb);
 
 	r = init_segment_header_array(wb);
 	if (r) {
@@ -1110,9 +1113,11 @@ int __must_check resume_cache(struct wb_device *wb)
 	 */
 
 	/* Flush Daemon */
-	spin_lock_init(&wb->flush_queue_lock);
-	INIT_LIST_HEAD(&wb->flush_queue);
-	CREATE_DAEMON(flush);
+	wb->flusher_wq = create_workqueue("flusher");
+	if (!wb->flusher_wq) {
+		goto bad_flush_daemon;
+	}
+	init_waitqueue_head(&wb->flush_wait_queue);
 
 	/* Deferred ACK for barrier writes */
 
@@ -1155,7 +1160,7 @@ bad_sync_daemon:
 bad_recorder_daemon:
 	kthread_stop(wb->modulator_daemon);
 bad_modulator_daemon:
-	kthread_stop(wb->flush_daemon);
+	destroy_workqueue(wb->flusher_wq);
 bad_flush_daemon:
 bad_recover:
 	kthread_stop(wb->migrate_daemon);
@@ -1183,7 +1188,7 @@ void free_cache(struct wb_device *wb)
 	kthread_stop(wb->recorder_daemon);
 	kthread_stop(wb->modulator_daemon);
 
-	kthread_stop(wb->flush_daemon);
+	destroy_workqueue(wb->flusher_wq);
 
 	cancel_work_sync(&wb->barrier_deadline_work);
 

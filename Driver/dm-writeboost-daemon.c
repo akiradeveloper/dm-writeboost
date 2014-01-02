@@ -80,90 +80,62 @@ void wait_for_flushing(struct wb_device *wb, struct segment_header *seg)
 	wait_for_completion(&seg->flush_done);
 }
 
-int flush_proc(void *data)
+void flush_proc(struct work_struct *work)
 {
 	int r;
-	unsigned long flags;
 
-	struct wb_device *wb = data;
+	struct flush_job *job = container_of(work, struct flush_job, work);
 
-	while (true) {
-		struct flush_job *job;
-		struct segment_header *seg;
-		struct dm_io_request io_req;
-		struct dm_io_region region;
+	struct wb_device *wb = job->wb;
+	struct segment_header *seg = job->seg;
 
-		spin_lock_irqsave(&wb->flush_queue_lock, flags);
-		while (list_empty(&wb->flush_queue)) {
-			spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
+	struct dm_io_request io_req = {
+		.client = wb_io_client,
+		.bi_rw = WRITE,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = job->rambuf->data,
+	};
+	struct dm_io_region region = {
+		.bdev = wb->cache_dev->bdev,
+		.sector = seg->start_sector,
+		.count = (seg->length + 1) << 3,
+	};
+	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
-			schedule_timeout_interruptible(msecs_to_jiffies(1000));
+	/*
+	 * To serialize barrier ACK in logging
+	 * we wait for the previous segment to be
+	 * persistently (if needed).
+	 */
+	wait_event_interruptible(wb->flush_wait_queue,
+		 seg->id - atomic64_read(&wb->last_flushed_segment_id) == 1);
 
-			/*
-			 * flush daemon should halt
-			 * after all barriers are acknowledged.
-			 */
-			if (kthread_should_stop())
-				return 0;
-			else
-				spin_lock_irqsave(&wb->flush_queue_lock, flags);
+	/*
+	 * Deferred ACK
+	 */
+	if (!bio_list_empty(&job->barrier_ios)) {
+		struct bio *bio;
+
+		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+
+		while ((bio = bio_list_pop(&job->barrier_ios))) {
+			LIVE_DEAD(
+				bio_endio(bio, 0),
+				bio_endio(bio, -EIO)
+			);
 		}
 
-		/*
-		 * Pop a fluch_context from a list
-		 * and flush it.
-		 */
-		job = list_first_entry(
-			&wb->flush_queue, struct flush_job, flush_queue);
-		list_del(&job->flush_queue);
-		spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
-
-		smp_rmb();
-
-		seg = job->seg;
-
-		io_req = (struct dm_io_request) {
-			.client = wb_io_client,
-			.bi_rw = WRITE,
-			.notify.fn = NULL,
-			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = job->rambuf->data,
-		};
-
-		region = (struct dm_io_region) {
-			.bdev = wb->cache_dev->bdev,
-			.sector = seg->start_sector,
-			.count = (seg->length + 1) << 3,
-		};
-
-		IO(dm_safe_io(&io_req, 1, &region, NULL, false));
-		atomic64_set(&wb->last_flushed_segment_id, seg->id);
-
-		complete_all(&seg->flush_done);
-
-		complete_all(&job->rambuf->done);
-
-		/*
-		 * Deferred ACK
-		 */
-		if (!bio_list_empty(&job->barrier_ios)) {
-			struct bio *bio;
-
-			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-
-			while ((bio = bio_list_pop(&job->barrier_ios))) {
-				LIVE_DEAD(
-					bio_endio(bio, 0),
-					bio_endio(bio, -EIO)
-				);
-			}
-
-			update_barrier_deadline(wb);
-		}
-
-		mempool_free(job, wb->flush_job_pool);
+		update_barrier_deadline(wb);
 	}
-	return 0;
+
+	atomic64_set(&wb->last_flushed_segment_id, seg->id);
+	wake_up_interruptible(&wb->flush_wait_queue);
+
+	complete_all(&seg->flush_done);
+	complete_all(&job->rambuf->done);
+
+	mempool_free(job, wb->flush_job_pool);
 }
 
 /*----------------------------------------------------------------*/
@@ -433,15 +405,14 @@ int migrate_proc(void *data)
 		 * Add segments to migrate atomically.
 		 */
 		for (i = 1; i <= nr_mig; i++) {
-			seg = get_segment_header_by_id(wb,
-					atomic64_read(&wb->last_migrated_segment_id) + i);
+			seg = get_segment_header_by_id(
+				wb, atomic64_read(&wb->last_migrated_segment_id) + i);
 			list_add_tail(&seg->migrate_list, &wb->migrate_list);
 		}
 
 		/*
-		 * We insert write barrier here
-		 * to make sure that migrate list
-		 * is complete.
+		 * We insert write barrier here to make sure that migrate list
+		 * is prepared completely.
 		 */
 		smp_wmb();
 

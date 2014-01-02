@@ -977,30 +977,15 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 	return do_consume_tunable_argv(wb, as, argc);
 }
 
-/*
- * Create a device
- *
- * <type>
- * <essential args>*
- * <#optional args> <optional args>*
- * <#tunable args> <tunable args>*
- * optionals are tunables are unordered lists of k-v pair.
- *
- * See Documentation for detail.
-  */
-static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
+static int init_core(struct dm_target *ti)
 {
 	int r = 0;
-	bool need_format, allow_format;
+
 	struct wb_device *wb;
 
-	struct dm_arg_set as;
-	as.argc = argc;
-	as.argv = argv;
-
-	r = dm_set_target_max_io_len(ti, (1 << 3));
+	r = dm_set_target_max_io_len(ti, 1 << 3);
 	if (r) {
-		ti->error = "failed to set max_io_len";
+		WBERR("failed to set max_io_len");
 		return r;
 	}
 
@@ -1025,53 +1010,60 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
-		ti->error = "couldn't allocate wb";
+		WBERR("failed to alloc wb");
 		return -ENOMEM;
 	}
+
 	ti->private = wb;
 	wb->ti = ti;
 
-	atomic64_set(&wb->nr_dirty_caches, 0);
-
-	wb->should_emit_tunables = false;
-
 	init_waitqueue_head(&wb->dead_wait_queue);
 	clear_bit(WB_DEAD, &wb->flags);
+	atomic64_set(&wb->nr_dirty_caches, 0);
+	wb->should_emit_tunables = false;
+
+	return r;
+}
+
+/*
+ * Create a device
+ *
+ * <type>
+ * <essential args>*
+ * <#optional args> <optional args>*
+ * <#tunable args> <tunable args>*
+ * optionals are tunables are unordered lists of k-v pair.
+ *
+ * See Documentation for detail.
+  */
+static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
+{
+	int r = 0;
+	struct wb_device *wb;
+
+	struct dm_arg_set as;
+	as.argc = argc;
+	as.argv = argv;
+
+	r = init_core(ti);
+	if (r) {
+		ti->error = "failed to init core";
+		return r;
+	}
+	wb = ti->private;
 
 	r = consume_essential_argv(wb, &as);
-	if (r)
+	if (r) {
+		ti->error = "failed to consume essential argv";
 		goto bad_essential_argv;
+	}
 
 	wb->segment_size_order = 7;
 	wb->rambuf_pool_amount = 2048;
 	r = consume_optional_argv(wb, &as);
-	if (r)
-		goto bad_optional_argv;
-
-	r = audit_cache_device(wb, &need_format, &allow_format);
 	if (r) {
-		ti->error = "failed to audit cache device";
-		/*
-		 * If something happens in auditing the cache
-		 * such as read io error either go formatting
-		 * or resume it trusting the cache is valid
-		 * are dangerous. So we quit.
-		 */
-		goto bad_resume_cache;
-	}
-
-	if (need_format) {
-		if (allow_format) {
-			r = format_cache_device(wb);
-			if (r) {
-				ti->error = "failed to format cache device";
-				goto bad_resume_cache;
-			}
-		} else {
-			r = -EINVAL;
-			ti->error = "cache device not allowed to format";
-			goto bad_resume_cache;
-		}
+		ti->error = "failed to consume optional argv";
+		goto bad_optional_argv;
 	}
 
 	r = resume_cache(wb);
@@ -1079,12 +1071,15 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		ti->error = "failed to resume cache";
 		goto bad_resume_cache;
 	}
-	clear_stat(wb);
-	atomic64_set(&wb->count_non_full_flushed, 0);
 
 	r = consume_tunable_argv(wb, &as);
-	if (r)
+	if (r) {
+		ti->error = "failed to consume tunable argv";
 		goto bad_tunable_argv;
+	}
+
+	clear_stat(wb);
+	atomic64_set(&wb->count_non_full_flushed, 0);
 
 	return r;
 
@@ -1096,6 +1091,7 @@ bad_optional_argv:
 	dm_put_device(ti, wb->origin_dev);
 bad_essential_argv:
 	kfree(wb);
+
 	return r;
 }
 
@@ -1111,8 +1107,9 @@ static void writeboost_dtr(struct dm_target *ti)
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->origin_dev);
 
-	ti->private = NULL;
 	kfree(wb);
+
+	ti->private = NULL;
 }
 
 /*
@@ -1203,7 +1200,6 @@ static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
 	DMEMIT(" update_record_interval %lu",
 	       wb->update_record_interval);
 }
-
 
 static void writeboost_status(struct dm_target *ti, status_type_t type,
 			      unsigned flags, char *result, unsigned maxlen)

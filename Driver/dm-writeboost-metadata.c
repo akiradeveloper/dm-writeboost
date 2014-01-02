@@ -581,6 +581,44 @@ int __must_check format_cache_device(struct wb_device *wb)
 	return blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
 }
 
+/*
+ * First check if the superblock and the passed arguments
+ * are consistent and reformat the cache structure if they are not.
+ */
+static int might_format_cache_device(struct wb_device *wb)
+{
+	int r = 0;
+
+	bool need_format, allow_format;
+	r = audit_cache_device(wb, &need_format, &allow_format);
+	if (r) {
+		WBERR("failed to audit cache device");
+		/*
+		 * If something happens in auditing the cache
+		 * such as read io error either go formatting
+		 * or resume it trusting the cache is valid
+		 * are dangerous. So we quit.
+		 */
+		return r;
+	}
+
+	if (need_format) {
+		if (allow_format) {
+			r = format_cache_device(wb);
+			if (r) {
+				WBERR("failed to format cache device");
+				return r;
+			}
+		} else {
+			r = -EINVAL;
+			WBERR("cache device not allowed to format");
+			return r;
+		}
+	}
+
+	return r;
+}
+
 /*----------------------------------------------------------------*/
 
 static int __must_check
@@ -690,7 +728,7 @@ static void update_by_segment_header_device(struct wb_device *wb,
 
 	seg->length = src->length;
 
-	for (i = 0 ; i < src->length; i++) {
+	for (i = 0; i < src->length; i++) {
 		struct lookup_key key;
 		struct ht_head *head;
 		struct metablock *found = NULL, *mb = seg->mb_array + i;
@@ -846,6 +884,11 @@ static int replay_log_on_cache(struct wb_device *wb)
 	return r;
 }
 
+static void select_any_rambuf(struct wb_device *wb)
+{
+	wb->current_rambuf = wb->rambuf_pool + 0;
+}
+
 static void init_first_segment(struct wb_device *wb)
 {
 	struct segment_header *seg = wb->current_seg;
@@ -860,6 +903,8 @@ static void init_first_segment(struct wb_device *wb)
 	 */
 	wb->cursor = seg->start_idx;
 	seg->length = 1;
+
+	select_any_rambuf(wb);
 }
 
 /*
@@ -992,8 +1037,8 @@ void free_migration_buffer(struct wb_device *wb)
 
 #define CREATE_DAEMON(name) \
 	do { \
-		wb->name##_daemon = kthread_create(name##_proc, wb, \
-						      #name "_daemon"); \
+		wb->name##_daemon = kthread_create( \
+				name##_proc, wb,  #name "_daemon"); \
 		if (IS_ERR(wb->name##_daemon)) { \
 			r = PTR_ERR(wb->name##_daemon); \
 			wb->name##_daemon = NULL; \
@@ -1003,29 +1048,16 @@ void free_migration_buffer(struct wb_device *wb)
 		wake_up_process(wb->name##_daemon); \
 	} while (0)
 
-static void select_any_rambuf(struct wb_device *wb)
-{
-	wb->current_rambuf = wb->rambuf_pool + 0;
-}
-
-int __must_check resume_cache(struct wb_device *wb)
+static int harmless_init(struct wb_device *wb)
 {
 	int r = 0;
-	size_t nr_batch;
-
-	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
-	/*
-	 * The first 4KB (1<<3 sectors) in segment
-	 * is for metadata.
-	 */
-	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
-	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
 
 	mutex_init(&wb->io_lock);
 
-	/*
-	 * (i) Harmless Initializations
-	 */
+	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
+	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
+	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
+
 	wb->buf_1_pool = mempool_create_kmalloc_pool(16, 1 << SECTOR_SHIFT);
 	if (!wb->buf_1_pool) {
 		r = -ENOMEM;
@@ -1051,7 +1083,6 @@ int __must_check resume_cache(struct wb_device *wb)
 		WBERR("couldn't alloc flush job pool");
 		goto bad_flush_job_pool;
 	}
-	select_any_rambuf(wb);
 
 	r = init_segment_header_array(wb);
 	if (r) {
@@ -1065,27 +1096,49 @@ int __must_check resume_cache(struct wb_device *wb)
 		goto bad_alloc_ht;
 	}
 
+	return r;
 
-	/*
-	 * (2) Recovering Metadata
-	 * Recovering the cache metadata
-	 * prerequires the migration daemon working.
-	 */
+bad_alloc_ht:
+	free_segment_header_array(wb);
+bad_alloc_segment_header_array:
+	mempool_destroy(wb->flush_job_pool);
+bad_flush_job_pool:
+	free_rambuf_pool(wb);
+bad_init_rambuf_pool:
+	mempool_destroy(wb->buf_8_pool);
+bad_buf_8_pool:
+	mempool_destroy(wb->buf_1_pool);
+bad_buf_1_pool:
 
-	/* Migration Daemon */
+	return r;
+}
+
+static void harmless_free(struct wb_device *wb)
+{
+	free_ht(wb);
+	free_segment_header_array(wb);
+	mempool_destroy(wb->flush_job_pool);
+	free_rambuf_pool(wb);
+	mempool_destroy(wb->buf_8_pool);
+	mempool_destroy(wb->buf_1_pool);
+}
+
+static int init_migrate_daemon(struct wb_device *wb)
+{
+	int r = 0;
+	size_t nr_batch;
+
 	atomic_set(&wb->migrate_fail_count, 0);
 	atomic_set(&wb->migrate_io_count, 0);
 
 	/*
-	 * default number of batched migration
-	 * is 1MB / segment size
+	 * Default number of batched migration is 1MB / segment size.
 	 * Single HDD can consume nearly 1MB/sec writes.
 	 */
 	nr_batch = 1 << (11 - wb->segment_size_order);
 	wb->nr_max_batched_migration = nr_batch;
 	if (alloc_migration_buffer(wb, nr_batch)) {
-		r = -ENOMEM;
-		goto bad_alloc_migrate_buffer;
+		return -ENOMEM;
 	}
 
 	init_waitqueue_head(&wb->migrate_wait_queue);
@@ -1099,44 +1152,36 @@ int __must_check resume_cache(struct wb_device *wb)
 	wb->allow_migrate = false;
 	wb->urge_migrate = false;
 	CREATE_DAEMON(migrate);
+bad_migrate_daemon:
+	free_migration_buffer(wb);
+	return r;
+}
 
-	r = recover_cache(wb);
-	if (r) {
-		WBERR("recovering cache metadata failed");
-		goto bad_recover;
-	}
-
-	/*
-	 * (3) Misc Initializations
-	 * These are only working
-	 * after the logical device created.
-	 */
-
-	/* Flush Daemon */
+static int init_flusher(struct wb_device *wb)
+{
+	int r = 0;
 	wb->flusher_wq = alloc_workqueue(
 		"%s", WQ_MEM_RECLAIM | WQ_SYSFS, 1, "wbflusher");
 	if (!wb->flusher_wq) {
-		goto bad_flush_daemon;
+		WBERR("failed to alloc wbflusher");
+		return -ENOMEM;
 	}
 	init_waitqueue_head(&wb->flush_wait_queue);
+	return r;
+}
 
-	/* Deferred ACK for barrier writes */
-
-	/*
-	 * Deadline is 3 ms by default.
-	 * 2.5 us to process on bio
-	 * and 3 ms is enough long to process 255 bios.
-	 * If the buffer doesn't get full within 3 ms,
-	 * we can doubt write starves
-	 * by waiting formerly submitted barrier to be complete.
-	 */
+static void init_barrier_deadline_work(struct wb_device *wb)
+{
 	wb->barrier_deadline_ms = 3;
 	setup_timer(&wb->barrier_deadline_timer,
 		    barrier_deadline_proc, (unsigned long) wb);
 	bio_list_init(&wb->barrier_ios);
 	INIT_WORK(&wb->barrier_deadline_work, flush_barrier_ios);
+}
 
-	/* Migartion Modulator */
+static int init_migrate_modulator(struct wb_device *wb)
+{
+	int r = 0;
 	/*
 	 * EMC's textbook on storage system says
 	 * storage should keep its disk util less
@@ -1145,41 +1190,88 @@ int __must_check resume_cache(struct wb_device *wb)
 	wb->migrate_threshold = 70;
 	wb->enable_migration_modulator = true;
 	CREATE_DAEMON(modulator);
+bad_modulator_daemon:
+	return r;
+}
 
-	/* Superblock Recorder */
+static int init_recorder_daemon(struct wb_device *wb)
+{
+	int r = 0;
 	wb->update_record_interval = 60;
 	CREATE_DAEMON(recorder);
+bad_recorder_daemon:
+	return r;
+}
 
-	/* Dirty Synchronizer */
+static int init_sync_daemon(struct wb_device *wb)
+{
+	int r = 0;
 	wb->sync_interval = 60;
 	CREATE_DAEMON(sync);
+bad_sync_daemon:
+	return r;
+}
 
-	return 0;
+int __must_check resume_cache(struct wb_device *wb)
+{
+	int r = 0;
+
+	r = might_format_cache_device(wb);
+	if (r)
+		goto bad_might_format_cache;
+	r = harmless_init(wb);
+	if (r)
+		goto bad_harmless_init;
+	r = init_migrate_daemon(wb);
+	if (r) {
+		WBERR("failed to init migrate daemon");
+		goto bad_migrate_daemon;
+	}
+	r = recover_cache(wb);
+	if (r) {
+		WBERR("failed to recover cache metadata");
+		goto bad_recover;
+	}
+	r = init_flusher(wb);
+	if (r) {
+		WBERR("failed to init wbflusher");
+		goto bad_flusher;
+	}
+	init_barrier_deadline_work(wb);
+	r = init_migrate_modulator(wb);
+	if (r) {
+		WBERR("failed to init migrate modulator");
+		goto bad_migrate_modulator;
+	}
+	r = init_recorder_daemon(wb);
+	if (r) {
+		WBERR("failed to init superblock recorder");
+		goto bad_recorder_daemon;
+	}
+	r = init_sync_daemon(wb);
+	if (r) {
+		WBERR("failed to init sync daemon");
+		goto bad_sync_daemon;
+	}
+
+	return r;
 
 bad_sync_daemon:
 	kthread_stop(wb->recorder_daemon);
 bad_recorder_daemon:
 	kthread_stop(wb->modulator_daemon);
-bad_modulator_daemon:
+bad_migrate_modulator:
+	cancel_work_sync(&wb->barrier_deadline_work);
 	destroy_workqueue(wb->flusher_wq);
-bad_flush_daemon:
+bad_flusher:
 bad_recover:
 	kthread_stop(wb->migrate_daemon);
-bad_migrate_daemon:
 	free_migration_buffer(wb);
-bad_alloc_migrate_buffer:
-	free_ht(wb);
-bad_alloc_ht:
-	free_segment_header_array(wb);
-bad_alloc_segment_header_array:
-	mempool_destroy(wb->flush_job_pool);
-bad_flush_job_pool:
-	free_rambuf_pool(wb);
-bad_init_rambuf_pool:
-	mempool_destroy(wb->buf_8_pool);
-bad_buf_8_pool:
-	mempool_destroy(wb->buf_1_pool);
-bad_buf_1_pool:
+bad_migrate_daemon:
+	harmless_free(wb);
+bad_harmless_init:
+bad_might_format_cache:
+
 	return r;
 }
 
@@ -1189,16 +1281,12 @@ void free_cache(struct wb_device *wb)
 	kthread_stop(wb->recorder_daemon);
 	kthread_stop(wb->modulator_daemon);
 
-	destroy_workqueue(wb->flusher_wq);
-
 	cancel_work_sync(&wb->barrier_deadline_work);
+
+	destroy_workqueue(wb->flusher_wq);
 
 	kthread_stop(wb->migrate_daemon);
 	free_migration_buffer(wb);
 
-	/* Destroy in-core structures */
-	free_ht(wb);
-	free_segment_header_array(wb);
-
-	free_rambuf_pool(wb);
+	harmless_free(wb);
 }

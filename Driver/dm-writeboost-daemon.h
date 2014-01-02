@@ -9,7 +9,7 @@
 
 /*----------------------------------------------------------------*/
 
-int flush_proc(void *);
+void flush_proc(struct work_struct *);
 void wait_for_flushing(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/

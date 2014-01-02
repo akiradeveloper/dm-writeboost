@@ -183,10 +183,10 @@ static void acquire_new_seg(struct wb_device *wb)
 
 static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 {
-	INIT_LIST_HEAD(&job->flush_queue);
-
 	reinit_completion(&wb->current_seg->migrate_done);
 	reinit_completion(&wb->current_seg->flush_done);
+
+	job->wb = wb;
 	job->seg = wb->current_seg;
 
 	job->rambuf = wb->current_rambuf;
@@ -198,9 +198,7 @@ static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 
 static void queue_head_job(struct wb_device *wb)
 {
-	unsigned long flags;
 	struct flush_job *job;
-	bool empty;
 	size_t rep = 0;
 
 	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
@@ -213,22 +211,8 @@ static void queue_head_job(struct wb_device *wb)
 
 	job = mempool_alloc(wb->flush_job_pool, GFP_NOIO);
 	init_flush_job(job, wb);
-
-	/*
-	 * Queuing imcomplete flush job
-	 * will let flush daemon go wild.
-	 * We put write barrier to make sure
-	 * that job is completely initizalied.
-	 */
-	smp_wmb();
-
-	spin_lock_irqsave(&wb->flush_queue_lock, flags);
-	empty = list_empty(&wb->flush_queue);
-	list_add_tail(&job->flush_queue, &wb->flush_queue);
-	spin_unlock_irqrestore(&wb->flush_queue_lock, flags);
-
-	if (empty)
-		wake_up_process(wb->flush_daemon);
+	INIT_WORK(&job->work, flush_proc);
+	queue_work(wb->flusher_wq, &job->work);
 }
 
 static void queue_current_buffer(struct wb_device *wb)

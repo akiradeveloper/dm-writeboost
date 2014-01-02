@@ -228,9 +228,9 @@ enum WB_FLAG {
 };
 
 enum RAMBUF_TYPE {
-	BUF_NORMAL = 0,
-	BUF_NV_BLK,
-	BUF_NV_RAM,
+	BUF_NORMAL = 0, /* volatile DRAM */
+	BUF_NV_BLK, /* non-volatile with block I/F */
+	BUF_NV_RAM, /* non-volatile with PRAM I/F */
 };
 
 struct wb_device {
@@ -283,9 +283,7 @@ struct wb_device {
 	 * and flush daemon asynchronously
 	 * flush them to the cache device.
 	 */
-	struct task_struct *flush_daemon;
-	spinlock_t flush_queue_lock;
-	struct list_head flush_queue;
+	struct workqueue_struct *flusher_wq;
 	wait_queue_head_t flush_wait_queue;
 
 	/*
@@ -365,7 +363,10 @@ struct wb_device {
 };
 
 struct flush_job {
-	struct list_head flush_queue;
+	struct work_struct work;
+
+	struct wb_device *wb;
+
 	struct segment_header *seg;
 	/*
 	 * The data to flush to cache device.

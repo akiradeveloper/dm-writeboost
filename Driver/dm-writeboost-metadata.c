@@ -1152,6 +1152,9 @@ static int init_migrate_daemon(struct wb_device *wb)
 	wb->allow_migrate = false;
 	wb->urge_migrate = false;
 	CREATE_DAEMON(migrate);
+
+	return r;
+
 bad_migrate_daemon:
 	free_migration_buffer(wb);
 	return r;
@@ -1190,6 +1193,8 @@ static int init_migrate_modulator(struct wb_device *wb)
 	wb->migrate_threshold = 70;
 	wb->enable_migration_modulator = true;
 	CREATE_DAEMON(modulator);
+	return r;
+
 bad_modulator_daemon:
 	return r;
 }
@@ -1199,6 +1204,8 @@ static int init_recorder_daemon(struct wb_device *wb)
 	int r = 0;
 	wb->update_record_interval = 60;
 	CREATE_DAEMON(recorder);
+	return r;
+
 bad_recorder_daemon:
 	return r;
 }
@@ -1208,6 +1215,8 @@ static int init_sync_daemon(struct wb_device *wb)
 	int r = 0;
 	wb->sync_interval = 60;
 	CREATE_DAEMON(sync);
+	return r;
+
 bad_sync_daemon:
 	return r;
 }

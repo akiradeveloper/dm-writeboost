@@ -2,7 +2,7 @@
  * Writeboost
  * Log-structured Caching for Linux
  *
- * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2014 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
  */

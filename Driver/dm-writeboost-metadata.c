@@ -721,8 +721,9 @@ void prepare_segment_header_device(void *rambuffer,
 	dest->length = src->length;
 }
 
-static void do_update(struct wb_device *wb, struct segment_header *seg,
-		      struct segment_header_device *src, u8 i)
+static void
+apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
+		       struct segment_header_device *src, u8 i)
 {
 	struct lookup_key key;
 	struct ht_head *head;
@@ -760,15 +761,15 @@ static void do_update(struct wb_device *wb, struct segment_header *seg,
  * update the in-core cache metadata structure.
  */
 static void
-update_by_segment_header_device(struct wb_device *wb, struct segment_header *seg,
-				struct segment_header_device *src)
+apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
+			    struct segment_header_device *src)
 {
 	u8 i;
 
 	seg->length = src->length;
 
 	for (i = 0; i < src->length; i++)
-		do_update(wb, seg, src, i);
+		apply_metablock_device(wb, seg, src, i);
 }
 
 /*
@@ -809,7 +810,7 @@ static int find_max_id(struct wb_device *wb, u64 *max_id)
 	return r;
 }
 
-static int merge_valid_segments(struct wb_device *wb, u64 *max_id)
+static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 {
 	int r = 0;
 	struct segment_header *seg;
@@ -845,7 +846,7 @@ static int merge_valid_segments(struct wb_device *wb, u64 *max_id)
 			continue;
 		}
 
-		update_by_segment_header_device(wb, seg, header);
+		apply_segment_header_device(wb, seg, header);
 		*max_id = le64_to_cpu(header->id);
 	}
 	kfree(rambuf);
@@ -880,7 +881,7 @@ static int infer_last_migrated_id(struct wb_device *wb)
  * 1. find the maxium id
  * 2. start from the right. iterate all the log.
  * 2. skip if id=0 or checkum invalid
- * 2. merge otherwise.
+ * 2. apply otherwise.
  *
  * This algorithm is robust for floppy SSD
  * that may write a segment partially or
@@ -901,9 +902,9 @@ static int replay_log_on_cache(struct wb_device *wb)
 		WBERR("failed to find max id");
 		return r;
 	}
-	r = merge_valid_segments(wb, &max_id);
+	r = apply_valid_segments(wb, &max_id);
 	if (r) {
-		WBERR("failed to merge valid segments");
+		WBERR("failed to apply valid segments");
 		return r;
 	}
 

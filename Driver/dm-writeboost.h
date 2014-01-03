@@ -304,8 +304,8 @@ struct wb_device {
 	 * if they are segments to migrate.
 	 */
 	struct task_struct *migrate_daemon;
-	int allow_migrate; /* param */
-	int urge_migrate;
+	int allow_migrate;
+	int urge_migrate; /* Start migrate immediately */
 
 	/*
 	 * Batched Migration

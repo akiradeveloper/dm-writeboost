@@ -865,7 +865,7 @@ bad:
 	return r;
 }
 
-#define consume_kv(name, nr) \
+#define consume_kv(name, nr) { \
 	if (!strcasecmp(key, #name)) { \
 		if (!argc) \
 			break; \
@@ -873,7 +873,7 @@ bad:
 		if (r) \
 			break; \
 		wb->name = tmp; \
-	 }
+	 } }
 
 static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 {

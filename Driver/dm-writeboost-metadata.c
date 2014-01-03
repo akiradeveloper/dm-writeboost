@@ -686,6 +686,10 @@ read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
 	return dm_safe_io(&io_req, 1, &region, NULL, false);
 }
 
+/*
+ * We make a checksum of a segment from the valid data
+ * in a segment except the first 1 sector.
+ */
 static u32 calc_checksum(void *rambuffer, u8 length)
 {
 	unsigned int len = (4096 - 512) + 4096 * length;
@@ -717,9 +721,43 @@ void prepare_segment_header_device(void *rambuffer,
 	dest->length = src->length;
 }
 
+static void do_update(struct wb_device *wb, struct segment_header *seg,
+		      struct segment_header_device *src, u8 i)
+{
+	struct lookup_key key;
+	struct ht_head *head;
+	struct metablock *found = NULL, *mb = seg->mb_array + i;
+	struct metablock_device *mbdev = src->mbarr + i;
+
+	mb->sector = le64_to_cpu(mbdev->sector);
+	mb->dirty_bits = mbdev->dirty_bits;
+
+	/*
+	 * A metablock is usually dirty but the exception is that
+	 * the one inserted by force flush.
+	 * In that case, the first metablock in a segment is clean.
+	 */
+	if (!mb->dirty_bits)
+		return;
+
+	key = (struct lookup_key) {
+		.sector = mb->sector,
+	};
+	head = ht_get_head(wb, &key);
+	found = ht_lookup(wb, head, &key);
+	if (found) {
+		bool overwrite_fullsize = (mb->dirty_bits == 255);
+		invalidate_previous_cache(wb, mb_to_seg(wb, found), found,
+					  overwrite_fullsize);
+	}
+
+	inc_nr_dirty_caches(wb);
+	ht_register(wb, head, &key, mb);
+}
+
 /*
  * Read the on-disk metadata of the segment and
- * update the in-core cache metadata structure. 
+ * update the in-core cache metadata structure.
  */
 static void
 update_by_segment_header_device(struct wb_device *wb, struct segment_header *seg,
@@ -729,39 +767,8 @@ update_by_segment_header_device(struct wb_device *wb, struct segment_header *seg
 
 	seg->length = src->length;
 
-	for (i = 0; i < src->length; i++) {
-		struct lookup_key key;
-		struct ht_head *head;
-		struct metablock *found = NULL, *mb = seg->mb_array + i;
-		struct metablock_device *mbdev = src->mbarr + i;
-
-		mb->sector = le64_to_cpu(mbdev->sector);
-		mb->dirty_bits = mbdev->dirty_bits;
-
-		/*
-		 * A metablock is usually dirty
-		 * but the exception is that the one
-		 * inserted by force flush.
-		 * In that case, the first metablock
-		 * in a segment is clean.
-		 */
-		if (!mb->dirty_bits)
-			continue;
-
-		key = (struct lookup_key) {
-			.sector = mb->sector,
-		};
-		head = ht_get_head(wb, &key);
-		found = ht_lookup(wb, head, &key);
-		if (found) {
-			bool overwrite_fullsize = (mb->dirty_bits == 255);
-			invalidate_previous_cache(wb, mb_to_seg(wb, found), found,
-						  overwrite_fullsize);
-		}
-
-		inc_nr_dirty_caches(wb);
-		ht_register(wb, head, &key, mb);
-	}
+	for (i = 0; i < src->length; i++)
+		do_update(wb, seg, src, i);
 }
 
 /*
@@ -794,9 +801,8 @@ static int find_max_id(struct wb_device *wb, u64 *max_id)
 		}
 
 		header = rambuf;
-		if (le64_to_cpu(header->id) > *max_id) {
+		if (le64_to_cpu(header->id) > *max_id)
 			*max_id = le64_to_cpu(header->id);
-		}
 	}
 
 	kfree(rambuf);
@@ -841,9 +847,6 @@ static int merge_valid_segments(struct wb_device *wb, u64 *max_id)
 
 		update_by_segment_header_device(wb, seg, header);
 		*max_id = le64_to_cpu(header->id);
-
-		/* FIXME WTF? */
-		reinit_completion(&seg->migrate_done);
 	}
 	kfree(rambuf);
 	return r;
@@ -948,8 +951,7 @@ static int __must_check recover_cache(struct wb_device *wb)
 
 	r = writeback_non_volatile_buffers(wb);
 	if (r) {
-		WBERR("failed to write back all the persistent \
-		      data on non-volatile RAM");
+		WBERR("failed to write back all the persistent data on non-volatile RAM");
 		return r;
 	}
 
@@ -1014,13 +1016,13 @@ static void free_rambuf_pool(struct wb_device *wb)
 /*----------------------------------------------------------------*/
 
 /*
- * Allocate new migration buffer by the nr_batch size.
+ * Try to allocate new migration buffer by the nr_batch size.
  * On success, it frees the old buffer.
  *
  * Bad User may set # of batches that can hardly allocate.
- * This function is safe for that case.
+ * This function is robust in that case.
  */
-int alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
+int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 {
 	void *snapshot;
 	void *buf = vmalloc(nr_batch * (wb->nr_caches_inseg << 12));
@@ -1048,7 +1050,7 @@ int alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 	return 0;
 }
 
-void free_migration_buffer(struct wb_device *wb)
+static void free_migration_buffer(struct wb_device *wb)
 {
 	vfree(wb->migrate_buffer);
 	kfree(wb->dirtiness_snapshot);
@@ -1158,7 +1160,7 @@ static int init_migrate_daemon(struct wb_device *wb)
 	 */
 	nr_batch = 1 << (11 - wb->segment_size_order);
 	wb->nr_max_batched_migration = nr_batch;
-	if (alloc_migration_buffer(wb, nr_batch))
+	if (try_alloc_migration_buffer(wb, nr_batch))
 		return -ENOMEM;
 
 	init_waitqueue_head(&wb->migrate_wait_queue);

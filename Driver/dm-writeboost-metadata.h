@@ -34,8 +34,7 @@ void prepare_segment_header_device(void *rambuffer, struct wb_device *,
 
 /*----------------------------------------------------------------*/
 
-int alloc_migration_buffer(struct wb_device *, size_t nr_batch);
-void free_migration_buffer(struct wb_device *);
+int try_alloc_migration_buffer(struct wb_device *, size_t nr_batch);
 
 /*----------------------------------------------------------------*/
 

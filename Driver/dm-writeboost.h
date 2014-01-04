@@ -93,7 +93,8 @@ struct superblock_record_device {
 
 /*
  * The size must be a factor of one sector to avoid starddling
- * neighboring two sectors. Facebook's flashcache does the same thing.
+ * neighboring two sectors.
+ * Facebook's flashcache does the same thing.
  */
 struct metablock_device {
 	__le64 sector;
@@ -181,6 +182,11 @@ struct rambuffer {
 	struct completion done;
 };
 
+/*
+ * wbflusher's favorite food.
+ * foreground queue this object and later wbflusher
+ * one job to submit journal write to the cache device.
+ */
 struct flush_job {
 	struct work_struct work;
 	struct wb_device *wb;
@@ -189,17 +195,7 @@ struct flush_job {
 	struct bio_list barrier_ios; /* List of deferred bios */
 };
 
-struct per_bio_data {
-	void *ptr;
-};
-
-struct lookup_key {
-	sector_t sector;
-};
-
-struct ht_head {
-	struct hlist_head ht_list;
-};
+/*----------------------------------------------------------------*/
 
 enum STATFLAG {
 	STAT_WRITE = 0,
@@ -218,6 +214,9 @@ enum WB_FLAG {
 	WB_DEAD = 0,
 };
 
+/*
+ * The context of the cache driver.
+ */
 struct wb_device {
 	enum RAMBUF_TYPE type;
 
@@ -229,6 +228,13 @@ struct wb_device {
 	mempool_t *buf_1_pool; /* 1 sector buffer pool */
 	mempool_t *buf_8_pool; /* 8 sector buffer pool */
 
+	/*
+	 * Mutex is very light-weight.
+	 * To mitigate the overhead of the locking we chose to
+	 * use mutex.
+	 * To optimize the read path, rw_semaphore is a option
+	 * but it means to sacrifice write path.
+	 */
 	struct mutex io_lock;
 
 	u8 segment_size_order; /* Const */
@@ -251,13 +257,17 @@ struct wb_device {
 
 	/*---------------------------------------------*/
 
+	/**********************
+	 * Segment header array
+	 **********************/
+
 	u32 nr_segments; /* Const */
 	struct large_array *segment_header_array;
 
 	/*---------------------------------------------*/
 
 	/********************
-	 * Chained Hash Table
+	 * Chained Hash table
 	 * for cache lookup
 	 ********************/
 
@@ -268,10 +278,14 @@ struct wb_device {
 
 	/*---------------------------------------------*/
 
-	mempool_t *flush_job_pool;
+	/*****************
+	 * RAM buffer pool
+	 *****************/
+
 	u32 rambuf_pool_amount; /* kB */
 	u32 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
+	mempool_t *flush_job_pool;
 
 	/*---------------------------------------------*/
 
@@ -341,7 +355,7 @@ struct wb_device {
 	/*---------------------------------------------*/
 
 	/*************
-	 * sync daemon
+	 * Sync daemon
 	 *************/
 
 	struct task_struct *sync_daemon;

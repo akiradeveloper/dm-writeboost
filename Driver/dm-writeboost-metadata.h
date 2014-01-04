@@ -19,6 +19,13 @@ bool is_on_buffer(struct wb_device *, u32 mb_idx);
 
 /*----------------------------------------------------------------*/
 
+struct lookup_key {
+	sector_t sector;
+};
+
+struct ht_head {
+	struct hlist_head ht_list;
+};
 struct ht_head *ht_get_head(struct wb_device *, struct lookup_key *);
 struct metablock *ht_lookup(struct wb_device *,
 			    struct ht_head *, struct lookup_key *);

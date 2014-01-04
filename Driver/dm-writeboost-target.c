@@ -30,18 +30,11 @@ static void safe_io_proc(struct work_struct *work)
 			&io->err_bits);
 }
 
-/*
- * dm_io wrapper.
- * @thread run this operation in other thread to avoid deadlock.
- */
-int dm_safe_io_internal(
-		struct wb_device *wb,
-		struct dm_io_request *io_req,
-		unsigned num_regions, struct dm_io_region *regions,
-		unsigned long *err_bits, bool thread, const char *caller)
+int dm_safe_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
+			unsigned num_regions, struct dm_io_region *regions,
+			unsigned long *err_bits, bool thread, const char *caller)
 {
-	int err;
-	dev_t dev;
+	int err = 0;
 
 	if (thread) {
 		struct safe_io io = {
@@ -52,10 +45,6 @@ int dm_safe_io_internal(
 
 		INIT_WORK_ONSTACK(&io.work, safe_io_proc);
 
-		/*
-		 * don't go on submitting I/O
-		 * minimizes the risk of breaking the data.
-		 */
 		queue_work(safe_io_wq, &io.work);
 		flush_work(&io.work);
 
@@ -66,19 +55,23 @@ int dm_safe_io_internal(
 		err = dm_io(io_req, num_regions, regions, err_bits);
 	}
 
-	dev = regions->bdev->bd_dev;
-
-	/* dm_io routines permits NULL for err_bits pointer. */
+	/*
+	 * err_bits can be NULL.
+	 */
 	if (err || (err_bits && *err_bits)) {
+		char buf[BDEVNAME_SIZE];
+		dev_t dev = regions->bdev->bd_dev;
+
 		unsigned long eb;
 		if (!err_bits)
 			eb = (~(unsigned long)0);
 		else
 			eb = *err_bits;
-		WBERR("%s() I/O error err(%d, %lu), rw(%d), sector(%llu), dev(%u:%u)",
+
+		format_dev_t(buf, dev);
+		WBERR("%s() I/O error(%d), bits(%lu), dev(%s), sector(%llu), rw(%d)",
 		      caller, err, eb,
-		      io_req->bi_rw, (unsigned long long) regions->sector,
-		      MAJOR(dev), MINOR(dev));
+		      buf, (unsigned long long) regions->sector, io_req->bi_rw);
 	}
 
 	return err;
@@ -94,7 +87,6 @@ sector_t dm_devsize(struct dm_dev *dev)
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {
 	u8 i, count = 0;
-
 	struct metablock *mb;
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
@@ -105,10 +97,11 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 }
 
 /*
- * Prepare the kmalloc-ed RAM buffer.
- * dm_io requires RAM buffer for its I/O buffer.
- * Even if we uses PRAM we have to copy the data to the
- * volatile buffer when we come to submit I/O.
+ * Prepare the kmalloc-ed RAM buffer for segment write.
+ *
+ * dm_io routine requires RAM buffer for its I/O buffer.
+ * Even if we uses non-volatile RAM we have to copy the
+ * data to the volatile buffer when we come to submit I/O.
  */
 static void prepare_rambuffer(struct rambuffer *rambuf,
 			      struct wb_device *wb,
@@ -119,7 +112,6 @@ static void prepare_rambuffer(struct rambuffer *rambuf,
 
 static void init_rambuffer(struct wb_device *wb)
 {
-	/* zeroing the header */
 	memset(wb->current_rambuf->data, 0, 1 << 12);
 }
 
@@ -137,39 +129,33 @@ static void acquire_rambuffer(struct wb_device *wb)
 
 	wb->current_rambuf = next_rambuf;
 
-	/* hook for persistent rambuffer */
 	init_rambuffer(wb);
 }
 
 static void acquire_new_seg(struct wb_device *wb)
 {
-	struct segment_header *new_seg;
-	size_t rep;
-
+	size_t rep = 0;
 	u64 next_id = wb->current_seg->id + 1;
-	new_seg = get_segment_header_by_id(wb, next_id);
+	struct segment_header *new_seg = get_segment_header_by_id(wb, next_id);
 	new_seg->id = next_id;
 
 	/*
-	 * We wait for all requests to the new segment
-	 * is consumed. Mutex taken gurantees that
-	 * no new I/O the this semgnet is coming.
+	 * We wait for all requests to the new segment is consumed.
+	 * Mutex taken gurantees that no new I/O the this semgnet is coming in.
 	 */
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
 		rep++;
 		if (rep == 1000)
-			WBWARN("inflight ios remained for new seg");
+			WBWARN("too long to consume all requests");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 	BUG_ON(count_dirty_caches_remained(new_seg));
 
 	wait_for_flushing(wb, new_seg);
 
-	/* TODO dedup */
 	wait_for_migration(wb, new_seg);
 	discard_caches_inseg(wb, new_seg);
 
-	/* TODO dedup */
 	/*
 	 * Set the cursor to the last of the flushed segment.
 	 */
@@ -181,6 +167,14 @@ static void acquire_new_seg(struct wb_device *wb)
 	acquire_rambuffer(wb);
 }
 
+static void
+copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
+{
+	bio_list_init(&job->barrier_ios);
+	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
+	bio_list_init(&wb->barrier_ios);
+}
+
 static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 {
 	reinit_completion(&wb->current_seg->migrate_done);
@@ -188,12 +182,9 @@ static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 
 	job->wb = wb;
 	job->seg = wb->current_seg;
-
 	job->rambuf = wb->current_rambuf;
 
-	bio_list_init(&job->barrier_ios);
-	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
-	bio_list_init(&wb->barrier_ios);
+	copy_barrier_requests(job, wb);
 }
 
 static void queue_head_job(struct wb_device *wb)
@@ -222,10 +213,8 @@ static void queue_current_buffer(struct wb_device *wb)
 }
 
 /*
- * flush all the dirty data at a moment
- * but _NOT_ persistently.
- * Clean up the writes before termination
- * is an example of the usecase.
+ * Flush out all the transient data at a moment but _NOT_ persistently.
+ * Clean up the writes before termination is an example of the usecase.
  */
 void flush_current_buffer(struct wb_device *wb)
 {
@@ -245,48 +234,38 @@ void flush_current_buffer(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
-void inc_nr_dirty_caches(struct wb_device *wb)
+static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
-	BUG_ON(!wb);
-	atomic64_inc(&wb->nr_dirty_caches);
+	bio->bi_bdev = dev->bdev;
+	bio->bi_sector = sector;
 }
 
-static void dec_nr_dirty_caches(struct wb_device *wb)
+static u8 io_offset(struct bio *bio)
 {
-	BUG_ON(!wb);
-	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
-		wake_up_interruptible(&wb->wait_drop_caches);
+	u32 tmp32;
+	div_u64_rem(bio->bi_sector, 1 << 3, &tmp32);
+	return tmp32;
 }
 
-void cleanup_mb_if_dirty(struct wb_device *wb,
-			 struct segment_header *seg,
-			 struct metablock *mb)
+static sector_t io_count(struct bio *bio)
 {
-	unsigned long flags;
-
-	bool b = false;
-	lockseg(seg, flags);
-	if (mb->dirty_bits) {
-		mb->dirty_bits = 0;
-		b = true;
-	}
-	unlockseg(seg, flags);
-
-	if (b)
-		dec_nr_dirty_caches(wb);
+	return bio->bi_size >> SECTOR_SHIFT;
 }
 
-u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
+static bool io_fullsize(struct bio *bio)
 {
-	unsigned long flags;
-	u8 r;
-
-	lockseg(seg, flags);
-	r = mb->dirty_bits;
-	unlockseg(seg, flags);
-
-	return r;
+	return io_count(bio) == (1 << 3);
 }
+
+/*
+ * We use 4KB alignment address of original request the for the lookup key.
+ */
+static sector_t calc_cache_alignment(sector_t bio_sector)
+{
+	return div_u64(bio_sector, 1 << 3) * (1 << 3);
+}
+
+/*----------------------------------------------------------------*/
 
 static void inc_stat(struct wb_device *wb,
 		     int rw, bool found, bool on_buffer, bool fullsize)
@@ -309,20 +288,61 @@ static void inc_stat(struct wb_device *wb,
 
 static void clear_stat(struct wb_device *wb)
 {
-	int i;
+	size_t i;
 	for (i = 0; i < STATLEN; i++) {
 		atomic64_t *v = &wb->stat[i];
 		atomic64_set(v, 0);
 	}
 }
 
-/*
- * Migrate a data on the cache device
- */
+/*----------------------------------------------------------------*/
+
+void inc_nr_dirty_caches(struct wb_device *wb)
+{
+	BUG_ON(!wb);
+	atomic64_inc(&wb->nr_dirty_caches);
+}
+
+static void dec_nr_dirty_caches(struct wb_device *wb)
+{
+	BUG_ON(!wb);
+	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
+		wake_up_interruptible(&wb->wait_drop_caches);
+}
+
+void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
+			 struct metablock *mb)
+{
+	unsigned long flags;
+
+	bool was_dirty = false;
+	lockseg(seg, flags);
+	if (mb->dirty_bits) {
+		mb->dirty_bits = 0;
+		was_dirty = true;
+	}
+	unlockseg(seg, flags);
+
+	if (was_dirty)
+		dec_nr_dirty_caches(wb);
+}
+
+u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
+{
+	unsigned long flags;
+	u8 r;
+
+	lockseg(seg, flags);
+	r = mb->dirty_bits;
+	unlockseg(seg, flags);
+
+	return r;
+}
+
 static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 		       struct metablock *mb, u8 dirty_bits, bool thread)
 {
-	int r;
+	int r = 0;
 
 	if (!dirty_bits)
 		return;
@@ -363,12 +383,11 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 		mempool_free(buf, wb->buf_8_pool);
 	} else {
 		void *buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO);
-		size_t i;
+		u8 i;
 		for (i = 0; i < 8; i++) {
 			bool bit_on = dirty_bits & (1 << i);
 			struct dm_io_request io_req_r, io_req_w;
 			struct dm_io_region region_r, region_w;
-			sector_t src;
 
 			if (!bit_on)
 				continue;
@@ -380,11 +399,9 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = buf,
 			};
-			/* A tmp variable just to avoid 80 cols rule */
-			src = calc_mb_start_sector(wb, seg, mb->idx) + i;
 			region_r = (struct dm_io_region) {
 				.bdev = wb->cache_dev->bdev,
-				.sector = src,
+				.sector = calc_mb_start_sector(wb, seg, mb->idx) + i,
 				.count = 1,
 			};
 			IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, thread));
@@ -409,12 +426,12 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 
 /*
  * Migrate the cache on the RAM buffer.
- * Calling this function is really rare.
+ * Calling this function is really rare so the code is not optimal.
  */
 static void migrate_buffered_mb(struct wb_device *wb,
 				struct metablock *mb, u8 dirty_bits)
 {
-	int r;
+	int r = 0;
 
 	sector_t offset = ((mb_idx_inseg(wb, mb->idx) + 1) << 3);
 	void *buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO);
@@ -442,7 +459,7 @@ static void migrate_buffered_mb(struct wb_device *wb,
 			.mem.ptr.addr = buf,
 		};
 
-		dest = mb->sector + 1 * i;
+		dest = mb->sector + i;
 		region = (struct dm_io_region) {
 			.bdev = wb->origin_dev->bdev,
 			.sector = dest,
@@ -454,34 +471,20 @@ static void migrate_buffered_mb(struct wb_device *wb,
 	mempool_free(buf, wb->buf_1_pool);
 }
 
-static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
-{
-	bio->bi_bdev = dev->bdev;
-	bio->bi_sector = sector;
-}
-
-static sector_t calc_cache_alignment(struct wb_device *wb,
-				     sector_t bio_sector)
-{
-	return div_u64(bio_sector, 1 << 3) * (1 << 3);
-}
-
 void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 			       struct metablock *old_mb, bool overwrite_fullsize)
 {
 	u8 dirty_bits = atomic_read_mb_dirtiness(seg, old_mb);
 
 	/*
-	 * First clean up the previous cache
-	 * and migrate the cache if needed.
+	 * First clean up the previous cache and migrate the cache if needed.
 	 */
 	bool needs_cleanup_prev_cache =
 		!overwrite_fullsize || !(dirty_bits == 255);
 
 	/*
-	 * Migration works in background and may have
-	 * cleaned up the metablock. If the metablock
-	 * is clean we need not to migrate.
+	 * Migration works in background and may have cleaned up the metablock.
+	 * If the metablock is clean we need not to migrate.
 	 */
 	if (!dirty_bits)
 		needs_cleanup_prev_cache = false;
@@ -499,39 +502,20 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 	ht_del(wb, old_mb);
 }
 
-static u8 io_offset(struct bio *bio)
+/*
+ * Increase the dirtiness of a metablock.
+ */
+static void taint_mb(struct wb_device *wb, struct segment_header *seg,
+		     struct metablock *mb, struct bio *bio)
 {
-	u32 tmp32;
-	div_u64_rem(bio->bi_sector, 1 << 3, &tmp32);
-	return tmp32;
-}
-
-static sector_t io_count(struct bio *bio)
-{
-	return bio->bi_size >> SECTOR_SHIFT;
-}
-
-static bool io_fullsize(struct bio *bio)
-{
-	return io_count(bio) == (1 << 3);
-}
-
-static void dirtify_metadata(struct wb_device *wb, struct segment_header *seg,
-			     struct metablock *mb, struct bio *bio)
-{
-	/* div_u64_rem(update_mb_idx, wb->nr_caches_inseg, &tmp32); */
-	/*
-	 * The first 4KB of the segment is
-	 * used for metadata.
-	 */
 	unsigned long flags;
-	bool is_clean = false;
+	bool was_clean = false;
 
 	lockseg(seg, flags);
 	if (!mb->dirty_bits) {
 		seg->length++;
 		BUG_ON(seg->length > wb->nr_caches_inseg);
-		is_clean = true;
+		was_clean = true;
 	}
 	if (likely(io_fullsize(bio))) {
 		mb->dirty_bits = 255;
@@ -547,18 +531,22 @@ static void dirtify_metadata(struct wb_device *wb, struct segment_header *seg,
 	BUG_ON(!mb->dirty_bits);
 	unlockseg(seg, flags);
 
-	if (is_clean)
+	if (was_clean)
 		inc_nr_dirty_caches(wb);
 }
 
-static void write_on_buffer(struct wb_device *wb, struct segment_header *seg,
-			    struct metablock *mb, struct bio *bio)
+static void
+write_on_buffer(struct wb_device *wb, struct segment_header *seg,
+		struct metablock *mb, struct bio *bio)
 {
 	sector_t start_sector = ((mb_idx_inseg(wb, mb->idx) + 1) << 3) +
 				io_offset(bio);
 	size_t start_byte = start_sector << SECTOR_SHIFT;
 	void *data = bio_data(bio);
 
+	/*
+	 * Write data block to the volatile RAM buffer.
+	 */
 	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_size);
 }
 
@@ -569,20 +557,26 @@ static void advance_cursor(struct wb_device *wb)
 	wb->cursor = tmp32;
 }
 
-
+struct per_bio_data {
+	void *ptr;
+};
 
 static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
-	struct segment_header *uninitialized_var(found_seg);
-	struct metablock *mb, *new_mb;
-	bool found, on_buffer, refresh_segment;
-	int rw;
-	struct lookup_key key;
-	struct ht_head *head;
-	/* u32 tmp32; */
-
 	struct wb_device *wb = ti->private;
 	struct dm_dev *origin_dev = wb->origin_dev;
+	int rw = bio_data_dir(bio);
+	struct lookup_key key = {
+		.sector = calc_cache_alignment(bio->bi_sector),
+	};
+	struct ht_head *head = ht_get_head(wb, &key);
+
+	struct segment_header *uninitialized_var(found_seg);
+	struct metablock *mb, *new_mb;
+
+	bool found,
+	     on_buffer, /* is the metablock found on the RAM buffer? */
+	     need_queue_seg; /* need to queue the current seg? */
 
 	struct per_bio_data *map_context;
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
@@ -591,15 +585,12 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	DEAD(bio_endio(bio, -EIO); return DM_MAPIO_SUBMITTED);
 
 	/*
-	 * We only discard only the backing store because
+	 * We only discard sectors on only the backing store because
 	 * blocks on cache device are unlikely to be discarded.
+	 * Discarding blocks is likely to be operated long after writing;
+	 * the block is likely to be migrated before that.
 	 *
-	 * Discarding blocks is likely to be operated
-	 * long after writing;
-	 * the block is likely to be migrated before.
-	 * Moreover,
-	 * we discard the segment at the end of migration
-	 * and that's enough for discarding blocks.
+	 * Moreover, it is very hard to implement discarding cache blocks.
 	 */
 	if (bio->bi_rw & REQ_DISCARD) {
 		bio_remap(bio, origin_dev, bio->bi_sector);
@@ -607,40 +598,16 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	}
 
 	/*
-	 * defered ACK for barrier writes
+	 * Defered ACK for flush requests
 	 *
-	 * bio with REQ_FLUSH is guaranteed
-	 * to have no data.
-	 * So, simply queue it and return.
+	 * In device-mapper, bio with REQ_FLUSH is guaranteed to have no data.
+	 * So, we can simply defer it for lazy execution.
 	 */
 	if (bio->bi_rw & REQ_FLUSH) {
 		BUG_ON(bio->bi_size);
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
-
-	rw = bio_data_dir(bio);
-
-	key = (struct lookup_key) {
-		.sector = calc_cache_alignment(wb, bio->bi_sector),
-	};
-
-	head = ht_get_head(wb, &key);
-
-	/*
-	 * (Locking)
-	 * Why mutex?
-	 *
-	 * The reason we use mutex instead of rw_semaphore
-	 * that can allow truely concurrent read access
-	 * is that mutex is even lighter than rw_semaphore.
-	 * Since dm-writebuffer is a real performance centric
-	 * software the overhead of rw_semaphore is crucial.
-	 * All in all, since exclusive region in read path
-	 * is enough small and cheap, using rw_semaphore and
-	 * let the reads execute concurrently won't improve
-	 * the performance as much as one expects.
-	 */
 
 	mutex_lock(&wb->io_lock);
 	mb = ht_lookup(wb, head, &key);
@@ -656,6 +623,22 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 	inc_stat(wb, rw, found, on_buffer, io_fullsize(bio));
 
+	/*
+	 * (Locking)
+	 * A cache data is placed either on RAM buffer or SSD if it was flushed.
+	 * To ease the locking, we establish a simple rule for the dirtiness
+	 * of a cache data.
+	 *
+	 * If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
+	 * only increase. The justification for this design is that the cache on the
+	 * RAM buffer is seldom migrated.
+	 * If the data is, on the otherhand, on the SSD after flushed the dirtiness
+	 * only decrease.
+	 *
+	 * This simple rule frees us from the dirtiness fluctuating thus simplies
+	 * locking design.
+	 */
+
 	if (!rw) {
 		u8 dirty_bits;
 
@@ -666,43 +649,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			return DM_MAPIO_REMAPPED;
 		}
 
-		/*
-		 * There are two classes for cache placement.
-		 *
-		 * Live:
-		 * The cache is on the RAM buffer.
-		 *
-		 * Stable:
-		 * The cache is not on the RAM buffer but at least
-		 * queued in flush_queue.
-		 */
-
-		/*
-		 * (Locking)
-		 * Dirtiness of a live cache
-		 *
-		 * We can assume dirtiness of a cache only increase
-		 * when it is on the buffer, we call this cache is live.
-		 * This eases the locking because we don't worry the
-		 * dirtiness of a live cache fluctuates.
-		 */
-
 		dirty_bits = atomic_read_mb_dirtiness(found_seg, mb);
 		if (unlikely(on_buffer)) {
-			/*
-			 * Writing and Reading to the same sector
-			 * at the same time may return stale data.
-			 * We can deal with this issue by extending
-			 * mutex region within this if-clause and
-			 * waiting for nr_inflight_ios to become 1
-			 * to ensure potential writes are all consumed.
-			 * But, who on the earth use the storage in
-			 * such a crazy way? I don't think any to do that.
-			 * Don't forget that page cache exists.
-			 *
-			 * We don't deal with that therefore since
-			 * extending lock region lose read performance.
-			 */
 			if (dirty_bits)
 				migrate_buffered_mb(wb, mb, dirty_bits);
 
@@ -712,29 +660,16 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		}
 
 		/*
-		 * (Locking)
-		 * Dirtiness of a stable cache
-		 *
-		 * Unlike the live caches that don't fluctuate
-		 * the dirtiness, stable caches which are not
-		 * on the buffer but on the cache device may
-		 * decrease the dirtiness by other processes
-		 * than the migrate daemon. This works fine
-		 * because migrating the same cache twice
-		 * doesn't craze the cache concistency.
-		 */
-
-		/*
-		 * We must wait for the (maybe) queued segment
-		 * to be flushed to the cache device.
+		 * We must wait for the (maybe) queued segment to be flushed
+		 * to the cache device.
+		 * Without this, we read the wrong data from the cache device.
 		 */
 		wait_for_flushing(wb, found_seg);
 
 		if (likely(dirty_bits == 255)) {
-			bio_remap(bio,
-				  wb->cache_dev,
-				  calc_mb_start_sector(wb, found_seg, mb->idx)
-				  + io_offset(bio));
+			bio_remap(bio, wb->cache_dev,
+				  calc_mb_start_sector(wb, found_seg, mb->idx) +
+				  io_offset(bio));
 			map_context->ptr = found_seg;
 		} else {
 			migrate_mb(wb, found_seg, mb, dirty_bits, true);
@@ -759,23 +694,18 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	}
 
 write_not_found:
-	;
-
 	/*
 	 * If wb->cursor is 254, 509, ...
-	 * that is the last cache line in the segment.
-	 * We must flush the current segment and
-	 * get the new one.
+	 * which is the last cache line in the segment.
+	 * We must flush the current segment and get the new one.
 	 */
-	/* div_u64_rem(wb->cursor + 1, wb->nr_caches_inseg, &tmp32); */
-	refresh_segment = !mb_idx_inseg(wb, wb->cursor + 1);
+	need_queue_seg = !mb_idx_inseg(wb, wb->cursor + 1);
 
-	if (refresh_segment)
+	if (need_queue_seg)
 		queue_current_buffer(wb);
 
 	advance_cursor(wb);
 
-	/* div_u64_rem(update_mb_idx, wb->nr_caches_inseg, &tmp32); */
 	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, wb->cursor);
 	new_mb->dirty_bits = 0;
 	ht_register(wb, head, &key, new_mb);
@@ -786,21 +716,18 @@ write_not_found:
 	mb = new_mb;
 
 write_on_buffer:
-	dirtify_metadata(wb, wb->current_seg, mb, bio);
+	taint_mb(wb, wb->current_seg, mb, bio);
 
 	write_on_buffer(wb, wb->current_seg, mb, bio);
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
 	/*
-	 * deferred ACK for barrier writes
+	 * Deferred ACK for FUA request
 	 *
 	 * bio with REQ_FUA flag has data.
-	 * So, we run through the path for the
-	 * ordinary bio. And the data is
-	 * now stored in the RAM buffer.
-	 * After that, queue it and return
-	 * to defer completion.
+	 * So, we must run through the path for the ordinary bio.
+	 * And the data is now stored in the RAM buffer.
 	 */
 	if (bio->bi_rw & REQ_FUA) {
 		queue_barrier_io(wb, bio);
@@ -831,12 +758,12 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 
 static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
+	int r = 0;
+	struct dm_target *ti = wb->ti;
+
 	static struct dm_arg _args[] = {
 		{0, 0, "invalid buffer type"},
 	};
-
-	struct dm_target *ti = wb->ti;
-	int r = 0;
 	unsigned tmp;
 
 	r = dm_read_arg(_args, as, &tmp, &ti->error);
@@ -847,14 +774,14 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
 			  &wb->origin_dev);
 	if (r) {
-		ti->error = "couldn't get origin dev";
+		ti->error = "failed to get origin dev";
 		return r;
 	}
 
 	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
 			  &wb->cache_dev);
 	if (r) {
-		ti->error = "couldn't get cache dev";
+		ti->error = "failed to get cache dev";
 		goto bad;
 	}
 
@@ -877,15 +804,16 @@ bad:
 
 static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
+	int r = 0;
+	struct dm_target *ti = wb->ti;
+
 	static struct dm_arg _args[] = {
 		{0, 4, "invalid optional argc"},
 		{4, 10, "invalid segment_size_order"},
 		{512, UINT_MAX, "invalid rambuf_pool_amount"},
 	};
+	unsigned tmp, argc = 0;
 
-	struct dm_target *ti = wb->ti;
-	int r = 0;
-	unsigned argc = 0, tmp;
 	if (as->argc) {
 		r = dm_read_arg_group(_args, as, &argc, &ti->error);
 		if (r)
@@ -915,6 +843,9 @@ static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 static int do_consume_tunable_argv(struct wb_device *wb,
 				   struct dm_arg_set *as, unsigned argc)
 {
+	int r = 0;
+	struct dm_target *ti = wb->ti;
+
 	static struct dm_arg _args[] = {
 		{0, 1, "invalid allow_migrate"},
 		{0, 1, "invalid enable_migration_modulator"},
@@ -924,9 +855,6 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		{0, 3600, "invalid update_record_interval"},
 		{0, 3600, "invalid sync_interval"},
 	};
-
-	struct dm_target *ti = wb->ti;
-	int r = 0;
 	unsigned tmp;
 
 	while (argc) {
@@ -956,13 +884,14 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 
 static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
+	int r = 0;
+	struct dm_target *ti = wb->ti;
+
 	static struct dm_arg _args[] = {
 		{0, 14, "invalid tunable argc"},
 	};
-
-	struct dm_target *ti = wb->ti;
-	int r = 0;
 	unsigned argc = 0;
+
 	if (as->argc) {
 		r = dm_read_arg_group(_args, as, &argc, &ti->error);
 		if (r)
@@ -977,10 +906,9 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 	return do_consume_tunable_argv(wb, as, argc);
 }
 
-static int init_core(struct dm_target *ti)
+static int init_core_struct(struct dm_target *ti)
 {
 	int r = 0;
-
 	struct wb_device *wb;
 
 	r = dm_set_target_max_io_len(ti, 1 << 3);
@@ -989,20 +917,7 @@ static int init_core(struct dm_target *ti)
 		return r;
 	}
 
-	/*
-	 * Any write barrier requests should
-	 * not be ignored for any reason.
-	 *
-	 * That barriers are accepted for
-	 * any combination of underlying devices
-	 * makes it easier to find bug regarding
-	 * the barriers.
-	 *
-	 * dm-cache and dm-thin also turned
-	 * this flag on.
-	 */
 	ti->flush_supported = true;
-
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
 	ti->discard_zeroes_data_unsupported = true;
@@ -1013,7 +928,6 @@ static int init_core(struct dm_target *ti)
 		WBERR("failed to alloc wb");
 		return -ENOMEM;
 	}
-
 	ti->private = wb;
 	wb->ti = ti;
 
@@ -1026,7 +940,7 @@ static int init_core(struct dm_target *ti)
 }
 
 /*
- * Create a device
+ * Create a writeboost device
  *
  * <type>
  * <essential args>*
@@ -1045,7 +959,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	as.argc = argc;
 	as.argv = argv;
 
-	r = init_core(ti);
+	r = init_core_struct(ti);
 	if (r) {
 		ti->error = "failed to init core";
 		return r;
@@ -1113,13 +1027,12 @@ static void writeboost_dtr(struct dm_target *ti)
 }
 
 /*
- * .postsuspend is called before .dtr
- * same code not needed in .dtr
+ * .postsuspend is called before .dtr.
+ * We flush out all the transient data and make them persistent.
  */
 static void writeboost_postsuspend(struct dm_target *ti)
 {
-	int r;
-
+	int r = 0;
 	struct wb_device *wb = ti->private;
 
 	flush_current_buffer(wb);
@@ -1173,8 +1086,8 @@ static int writeboost_iterate_devices(struct dm_target *ti,
 	return fn(ti, orig, start, len, data);
 }
 
-static void writeboost_io_hints(struct dm_target *ti,
-				struct queue_limits *limits)
+static void
+writeboost_io_hints(struct dm_target *ti, struct queue_limits *limits)
 {
 	blk_limits_io_min(limits, 512);
 	blk_limits_io_opt(limits, 4096);
@@ -1275,16 +1188,15 @@ static int __init writeboost_module_init(void)
 
 	r = dm_register_target(&writeboost_target);
 	if (r < 0) {
-		WBERR("failed to register target err(%d)", r);
+		WBERR("failed to register target");
 		return r;
 	}
 
-	r = -ENOMEM;
-
-	safe_io_wq = alloc_workqueue("safeiowq",
+	safe_io_wq = alloc_workqueue("wbsafeiowq",
 				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	if (!safe_io_wq) {
 		WBERR("failed to alloc safe_io_wq");
+		r = -ENOMEM;
 		goto bad_wq;
 	}
 
@@ -1295,7 +1207,7 @@ static int __init writeboost_module_init(void)
 		goto bad_io_client;
 	}
 
-	return 0;
+	return r;
 
 bad_io_client:
 	destroy_workqueue(safe_io_wq);
@@ -1309,7 +1221,6 @@ static void __exit writeboost_module_exit(void)
 {
 	dm_io_client_destroy(wb_io_client);
 	destroy_workqueue(safe_io_wq);
-
 	dm_unregister_target(&writeboost_target);
 }
 

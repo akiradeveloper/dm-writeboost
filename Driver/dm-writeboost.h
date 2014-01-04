@@ -305,8 +305,8 @@ struct wb_device {
 
 	struct work_struct barrier_deadline_work;
 	struct timer_list barrier_deadline_timer;
-	struct bio_list barrier_ios;
-	unsigned long barrier_deadline_ms; /* param */
+	struct bio_list barrier_ios; /* List of barrier requests */
+	unsigned long barrier_deadline_ms; /* tunable */
 
 	/*---------------------------------------------*/
 
@@ -319,10 +319,9 @@ struct wb_device {
 	int urge_migrate; /* Start migration immediately */
 	atomic64_t last_migrated_segment_id;
 
-	/****************************************
+	/*
 	 * Data structures used by migrate daemon
-	 ****************************************/
-
+	 */
 	wait_queue_head_t migrate_wait_queue;
 	wait_queue_head_t wait_drop_caches;
 	atomic_t migrate_fail_count;

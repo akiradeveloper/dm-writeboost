@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2014 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
  */
@@ -19,6 +19,13 @@ bool is_on_buffer(struct wb_device *, u32 mb_idx);
 
 /*----------------------------------------------------------------*/
 
+struct lookup_key {
+	sector_t sector;
+};
+
+struct ht_head {
+	struct hlist_head ht_list;
+};
 struct ht_head *ht_get_head(struct wb_device *, struct lookup_key *);
 struct metablock *ht_lookup(struct wb_device *,
 			    struct ht_head *, struct lookup_key *);
@@ -29,20 +36,12 @@ void discard_caches_inseg(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------*/
 
-int __must_check audit_cache_device(struct wb_device *,
-				    bool *need_format, bool *allow_format);
-int __must_check format_cache_device(struct wb_device *);
-
-/*----------------------------------------------------------------*/
-
-void prepare_segment_header_device(void *rambuffer,
-				   struct wb_device *,
+void prepare_segment_header_device(void *rambuffer, struct wb_device *,
 				   struct segment_header *src);
 
 /*----------------------------------------------------------------*/
 
-int alloc_migration_buffer(struct wb_device *, size_t nr_batch);
-void free_migration_buffer(struct wb_device *);
+int try_alloc_migration_buffer(struct wb_device *, size_t nr_batch);
 
 /*----------------------------------------------------------------*/
 

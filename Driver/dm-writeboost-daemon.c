@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2013 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2014 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
  */
@@ -9,23 +9,6 @@
 #include "dm-writeboost-daemon.h"
 
 /*----------------------------------------------------------------*/
-
-/* Stopping Daemons */
-
-/*
- * Daemons should not be terminated in blockup situation.
- * They should be actually terminated in calling .dtr routine
- * since there generally should be no more than two path
- * for terminating sole thing.
- */
-
-/*
- * flush daemon and migrate daemon stopped in blockup
- * could cause lockup in calling .dtr since it demands
- * .postsuspend to flush transient data called beforehand
- * and these daemons related to I/O execution should
- * not be stopped therefor.
- */
 
 #define stop_on_dead() \
 	do { \
@@ -61,8 +44,8 @@ void barrier_deadline_proc(unsigned long data)
 
 void flush_barrier_ios(struct work_struct *work)
 {
-	struct wb_device *wb = container_of(work, struct wb_device,
-					    barrier_deadline_work);
+	struct wb_device *wb = container_of(
+		work, struct wb_device, barrier_deadline_work);
 
 	if (bio_list_empty(&wb->barrier_ios))
 		return;
@@ -73,16 +56,9 @@ void flush_barrier_ios(struct work_struct *work)
 
 /*----------------------------------------------------------------*/
 
-void wait_for_flushing(struct wb_device *wb, struct segment_header *seg)
-{
-	if (try_wait_for_completion(&seg->flush_done))
-		return;
-	wait_for_completion(&seg->flush_done);
-}
-
 void flush_proc(struct work_struct *work)
 {
-	int r;
+	int r = 0;
 
 	struct flush_job *job = container_of(work, struct flush_job, work);
 
@@ -104,31 +80,31 @@ void flush_proc(struct work_struct *work)
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 	/*
-	 * To serialize barrier ACK in logging
-	 * we wait for the previous segment to be
-	 * persistently (if needed).
+	 * Deferred ACK for barrier requests
+	 * To serialize barrier ACK in logging we wait for the previous
+	 * segment to be persistently written (if needed).
 	 */
 	wait_event_interruptible(wb->flush_wait_queue,
 		 seg->id - atomic64_read(&wb->last_flushed_segment_id) == 1);
 
-	/*
-	 * Deferred ACK
-	 */
-	if (!bio_list_empty(&job->barrier_ios)) {
-		struct bio *bio;
-
+	if (!bio_list_empty(&job->barrier_ios))
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
+	if (!bio_list_empty(&job->barrier_ios)) {
+		struct bio *bio;
 		while ((bio = bio_list_pop(&job->barrier_ios))) {
 			LIVE_DEAD(
 				bio_endio(bio, 0),
 				bio_endio(bio, -EIO)
 			);
 		}
-
 		update_barrier_deadline(wb);
 	}
 
+	/*
+	 * We can count up the last_flushed_segment_id
+	 * only after segment is written persistently.
+	 */
 	atomic64_set(&wb->last_flushed_segment_id, seg->id);
 	wake_up_interruptible(&wb->flush_wait_queue);
 
@@ -136,6 +112,13 @@ void flush_proc(struct work_struct *work)
 	complete_all(&job->rambuf->done);
 
 	mempool_free(job, wb->flush_job_pool);
+}
+
+void wait_for_flushing(struct wb_device *wb, struct segment_header *seg)
+{
+	if (try_wait_for_completion(&seg->flush_done))
+		return;
+	wait_for_completion(&seg->flush_done);
 }
 
 /*----------------------------------------------------------------*/
@@ -152,32 +135,28 @@ static void migrate_endio(unsigned long error, void *context)
 }
 
 /*
- * Submit the segment data at position k
- * in migrate buffer.
- * Batched migration first gather all the segments
- * to migrate into a migrate buffer.
- * So, there are a number of segment data
- * in the buffer.
+ * Asynchronously submit the segment data at position k in the migrate buffer.
+ * Batched migration first collects all the segments to migrate into a migrate buffer.
+ * So, there are a number of segment data in the migrate buffer.
  * This function submits the one in position k.
  */
-static void submit_migrate_io(struct wb_device *wb,
-			      struct segment_header *seg, size_t k)
+static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
+			      size_t k)
 {
-	int r;
+	int r = 0;
 	u8 i, j;
+
 	size_t a = wb->nr_caches_inseg * k;
 	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 
 	for (i = 0; i < seg->length; i++) {
-		struct metablock *mb = seg->mb_array + i;
-
-		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
-
 		unsigned long offset;
 		void *base, *addr;
-
 		struct dm_io_request io_req_w;
 		struct dm_io_region region_w;
+
+		struct metablock *mb = seg->mb_array + i;
+		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
 
 		if (!dirty_bits)
 			continue;
@@ -198,7 +177,7 @@ static void submit_migrate_io(struct wb_device *wb,
 			region_w = (struct dm_io_region) {
 				.bdev = wb->origin_dev->bdev,
 				.sector = mb->sector,
-				.count = (1 << 3),
+				.count = 1 << 3,
 			};
 			IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
 		} else {
@@ -227,16 +206,12 @@ static void submit_migrate_io(struct wb_device *wb,
 	}
 }
 
-static void memorize_dirty_state(struct wb_device *wb,
-				 struct segment_header *seg, size_t k,
-				 size_t *migrate_io_count)
+static void memorize_data_to_migrate(struct wb_device *wb,
+				     struct segment_header *seg, size_t k)
 {
-	int r;
-	u8 i, j;
-	size_t a = wb->nr_caches_inseg * k;
-	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
-	struct metablock *mb;
+	int r = 0;
 
+	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 	struct dm_io_request io_req_r = {
 		.client = wb_io_client,
 		.bi_rw = READ,
@@ -250,15 +225,23 @@ static void memorize_dirty_state(struct wb_device *wb,
 		.count = seg->length << 3,
 	};
 	IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
+}
 
-	/*
-	 * We take snapshot of the dirtiness in the segments.
-	 * The snapshot segments
-	 * are dirtier than themselves of any future moment
-	 * and we will migrate the possible dirtiest
-	 * state of the segments
-	 * which won't lose any dirty data that was acknowledged.
-	 */
+/*
+ * We first take snapshot of the dirtiness in the segments.
+ * The snapshot dirtiness is dirtier than that of any future moment
+ * because it is only monotonously decreasing after flushed.
+ * In conclusion, we will migrate the possible dirtiest state of the
+ * segments which won't lose any dirty data.
+ */
+static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_header *seg,
+					 size_t k, size_t *migrate_io_count)
+{
+	u8 i, j;
+
+	struct metablock *mb;
+	size_t a = wb->nr_caches_inseg * k;
+
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
 		*(wb->dirtiness_snapshot + (a + i)) =
@@ -282,6 +265,16 @@ static void memorize_dirty_state(struct wb_device *wb,
 	}
 }
 
+/*
+ * Memorize the dirtiness snapshot and count up the number of io to migrate.
+ */
+static void memorize_dirty_state(struct wb_device *wb, struct segment_header *seg,
+				 size_t k, size_t *migrate_io_count)
+{
+	memorize_data_to_migrate(wb, seg, k);
+	memorize_metadata_to_migrate(wb, seg, k, migrate_io_count);
+}
+
 static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
 {
 	u8 i;
@@ -297,12 +290,6 @@ static void migrate_linked_segments(struct wb_device *wb)
 	struct segment_header *seg;
 	size_t k, migrate_io_count = 0;
 
-	/*
-	 * Memorize the dirty state to migrate before going in.
-	 * - How many migration writes should be submitted atomically,
-	 * - Which cache lines are dirty to migarate
-	 * - etc.
-	 */
 	k = 0;
 	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
 		memorize_dirty_state(wb, seg, k, &migrate_io_count);
@@ -325,11 +312,10 @@ migrate_write:
 		atomic_set(&wb->migrate_io_count, 0));
 
 	if (atomic_read(&wb->migrate_fail_count)) {
-		WBWARN("%u writebacks failed. retry.",
+		WBWARN("%u writebacks failed. retry",
 		       atomic_read(&wb->migrate_fail_count));
 		goto migrate_write;
 	}
-
 	BUG_ON(atomic_read(&wb->migrate_io_count));
 
 	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
@@ -337,118 +323,83 @@ migrate_write:
 	}
 
 	/*
-	 * The segment may have a block
-	 * that returns ACK for persistent write
-	 * on the cache device.
-	 * Migrating them in non-persistent way
-	 * is betrayal to the client
-	 * who received the ACK and
-	 * expects the data is persistent.
-	 * Since it is difficult to know
-	 * whether a cache in a segment
-	 * is of that status
-	 * we are on the safe side
-	 * on this issue by always
-	 * migrating those data persistently.
+	 * We must write back a segments if it was written persistently.
+	 * Nevertheless, we betray the upper layer.
+	 * Remembering which segment is persistent is too expensive
+	 * and furthermore meaningless.
+	 * So we consider all segments are persistent and write them back
+	 * persistently.
 	 */
 	IO(blkdev_issue_flush(wb->origin_dev->bdev, GFP_NOIO, NULL));
+}
+
+static void do_migrate_proc(struct wb_device *wb)
+{
+	bool allow_migrate;
+	u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
+	struct segment_header *seg, *tmp;
+
+	allow_migrate = ACCESS_ONCE(wb->urge_migrate) ||
+			ACCESS_ONCE(wb->allow_migrate);
+
+	if (!allow_migrate) {
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		return;
+	}
+
+	nr_mig_candidates = atomic64_read(&wb->last_flushed_segment_id) -
+			    atomic64_read(&wb->last_migrated_segment_id);
+
+	if (!nr_mig_candidates) {
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		return;
+	}
+
+	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
+	if (wb->nr_cur_batched_migration != nr_max_batch)
+		try_alloc_migration_buffer(wb, nr_max_batch);
+
+	nr_mig = min(nr_mig_candidates, wb->nr_cur_batched_migration);
+
+	/*
+	 * Add segments to migrate atomically.
+	 */
+	for (i = 1; i <= nr_mig; i++) {
+		seg = get_segment_header_by_id(
+			wb, atomic64_read(&wb->last_migrated_segment_id) + i);
+		list_add_tail(&seg->migrate_list, &wb->migrate_list);
+	}
+
+	/*
+	 * We insert write barrier here to make sure that migrate list
+	 * is prepared completely.
+	 */
+	smp_wmb();
+	migrate_linked_segments(wb);
+	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
+
+	list_for_each_entry_safe(seg, tmp, &wb->migrate_list, migrate_list) {
+		complete_all(&seg->migrate_done);
+		list_del(&seg->migrate_list);
+	}
 }
 
 int migrate_proc(void *data)
 {
 	struct wb_device *wb = data;
-
-	while (!kthread_should_stop()) {
-		bool allow_migrate;
-		u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
-		struct segment_header *seg, *tmp;
-
-		/*
-		 * If urge_migrate is true
-		 * Migration should be immediate.
-		 */
-		allow_migrate = ACCESS_ONCE(wb->urge_migrate) ||
-				ACCESS_ONCE(wb->allow_migrate);
-
-		if (!allow_migrate) {
-			schedule_timeout_interruptible(msecs_to_jiffies(1000));
-			continue;
-		}
-
-		nr_mig_candidates = atomic64_read(&wb->last_flushed_segment_id) -
-				    atomic64_read(&wb->last_migrated_segment_id);
-
-		if (!nr_mig_candidates) {
-			schedule_timeout_interruptible(msecs_to_jiffies(1000));
-			continue;
-		}
-
-		nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
-		if (wb->nr_cur_batched_migration != nr_max_batch) {
-			/*
-			 * Request buffer for nr_max_batch size.
-			 * If the allocation fails
-			 * continue to use the current buffer.
-			 */
-			alloc_migration_buffer(wb, nr_max_batch);
-		}
-
-		/*
-		 * Batched Migration:
-		 * We will migrate at most nr_max_batched_migration
-		 * segments at a time.
-		 */
-		nr_mig = min(nr_mig_candidates,
-			     wb->nr_cur_batched_migration);
-
-		/*
-		 * Add segments to migrate atomically.
-		 */
-		for (i = 1; i <= nr_mig; i++) {
-			seg = get_segment_header_by_id(
-				wb, atomic64_read(&wb->last_migrated_segment_id) + i);
-			list_add_tail(&seg->migrate_list, &wb->migrate_list);
-		}
-
-		/*
-		 * We insert write barrier here to make sure that migrate list
-		 * is prepared completely.
-		 */
-		smp_wmb();
-
-		migrate_linked_segments(wb);
-
-		/*
-		 * (Locking)
-		 * Only line of code changes
-		 * last_migrate_segment_id during runtime.
-		 */
-		atomic64_add(nr_mig, &wb->last_migrated_segment_id);
-
-		list_for_each_entry_safe(seg, tmp,
-					 &wb->migrate_list,
-					 migrate_list) {
-			complete_all(&seg->migrate_done);
-			list_del(&seg->migrate_list);
-		}
-	}
+	while (!kthread_should_stop())
+		do_migrate_proc(wb);
 	return 0;
 }
 
-/*
- * Wait for a segment of given ID
- * finishes its migration.
- */
 void wait_for_migration(struct wb_device *wb, struct segment_header *seg)
 {
 	if (try_wait_for_completion(&seg->migrate_done))
-			return;
+		return;
 
 	/*
-	 * Set urge_migrate to true
-	 * to force the migartion daemon
-	 * to complete migarate of this segment
-	 * immediately.
+	 * Set urge_migrate to true to force the migartion daemon
+	 * to complete migarate of this segment immediately.
 	 */
 	wb->urge_migrate = true;
 	wake_up_process(wb->migrate_daemon);
@@ -493,7 +444,8 @@ modulator_update:
 
 static void update_superblock_record(struct wb_device *wb)
 {
-	int r;
+	int r = 0;
+
 	struct superblock_record_device o;
 	void *buf;
 	struct dm_io_request io_req;
@@ -518,6 +470,7 @@ static void update_superblock_record(struct wb_device *wb)
 		.count = 1,
 	};
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
+
 	mempool_free(buf, wb->buf_1_pool);
 }
 
@@ -539,7 +492,6 @@ int recorder_proc(void *data)
 		}
 
 		update_superblock_record(wb);
-
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
 	return 0;
@@ -549,7 +501,8 @@ int recorder_proc(void *data)
 
 int sync_proc(void *data)
 {
-	int r;
+	int r = 0;
+
 	struct wb_device *wb = data;
 	unsigned long intvl;
 
@@ -566,7 +519,6 @@ int sync_proc(void *data)
 
 		flush_current_buffer(wb);
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
 	return 0;

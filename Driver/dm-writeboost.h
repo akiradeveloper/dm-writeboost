@@ -379,7 +379,7 @@ struct wb_device {
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);
-u8 atomic_read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
+u8 read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
 void invalidate_previous_cache(struct wb_device *, struct segment_header *,
 			       struct metablock *old_mb, bool overwrite_fullsize);
 

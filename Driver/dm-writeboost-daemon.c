@@ -229,7 +229,7 @@ static void memorize_data_to_migrate(struct wb_device *wb,
  * We first take snapshot of the dirtiness in the segments.
  * The snapshot dirtiness is dirtier than that of any future moment
  * because it is only monotonously decreasing after flushed.
- * In conclusion, we will migrate the possible dirtiest state of the
+ * Therefore, we will migrate the possible dirtiest state of the
  * segments which won't lose any dirty data.
  */
 static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_header *seg,
@@ -240,10 +240,14 @@ static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_he
 	struct metablock *mb;
 	size_t a = wb->nr_caches_inseg * k;
 
+	/*
+	 * We first memorize the dirtiness of the metablocks.
+	 * Dirtiness may decrease while we run through the migration code
+	 * and it may cause corruption.
+	 */
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
-		*(wb->dirtiness_snapshot + (a + i)) =
-			atomic_read_mb_dirtiness(wb, seg, mb);
+		*(wb->dirtiness_snapshot + (a + i)) = read_mb_dirtiness(wb, seg, mb);
 	}
 
 	for (i = 0; i < seg->length; i++) {

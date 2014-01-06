@@ -362,17 +362,26 @@ void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
 		dec_nr_dirty_caches(wb);
 }
 
-u8 atomic_read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
-			    struct metablock *mb)
+/*
+ * Read the dirtiness of a metablock at the moment.
+ *
+ * In fact, I don't know if we should have the read statement surrounded
+ * by spinlock. Why I do this is that I worry about reading the
+ * intermediate value (neither the value of before-write nor after-write).
+ * Intel CPU guarantees it but other CPU may not.
+ * If any other CPU guarantees it we can remove the spinlock held.
+ */
+u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
+		     struct metablock *mb)
 {
 	unsigned long flags;
-	u8 r;
+	u8 val;
 
 	spin_lock_irqsave(&wb->lock, flags);
-	r = mb->dirty_bits;
+	val = mb->dirty_bits;
 	spin_unlock_irqrestore(&wb->lock, flags);
 
-	return r;
+	return val;
 }
 
 static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
@@ -510,7 +519,7 @@ static void migrate_buffered_mb(struct wb_device *wb,
 void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 			       struct metablock *old_mb, bool overwrite_fullsize)
 {
-	u8 dirty_bits = atomic_read_mb_dirtiness(wb, seg, old_mb);
+	u8 dirty_bits = read_mb_dirtiness(wb, seg, old_mb);
 
 	/*
 	 * First clean up the previous cache and migrate the cache if needed.
@@ -652,7 +661,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			return DM_MAPIO_REMAPPED;
 		}
 
-		dirty_bits = atomic_read_mb_dirtiness(wb, found_seg, mb);
+		dirty_bits = read_mb_dirtiness(wb, found_seg, mb);
 		if (unlikely(on_buffer)) {
 			if (dirty_bits)
 				migrate_buffered_mb(wb, mb, dirty_bits);

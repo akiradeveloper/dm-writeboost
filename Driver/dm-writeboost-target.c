@@ -144,7 +144,7 @@ static void acquire_new_seg(struct wb_device *wb)
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
 		rep++;
 		if (rep == 1000)
-			WBWARN("too long to consume all requests");
+			WBWARN("too long to process all requests");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 	BUG_ON(count_dirty_caches_remained(new_seg));
@@ -195,7 +195,7 @@ static void queue_flush_job(struct wb_device *wb)
 	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
 		rep++;
 		if (rep == 1000)
-			WBWARN("inflight ios remained for current seg");
+			WBWARN("too long to process all requests");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
@@ -937,7 +937,7 @@ static int init_core_struct(struct dm_target *ti)
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
-		WBERR("failed to alloc wb");
+		WBERR("failed to allocate wb");
 		return -ENOMEM;
 	}
 	ti->private = wb;
@@ -1208,14 +1208,14 @@ static int __init writeboost_module_init(void)
 	safe_io_wq = alloc_workqueue("wbsafeiowq",
 				     WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
 	if (!safe_io_wq) {
-		WBERR("failed to alloc safe_io_wq");
+		WBERR("failed to allocate safe_io_wq");
 		r = -ENOMEM;
 		goto bad_wq;
 	}
 
 	wb_io_client = dm_io_client_create();
 	if (IS_ERR(wb_io_client)) {
-		WBERR("failed to alloc wb_io_client");
+		WBERR("failed to allocate wb_io_client");
 		r = PTR_ERR(wb_io_client);
 		goto bad_io_client;
 	}

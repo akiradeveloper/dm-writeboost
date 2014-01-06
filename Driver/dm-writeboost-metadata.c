@@ -42,7 +42,7 @@ static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 
 	struct large_array *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
-		WBERR("failed to alloc arr");
+		WBERR("failed to allocate arr");
 		return NULL;
 	}
 
@@ -50,7 +50,7 @@ static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 	arr->nr_elems = nr_elems;
 	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
 	if (!arr->parts) {
-		WBERR("failed to alloc parts");
+		WBERR("failed to allocate parts");
 		goto bad_alloc_parts;
 	}
 
@@ -58,7 +58,7 @@ static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 		part = arr->parts + i;
 		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
 		if (!part->memory) {
-			WBERR("failed to alloc part memory");
+			WBERR("failed to allocate part memory");
 			for (j = 0; j < i; j++) {
 				part = arr->parts + j;
 				kfree(part->memory);
@@ -210,7 +210,7 @@ static int __must_check init_segment_header_array(struct wb_device *wb)
 			sizeof(struct metablock) * wb->nr_caches_inseg,
 			wb->nr_segments);
 	if (!wb->segment_header_array) {
-		WBERR(); /* FIXME remove */
+		WBERR("failed to allocate segment header array");
 		return -ENOMEM;
 	}
 
@@ -253,7 +253,7 @@ static int __must_check ht_empty_init(struct wb_device *wb)
 	nr_heads = wb->htsize + 1;
 	arr = large_array_alloc(sizeof(struct ht_head), nr_heads);
 	if (!arr) {
-		WBERR("failed to alloc arr");
+		WBERR("failed to allocate arr");
 		return -ENOMEM;
 	}
 
@@ -990,7 +990,7 @@ static int __must_check init_rambuf_pool(struct wb_device *wb)
 
 		rambuf->data = kmalloc(alloc_sz, GFP_KERNEL);
 		if (!rambuf->data) {
-			WBERR("failed to alloc rambuf data");
+			WBERR("failed to allocate rambuf data");
 			for (j = 0; j < i; j++) {
 				rambuf = wb->rambuf_pool + j;
 				kfree(rambuf->data);
@@ -1212,7 +1212,7 @@ static int init_flusher(struct wb_device *wb)
 	wb->flusher_wq = alloc_workqueue(
 		"%s", WQ_MEM_RECLAIM | WQ_SYSFS, 1, "wbflusher");
 	if (!wb->flusher_wq) {
-		WBERR("failed to alloc wbflusher");
+		WBERR("failed to allocate wbflusher");
 		return -ENOMEM;
 	}
 	init_waitqueue_head(&wb->flush_wait_queue);

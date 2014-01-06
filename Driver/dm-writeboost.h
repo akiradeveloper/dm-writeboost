@@ -36,7 +36,7 @@
  * Don't include this macro in the production code.
  */
 #define wbdebug(f, args...) \
-	DMINFO("debug@%s() L.%d" f, __func__, __LINE__, ## args)
+	DMINFO("debug@%s() L.%d " f, __func__, __LINE__, ## args)
 
 #define WBERR(f, args...) \
 	DMERR("err@%s() " f, __func__, ## args)
@@ -145,7 +145,7 @@ struct metablock {
 
 #define SZ_MAX (~(size_t)0)
 struct segment_header {
-	u64 id; /* Initialized to 0. */
+	u64 id; /* Must be initialized to 0 */
 
 	/*
 	 * The count of metablocks in a segment to count in log apply.
@@ -292,7 +292,7 @@ struct wb_device {
 	 ***********/
 
 	struct workqueue_struct *flusher_wq;
-	wait_queue_head_t flush_wait_queue;
+	wait_queue_head_t flush_wait_queue; /* wait for a segment to be flushed */
 	atomic64_t last_flushed_segment_id;
 
 	/*---------------------------------------------*/
@@ -320,9 +320,9 @@ struct wb_device {
 	/*
 	 * Data structures used by migrate daemon
 	 */
-	wait_queue_head_t migrate_wait_queue;
-	wait_queue_head_t wait_drop_caches;
-	wait_queue_head_t migrate_io_wait_queue;
+	wait_queue_head_t migrate_wait_queue; /* wait for a segment to be migrated */
+	wait_queue_head_t wait_drop_caches; /* waiting for drop_caches */
+	wait_queue_head_t migrate_io_wait_queue; /* wait for migrate ios */
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
 	struct list_head migrate_list; /* List of segments to migrate */

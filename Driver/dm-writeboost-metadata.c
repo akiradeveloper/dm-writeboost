@@ -1331,6 +1331,10 @@ bad_might_format_cache:
 
 void free_cache(struct wb_device *wb)
 {
+	/*
+	 * kthread_stop() wakes up the thread.
+	 * We don't need to wake them up in our code.
+	 */
 	kthread_stop(wb->sync_daemon);
 	kthread_stop(wb->recorder_daemon);
 	kthread_stop(wb->modulator_daemon);

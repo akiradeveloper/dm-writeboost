@@ -10,16 +10,6 @@
 
 /*----------------------------------------------------------------*/
 
-#define stop_on_dead() \
-	do { \
-		DEAD(WBERR("daemon stop")); \
-		wait_event_interruptible(wb->dead_wait_queue, \
-					 !test_bit(WB_DEAD, &wb->flags) || \
-					 kthread_should_stop()); \
-	} while (0)
-
-/*----------------------------------------------------------------*/
-
 static void update_barrier_deadline(struct wb_device *wb)
 {
 	mod_timer(&wb->barrier_deadline_timer,
@@ -408,8 +398,6 @@ int modulator_proc(void *data)
 	unsigned long intvl = 1000;
 
 	while (!kthread_should_stop()) {
-		stop_on_dead();
-
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
 		if (!ACCESS_ONCE(wb->enable_migration_modulator))
@@ -471,8 +459,6 @@ int recorder_proc(void *data)
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
-		stop_on_dead();
-
 		/* sec -> ms */
 		intvl = ACCESS_ONCE(wb->update_record_interval) * 1000;
 
@@ -497,8 +483,6 @@ int sync_proc(void *data)
 	unsigned long intvl;
 
 	while (!kthread_should_stop()) {
-		stop_on_dead();
-
 		/* sec -> ms */
 		intvl = ACCESS_ONCE(wb->sync_interval) * 1000;
 

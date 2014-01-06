@@ -944,9 +944,8 @@ static int init_core_struct(struct dm_target *ti)
 	wb->ti = ti;
 
 	spin_lock_init(&wb->lock);
-	init_waitqueue_head(&wb->dead_wait_queue);
-	clear_bit(WB_DEAD, &wb->flags);
 	atomic64_set(&wb->nr_dirty_caches, 0);
+	clear_bit(WB_DEAD, &wb->flags);
 	wb->should_emit_tunables = false;
 
 	return r;
@@ -1025,9 +1024,6 @@ bad_essential_argv:
 static void writeboost_dtr(struct dm_target *ti)
 {
 	struct wb_device *wb = ti->private;
-
-	set_bit(WB_DEAD, &wb->flags);
-	wake_up_all(&wb->dead_wait_queue);
 
 	free_cache(wb);
 

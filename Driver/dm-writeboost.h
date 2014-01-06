@@ -362,16 +362,8 @@ struct wb_device {
 
 	/*---------------------------------------------*/
 
-	/********************
-	 * For device blockup
-	 ********************/
-
-	wait_queue_head_t dead_wait_queue;
 	unsigned long flags;
-
-	/*---------------------------------------------*/
-
-	bool should_emit_tunables;
+	bool should_emit_tunables; /* should emit tunables in dmsetup table? */
 };
 
 /*----------------------------------------------------------------*/
@@ -447,8 +439,7 @@ sector_t dm_devsize(struct dm_dev *);
 			r = 0; \
 		} else if (r == -EIO) { \
 			set_bit(WB_DEAD, &wb->flags); \
-			wake_up_all(&wb->dead_wait_queue); \
-			WBERR("marked as dead"); \
+			WBERR("device is marked as dead"); \
 		} else if (r == -ENOMEM) { \
 			WBERR("I/O failed by ENOMEM"); \
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));\

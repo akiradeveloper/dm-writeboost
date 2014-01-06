@@ -291,7 +291,6 @@ static void transport_emigrates(struct wb_device *wb)
 	for (k = 0; k < wb->num_emigrates; k++) {
 		seg = *(wb->emigrates + k);
 		memorize_dirty_state(wb, seg, k, &migrate_io_count);
-		k++;
 	}
 
 migrate_write:
@@ -301,7 +300,6 @@ migrate_write:
 	for (k = 0; k < wb->num_emigrates; k++) {
 		seg = *(wb->emigrates + k);
 		submit_migrate_io(wb, seg, k);
-		k++;
 	}
 
 	LIVE_DEAD(

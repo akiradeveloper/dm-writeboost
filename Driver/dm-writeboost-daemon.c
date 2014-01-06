@@ -243,7 +243,7 @@ static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_he
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
 		*(wb->dirtiness_snapshot + (a + i)) =
-			atomic_read_mb_dirtiness(seg, mb);
+			atomic_read_mb_dirtiness(wb, seg, mb);
 	}
 
 	for (i = 0; i < seg->length; i++) {

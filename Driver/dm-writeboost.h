@@ -134,15 +134,6 @@ struct metablock {
 	u8 dirty_bits; /* 8bit for dirtiness in sector granularity */
 };
 
-/*
- * (Locking)
- * Locking metablocks by their granularity needs too much memory
- * space for lock structures. We only locks a metablock by locking
- * the parent segment that includes the metablock.
- */
-#define lockseg(seg, flags) spin_lock_irqsave(&(seg)->lock, flags)
-#define unlockseg(seg, flags) spin_unlock_irqrestore(&(seg)->lock, flags)
-
 #define SZ_MAX (~(size_t)0)
 struct segment_header {
 	u64 id; /* Must be initialized to 0 */
@@ -157,8 +148,6 @@ struct segment_header {
 	sector_t start_sector; /* Const */
 
 	struct list_head migrate_list;
-
-	spinlock_t lock;
 
 	atomic_t nr_inflight_ios;
 
@@ -232,6 +221,8 @@ struct wb_device {
 	 * but it means to sacrifice write path.
 	 */
 	struct mutex io_lock;
+
+	spinlock_t lock;
 
 	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
@@ -386,7 +377,7 @@ struct wb_device {
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);
-u8 atomic_read_mb_dirtiness(struct segment_header *, struct metablock *);
+u8 atomic_read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
 void invalidate_previous_cache(struct wb_device *, struct segment_header *,
 			       struct metablock *old_mb, bool overwrite_fullsize);
 

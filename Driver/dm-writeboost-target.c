@@ -310,31 +310,67 @@ static void dec_nr_dirty_caches(struct wb_device *wb)
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
+/*
+ * Increase the dirtiness of a metablock.
+ */
+static void taint_mb(struct wb_device *wb, struct segment_header *seg,
+		     struct metablock *mb, struct bio *bio)
+{
+	unsigned long flags;
+
+	bool was_clean = false;
+
+	spin_lock_irqsave(&wb->lock, flags);
+	if (!mb->dirty_bits) {
+		seg->length++;
+		BUG_ON(seg->length > wb->nr_caches_inseg);
+		was_clean = true;
+	}
+	if (likely(io_fullsize(bio))) {
+		mb->dirty_bits = 255;
+	} else {
+		u8 i;
+		u8 acc_bits = 0;
+		for (i = io_offset(bio); i < (io_offset(bio) + io_count(bio)); i++)
+			acc_bits += (1 << i);
+
+		mb->dirty_bits |= acc_bits;
+	}
+	BUG_ON(!io_count(bio));
+	BUG_ON(!mb->dirty_bits);
+	spin_unlock_irqrestore(&wb->lock, flags);
+
+	if (was_clean)
+		inc_nr_dirty_caches(wb);
+}
+
 void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
 			 struct metablock *mb)
 {
 	unsigned long flags;
 
 	bool was_dirty = false;
-	lockseg(seg, flags);
+
+	spin_lock_irqsave(&wb->lock, flags);
 	if (mb->dirty_bits) {
 		mb->dirty_bits = 0;
 		was_dirty = true;
 	}
-	unlockseg(seg, flags);
+	spin_unlock_irqrestore(&wb->lock, flags);
 
 	if (was_dirty)
 		dec_nr_dirty_caches(wb);
 }
 
-u8 atomic_read_mb_dirtiness(struct segment_header *seg, struct metablock *mb)
+u8 atomic_read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
+			    struct metablock *mb)
 {
 	unsigned long flags;
 	u8 r;
 
-	lockseg(seg, flags);
+	spin_lock_irqsave(&wb->lock, flags);
 	r = mb->dirty_bits;
-	unlockseg(seg, flags);
+	spin_unlock_irqrestore(&wb->lock, flags);
 
 	return r;
 }
@@ -474,7 +510,7 @@ static void migrate_buffered_mb(struct wb_device *wb,
 void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 			       struct metablock *old_mb, bool overwrite_fullsize)
 {
-	u8 dirty_bits = atomic_read_mb_dirtiness(seg, old_mb);
+	u8 dirty_bits = atomic_read_mb_dirtiness(wb, seg, old_mb);
 
 	/*
 	 * First clean up the previous cache and migrate the cache if needed.
@@ -500,39 +536,6 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 	cleanup_mb_if_dirty(wb, seg, old_mb);
 
 	ht_del(wb, old_mb);
-}
-
-/*
- * Increase the dirtiness of a metablock.
- */
-static void taint_mb(struct wb_device *wb, struct segment_header *seg,
-		     struct metablock *mb, struct bio *bio)
-{
-	unsigned long flags;
-	bool was_clean = false;
-
-	lockseg(seg, flags);
-	if (!mb->dirty_bits) {
-		seg->length++;
-		BUG_ON(seg->length > wb->nr_caches_inseg);
-		was_clean = true;
-	}
-	if (likely(io_fullsize(bio))) {
-		mb->dirty_bits = 255;
-	} else {
-		u8 i;
-		u8 acc_bits = 0;
-		for (i = io_offset(bio); i < (io_offset(bio) + io_count(bio)); i++)
-			acc_bits += (1 << i);
-
-		mb->dirty_bits |= acc_bits;
-	}
-	BUG_ON(!io_count(bio));
-	BUG_ON(!mb->dirty_bits);
-	unlockseg(seg, flags);
-
-	if (was_clean)
-		inc_nr_dirty_caches(wb);
 }
 
 static void
@@ -649,7 +652,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			return DM_MAPIO_REMAPPED;
 		}
 
-		dirty_bits = atomic_read_mb_dirtiness(found_seg, mb);
+		dirty_bits = atomic_read_mb_dirtiness(wb, found_seg, mb);
 		if (unlikely(on_buffer)) {
 			if (dirty_bits)
 				migrate_buffered_mb(wb, mb, dirty_bits);
@@ -931,6 +934,7 @@ static int init_core_struct(struct dm_target *ti)
 	ti->private = wb;
 	wb->ti = ti;
 
+	spin_lock_init(&wb->lock);
 	init_waitqueue_head(&wb->dead_wait_queue);
 	clear_bit(WB_DEAD, &wb->flags);
 	atomic64_set(&wb->nr_dirty_caches, 0);

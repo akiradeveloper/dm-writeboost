@@ -160,8 +160,6 @@ struct segment_header {
 
 	struct completion flush_done; /* This segment can be migrated */
 
-	struct completion migrate_done; /* This segment can be reused */
-
 	spinlock_t lock;
 
 	atomic_t nr_inflight_ios;
@@ -324,6 +322,7 @@ struct wb_device {
 	 */
 	wait_queue_head_t migrate_wait_queue;
 	wait_queue_head_t wait_drop_caches;
+	wait_queue_head_t migrate_io_wait_queue;
 	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
 	struct list_head migrate_list; /* List of segments to migrate */

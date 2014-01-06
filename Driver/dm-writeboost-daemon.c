@@ -131,7 +131,7 @@ static void migrate_endio(unsigned long error, void *context)
 		atomic_inc(&wb->migrate_fail_count);
 
 	if (atomic_dec_and_test(&wb->migrate_io_count))
-		wake_up_interruptible(&wb->migrate_wait_queue);
+		wake_up_interruptible(&wb->migrate_io_wait_queue);
 }
 
 /*
@@ -307,7 +307,7 @@ migrate_write:
 	}
 
 	LIVE_DEAD(
-		wait_event_interruptible(wb->migrate_wait_queue,
+		wait_event_interruptible(wb->migrate_io_wait_queue,
 					 !atomic_read(&wb->migrate_io_count)),
 		atomic_set(&wb->migrate_io_count, 0));
 
@@ -371,10 +371,11 @@ static void do_migrate_proc(struct wb_device *wb)
 	}
 
 	migrate_linked_segments(wb);
+
 	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
+	wake_up_interruptible(&wb->migrate_wait_queue);
 
 	list_for_each_entry_safe(seg, tmp, &wb->migrate_list, migrate_list) {
-		complete_all(&seg->migrate_done);
 		list_del(&seg->migrate_list);
 	}
 }
@@ -389,16 +390,14 @@ int migrate_proc(void *data)
 
 void wait_for_migration(struct wb_device *wb, struct segment_header *seg)
 {
-	if (try_wait_for_completion(&seg->migrate_done))
-		return;
-
 	/*
 	 * Set urge_migrate to true to force the migartion daemon
 	 * to complete migarate of this segment immediately.
 	 */
 	wb->urge_migrate = true;
 	wake_up_process(wb->migrate_daemon);
-	wait_for_completion(&seg->migrate_done);
+	wait_event_interruptible(wb->migrate_wait_queue,
+		atomic64_read(&wb->last_migrated_segment_id) >= seg->id);
 	wb->urge_migrate = false;
 }
 

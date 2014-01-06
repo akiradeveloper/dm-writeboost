@@ -231,9 +231,6 @@ static int __must_check init_segment_header_array(struct wb_device *wb)
 
 		init_completion(&seg->flush_done);
 		complete_all(&seg->flush_done);
-
-		init_completion(&seg->migrate_done);
-		complete_all(&seg->migrate_done);
 	}
 
 	mb_array_empty_init(wb);
@@ -1166,6 +1163,7 @@ static int init_migrate_daemon(struct wb_device *wb)
 
 	init_waitqueue_head(&wb->migrate_wait_queue);
 	init_waitqueue_head(&wb->wait_drop_caches);
+	init_waitqueue_head(&wb->migrate_io_wait_queue);
 	INIT_LIST_HEAD(&wb->migrate_list);
 
 	wb->allow_migrate = false;

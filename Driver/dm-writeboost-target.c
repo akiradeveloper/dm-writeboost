@@ -177,7 +177,6 @@ copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
 
 static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 {
-	reinit_completion(&wb->current_seg->migrate_done);
 	reinit_completion(&wb->current_seg->flush_done);
 
 	job->wb = wb;

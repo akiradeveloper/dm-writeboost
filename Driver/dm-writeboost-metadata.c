@@ -221,9 +221,6 @@ static int __must_check init_segment_header_array(struct wb_device *wb)
 		seg->length = 0;
 		atomic_set(&seg->nr_inflight_ios, 0);
 
-		/* FIXME remove those lines */
-		INIT_LIST_HEAD(&seg->migrate_list);
-
 		/*
 		 * Const values
 		 */
@@ -1027,34 +1024,62 @@ static void free_rambuf_pool(struct wb_device *wb)
  */
 int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 {
+	int r = 0;
+
+	struct segment_header **emigrates;
+	void *buf;
 	void *snapshot;
-	void *buf = vmalloc(nr_batch * (wb->nr_caches_inseg << 12));
+
+	emigrates = kmalloc(nr_batch * sizeof(struct segment_header *), GFP_KERNEL);
+	if (!emigrates) {
+		WBERR("failed to allocate emigrates");
+		r = -ENOMEM;
+		return r;
+	}
+
+	buf = vmalloc(nr_batch * (wb->nr_caches_inseg << 12));
 	if (!buf) {
 		WBERR("failed to allocate migration buffer");
-		return -ENOMEM;
+		r = -ENOMEM;
+		goto bad_alloc_buffer;
 	}
 
 	snapshot = kmalloc(nr_batch * wb->nr_caches_inseg, GFP_KERNEL);
 	if (!snapshot) {
-		vfree(buf);
 		WBERR("failed to allocate dirty snapshot");
-		return -ENOMEM;
+		r = -ENOMEM;
+		goto bad_alloc_snapshot;
 	}
 
+	/*
+	 * Free old buffers
+	 */
+	kfree(wb->emigrates);
 	if (wb->migrate_buffer)
 		vfree(wb->migrate_buffer);
-
 	kfree(wb->dirtiness_snapshot); /* kfree(NULL) is safe */
 
+	/*
+	 * Swap by new values
+	 */
+	wb->emigrates = emigrates;
 	wb->migrate_buffer = buf;
 	wb->dirtiness_snapshot = snapshot;
 	wb->nr_cur_batched_migration = nr_batch;
 
-	return 0;
+	return r;
+
+bad_alloc_buffer:
+	kfree(wb->emigrates);
+bad_alloc_snapshot:
+	vfree(wb->migrate_buffer);
+
+	return r;
 }
 
 static void free_migration_buffer(struct wb_device *wb)
 {
+	kfree(wb->emigrates);
 	vfree(wb->migrate_buffer);
 	kfree(wb->dirtiness_snapshot);
 }
@@ -1169,7 +1194,6 @@ static int init_migrate_daemon(struct wb_device *wb)
 	init_waitqueue_head(&wb->migrate_wait_queue);
 	init_waitqueue_head(&wb->wait_drop_caches);
 	init_waitqueue_head(&wb->migrate_io_wait_queue);
-	INIT_LIST_HEAD(&wb->migrate_list);
 
 	wb->allow_migrate = false;
 	wb->urge_migrate = false;

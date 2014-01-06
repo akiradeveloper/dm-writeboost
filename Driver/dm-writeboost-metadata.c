@@ -210,30 +210,26 @@ static int __must_check init_segment_header_array(struct wb_device *wb)
 			sizeof(struct metablock) * wb->nr_caches_inseg,
 			wb->nr_segments);
 	if (!wb->segment_header_array) {
-		WBERR();
+		WBERR(); /* FIXME remove */
 		return -ENOMEM;
 	}
 
 	for (segment_idx = 0; segment_idx < wb->nr_segments; segment_idx++) {
-		struct segment_header *seg =
-			large_array_at(wb->segment_header_array, segment_idx);
+		struct segment_header *seg = large_array_at(wb->segment_header_array, segment_idx);
 
-		seg->start_idx = wb->nr_caches_inseg * segment_idx;
-		seg->start_sector = calc_segment_header_start(wb, segment_idx);
-
+		seg->id = 0;
 		seg->length = 0;
-
 		atomic_set(&seg->nr_inflight_ios, 0);
 
+		/* FIXME remove those lines */
 		spin_lock_init(&seg->lock);
-
 		INIT_LIST_HEAD(&seg->migrate_list);
 
-		init_completion(&seg->flush_done);
-		complete_all(&seg->flush_done);
-
-		init_completion(&seg->migrate_done);
-		complete_all(&seg->migrate_done);
+		/*
+		 * Const values
+		 */
+		seg->start_idx = wb->nr_caches_inseg * segment_idx;
+		seg->start_sector = calc_segment_header_start(wb, segment_idx);
 	}
 
 	mb_array_empty_init(wb);
@@ -340,7 +336,7 @@ struct metablock *ht_lookup(struct wb_device *wb, struct ht_head *head,
 }
 
 /*
- * Discard all the metablock in a segment.
+ * Remove all the metablock in the segment from the lookup table.
  */
 void discard_caches_inseg(struct wb_device *wb, struct segment_header *seg)
 {
@@ -875,7 +871,8 @@ static int infer_last_migrated_id(struct wb_device *wb)
 }
 
 /*
- * Replay all the log on the cache device.
+ * Replay all the log on the cache device to reconstruct
+ * the in-memory metadata.
  *
  * Algorithm:
  * 1. find the maxium id
@@ -883,19 +880,17 @@ static int infer_last_migrated_id(struct wb_device *wb)
  * 2. skip if id=0 or checkum invalid
  * 2. apply otherwise.
  *
- * This algorithm is robust for floppy SSD
- * that may write a segment partially or
- * lose data on its buffer on power fault.
+ * This algorithm is robust for floppy SSD that may write
+ * a segment partially or lose data on its buffer on power fault.
  *
- * If number of threads flush segments in parallel
- * and some of them loses atomicity because of
- * power fault this elegant algorithm works.
+ * Even if number of threads flush segments in parallel and
+ * some of them loses atomicity because of power fault
+ * this robust algorithm works.
  */
 static int replay_log_on_cache(struct wb_device *wb)
 {
 	int r = 0;
-	struct segment_header *seg;
-	u64 max_id, init_segment_id;
+	u64 max_id;
 
 	r = find_max_id(wb, &max_id);
 	if (r) {
@@ -908,13 +903,14 @@ static int replay_log_on_cache(struct wb_device *wb)
 		return r;
 	}
 
-	init_segment_id = max_id + 1;
-
-	seg = get_segment_header_by_id(wb, init_segment_id);
-	seg->id = init_segment_id;
-	wb->current_seg = seg;
-
+	/*
+	 * Setup last_flushed_segment_id
+	 */
 	atomic64_set(&wb->last_flushed_segment_id, max_id);
+
+	/*
+	 * Setup last_migrated_segment_id
+	 */
 	infer_last_migrated_id(wb);
 
 	return r;
@@ -925,19 +921,26 @@ static void select_any_rambuf(struct wb_device *wb)
 	wb->current_rambuf = wb->rambuf_pool + 0;
 }
 
-static void init_first_segment(struct wb_device *wb)
+/*
+ * Acquire and initialize the first segment header for our caching.
+ */
+static void acquire_first_seg(struct wb_device *wb)
 {
-	struct segment_header *seg = wb->current_seg;
+	u64 init_segment_id = atomic64_read(&wb->last_flushed_segment_id) + 1;
+	struct segment_header *new_seg = get_segment_header_by_id(wb, init_segment_id);
 
-	wait_for_migration(wb, seg);
-	discard_caches_inseg(wb, seg);
+	wait_for_migration(wb, new_seg);
+	discard_caches_inseg(wb, new_seg);
+
+	new_seg->id = init_segment_id;
+	wb->current_seg = new_seg;
 
 	/*
 	 * We always keep the intergrity between cursor
 	 * and seg->length.
 	 */
-	wb->cursor = seg->start_idx;
-	seg->length = 1;
+	wb->cursor = new_seg->start_idx;
+	new_seg->length = 1;
 
 	select_any_rambuf(wb);
 }
@@ -962,7 +965,7 @@ static int __must_check recover_cache(struct wb_device *wb)
 		return r;
 	}
 
-	init_first_segment(wb);
+	acquire_first_seg(wb);
 	return 0;
 }
 
@@ -1166,6 +1169,7 @@ static int init_migrate_daemon(struct wb_device *wb)
 
 	init_waitqueue_head(&wb->migrate_wait_queue);
 	init_waitqueue_head(&wb->wait_drop_caches);
+	init_waitqueue_head(&wb->migrate_io_wait_queue);
 	INIT_LIST_HEAD(&wb->migrate_list);
 
 	wb->allow_migrate = false;

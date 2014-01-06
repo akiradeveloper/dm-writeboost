@@ -282,14 +282,14 @@ static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
 	}
 }
 
-static void migrate_linked_segments(struct wb_device *wb)
+static void transport_emigrates(struct wb_device *wb)
 {
 	int r;
 	struct segment_header *seg;
 	size_t k, migrate_io_count = 0;
 
-	k = 0;
-	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+	for (k = 0; k < wb->num_emigrates; k++) {
+		seg = *(wb->emigrates + k);
 		memorize_dirty_state(wb, seg, k, &migrate_io_count);
 		k++;
 	}
@@ -298,8 +298,8 @@ migrate_write:
 	atomic_set(&wb->migrate_io_count, migrate_io_count);
 	atomic_set(&wb->migrate_fail_count, 0);
 
-	k = 0;
-	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+	for (k = 0; k < wb->num_emigrates; k++) {
+		seg = *(wb->emigrates + k);
 		submit_migrate_io(wb, seg, k);
 		k++;
 	}
@@ -316,7 +316,8 @@ migrate_write:
 	}
 	BUG_ON(atomic_read(&wb->migrate_io_count));
 
-	list_for_each_entry(seg, &wb->migrate_list, migrate_list) {
+	for (k = 0; k < wb->num_emigrates; k++) {
+		seg = *(wb->emigrates + k);
 		cleanup_segment(wb, seg);
 	}
 
@@ -335,7 +336,7 @@ static void do_migrate_proc(struct wb_device *wb)
 {
 	bool allow_migrate;
 	u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
-	struct segment_header *seg, *tmp;
+	struct segment_header *seg;
 
 	allow_migrate = ACCESS_ONCE(wb->urge_migrate) ||
 			ACCESS_ONCE(wb->allow_migrate);
@@ -356,26 +357,21 @@ static void do_migrate_proc(struct wb_device *wb)
 	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
 	if (wb->nr_cur_batched_migration != nr_max_batch)
 		try_alloc_migration_buffer(wb, nr_max_batch);
-
 	nr_mig = min(nr_mig_candidates, wb->nr_cur_batched_migration);
 
 	/*
-	 * Add segments to migrate atomically.
+	 * Store emigrates
 	 */
-	for (i = 1; i <= nr_mig; i++) {
-		seg = get_segment_header_by_id(
-			wb, atomic64_read(&wb->last_migrated_segment_id) + i);
-		list_add_tail(&seg->migrate_list, &wb->migrate_list);
+	for (i = 0; i < nr_mig; i++) {
+		seg = get_segment_header_by_id(wb,
+			atomic64_read(&wb->last_migrated_segment_id) + 1 + i);
+		*(wb->emigrates + i) = seg;
 	}
-
-	migrate_linked_segments(wb);
+	wb->num_emigrates = nr_mig;
+	transport_emigrates(wb);
 
 	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
 	wake_up_interruptible(&wb->migrate_wait_queue);
-
-	list_for_each_entry_safe(seg, tmp, &wb->migrate_list, migrate_list) {
-		list_del(&seg->migrate_list);
-	}
 }
 
 int migrate_proc(void *data)

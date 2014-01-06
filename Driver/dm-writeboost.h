@@ -147,8 +147,6 @@ struct segment_header {
 	u32 start_idx; /* Const */
 	sector_t start_sector; /* Const */
 
-	struct list_head migrate_list;
-
 	atomic_t nr_inflight_ios;
 
 	struct metablock mb_array[0];
@@ -311,14 +309,18 @@ struct wb_device {
 	 */
 	wait_queue_head_t migrate_wait_queue; /* wait for a segment to be migrated */
 	wait_queue_head_t wait_drop_caches; /* waiting for drop_caches */
+
 	wait_queue_head_t migrate_io_wait_queue; /* wait for migrate ios */
-	atomic_t migrate_fail_count;
 	atomic_t migrate_io_count;
-	struct list_head migrate_list; /* List of segments to migrate */
-	u8 *dirtiness_snapshot;
-	void *migrate_buffer;
+	atomic_t migrate_fail_count;
+
 	u32 nr_cur_batched_migration;
 	u32 nr_max_batched_migration; /* tunable */
+
+	u32 num_emigrates; /* Number of emigrates */
+	struct segment_header **emigrates; /* Segments to be migrated */
+	void *migrate_buffer; /* Memorizes the data blocks of the emigrates */
+	u8 *dirtiness_snapshot; /* Memorizes the dirtiness of the metablocks to be migrated */
 
 	/*---------------------------------------------*/
 

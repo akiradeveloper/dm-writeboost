@@ -115,7 +115,7 @@ static void init_rambuffer(struct wb_device *wb)
 	memset(wb->current_rambuf->data, 0, 1 << 12);
 }
 
-static void acquire_rambuffer(struct wb_device *wb)
+static void acquire_new_rambuffer(struct wb_device *wb)
 {
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
@@ -167,7 +167,7 @@ static void acquire_new_seg(struct wb_device *wb)
 	wb->cursor = new_seg->start_idx + (wb->nr_caches_inseg - 1);
 	new_seg->length = 0;
 
-	acquire_rambuffer(wb);
+	acquire_new_rambuffer(wb);
 }
 
 static void

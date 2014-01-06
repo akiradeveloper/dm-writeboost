@@ -370,11 +370,6 @@ static void do_migrate_proc(struct wb_device *wb)
 		list_add_tail(&seg->migrate_list, &wb->migrate_list);
 	}
 
-	/*
-	 * We insert write barrier here to make sure that migrate list
-	 * is prepared completely.
-	 */
-	smp_wmb();
 	migrate_linked_segments(wb);
 	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
 

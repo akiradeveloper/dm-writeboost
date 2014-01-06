@@ -224,8 +224,6 @@ static int __must_check init_segment_header_array(struct wb_device *wb)
 		/* FIXME remove those lines */
 		spin_lock_init(&seg->lock);
 		INIT_LIST_HEAD(&seg->migrate_list);
-		init_completion(&seg->flush_done);
-		complete_all(&seg->flush_done);
 
 		/*
 		 * Const values

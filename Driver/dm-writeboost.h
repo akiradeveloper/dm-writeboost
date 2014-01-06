@@ -158,8 +158,6 @@ struct segment_header {
 
 	struct list_head migrate_list;
 
-	struct completion flush_done; /* This segment can be migrated */
-
 	spinlock_t lock;
 
 	atomic_t nr_inflight_ios;

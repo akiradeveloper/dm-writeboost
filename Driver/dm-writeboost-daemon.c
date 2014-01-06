@@ -108,7 +108,6 @@ void flush_proc(struct work_struct *work)
 	atomic64_set(&wb->last_flushed_segment_id, seg->id);
 	wake_up_interruptible(&wb->flush_wait_queue);
 
-	complete_all(&seg->flush_done);
 	complete_all(&job->rambuf->done);
 
 	mempool_free(job, wb->flush_job_pool);
@@ -116,9 +115,8 @@ void flush_proc(struct work_struct *work)
 
 void wait_for_flushing(struct wb_device *wb, struct segment_header *seg)
 {
-	if (try_wait_for_completion(&seg->flush_done))
-		return;
-	wait_for_completion(&seg->flush_done);
+	wait_event_interruptible(wb->flush_wait_queue,
+		atomic64_read(&wb->last_flushed_segment_id) >= seg->id);
 }
 
 /*----------------------------------------------------------------*/

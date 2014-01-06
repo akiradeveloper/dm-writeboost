@@ -422,19 +422,9 @@ sector_t dm_devsize(struct dm_dev *);
 		} \
 	} while (0)
 
-#define LIVE(proc) \
-	do { \
-		if (likely(!test_bit(WB_DEAD, &wb->flags))) { \
-			proc; \
-		} \
-	} while (0)
-
-#define DEAD(proc) \
-	do { \
-		if (unlikely(test_bit(WB_DEAD, &wb->flags))) { \
-			proc; \
-		} \
-	} while (0)
+#define noop_proc do {} while(0)
+#define LIVE(proc) LIVE_DEAD(proc, noop_proc);
+#define DEAD(proc) LIVE_DEAD(noop_proc, proc);
 
 /*
  * Macro to add context of failure to I/O routine call.
@@ -452,7 +442,7 @@ sector_t dm_devsize(struct dm_dev *);
 #define IO(proc) \
 	do { \
 		r = 0; \
-		LIVE(r = proc); \
+		LIVE(r = proc); /* do nothing after blockup */ \
 		if (r == -EOPNOTSUPP) { \
 			r = 0; \
 		} else if (r == -EIO) { \

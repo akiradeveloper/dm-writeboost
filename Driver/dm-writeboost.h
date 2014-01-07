@@ -116,6 +116,10 @@ struct segment_header_device {
 	__le64 id;
 	/* TODO add timestamp? */
 	__le32 checksum;
+	/*
+	 * The number of metablocks in this segment header
+	 * to be considered in log replay. The rest are ignored.
+	 */
 	__u8 length;
 	__u8 padding[512 - (8 + 4 + 1)]; /* 512B */
 	/* - TO -------------------------------------- */
@@ -125,11 +129,11 @@ struct segment_header_device {
 /*----------------------------------------------------------------*/
 
 struct metablock {
-	sector_t sector; /* key */
+	sector_t sector; /* The original aligned address */
 
-	u32 idx; /* Const */
+	u32 idx; /* Index in the metablock array. Const */
 
-	struct hlist_node ht_list;
+	struct hlist_node ht_list; /* Linked to the Hash table */
 
 	u8 dirty_bits; /* 8bit for dirtiness in sector granularity */
 };
@@ -160,8 +164,12 @@ enum RAMBUF_TYPE {
 	BUF_NV_RAM, /* Non-volatile with PRAM I/F */
 };
 
+/*
+ * RAM buffer is a buffer that any dirty data are first written to.
+ * type member in wb_device indicates the buffer type.
+ */
 struct rambuffer {
-	void *data;
+	void *data; /* The DRAM buffer. Used as the buffer to submit I/O */
 	struct completion done;
 };
 

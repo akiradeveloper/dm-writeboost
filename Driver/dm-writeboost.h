@@ -66,14 +66,13 @@
 
 /*----------------------------------------------------------------*/
 
-#define WB_MAGIC 0x57427374 /* Magic number "WBst" */
-
 /*
  * Superblock Header (Immutable)
  * -----------------------------
  * First one sector of the super block region where value
  * is unchanged after formatted.
  */
+#define WB_MAGIC 0x57427374 /* Magic number "WBst" */
 struct superblock_header_device {
 	__le32 magic;
 	__u8 segment_size_order;

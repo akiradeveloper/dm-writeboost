@@ -912,11 +912,6 @@ static int replay_log_on_cache(struct wb_device *wb)
 	return r;
 }
 
-static void select_any_rambuf(struct wb_device *wb)
-{
-	wb->current_rambuf = wb->rambuf_pool + 0;
-}
-
 /*
  * Acquire and initialize the first segment header for our caching.
  */
@@ -925,11 +920,13 @@ static void acquire_first_seg(struct wb_device *wb)
 	u64 init_segment_id = atomic64_read(&wb->last_flushed_segment_id) + 1;
 	struct segment_header *new_seg = get_segment_header_by_id(wb, init_segment_id);
 
-	wait_for_migration(wb, new_seg);
+	wait_for_migration(wb, SUB_ID(init_segment_id, wb->nr_segments));
+
 	discard_caches_inseg(wb, new_seg);
 
 	new_seg->id = init_segment_id;
 	wb->current_seg = new_seg;
+	BUG_ON(new_seg->id < 1);
 
 	/*
 	 * We always keep the intergrity between cursor
@@ -938,7 +935,7 @@ static void acquire_first_seg(struct wb_device *wb)
 	wb->cursor = new_seg->start_idx;
 	new_seg->length = 1;
 
-	select_any_rambuf(wb);
+	acquire_new_rambuffer(wb);
 }
 
 /*
@@ -985,8 +982,6 @@ static int __must_check init_rambuf_pool(struct wb_device *wb)
 	for (i = 0; i < wb->nr_rambuf_pool; i++) {
 		size_t j;
 		struct rambuffer *rambuf = wb->rambuf_pool + i;
-		init_completion(&rambuf->done);
-		complete_all(&rambuf->done);
 
 		rambuf->data = kmalloc(alloc_sz, GFP_KERNEL);
 		if (!rambuf->data) {

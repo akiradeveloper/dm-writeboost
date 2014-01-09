@@ -1,0 +1,27 @@
+#!/bin/sh
+
+. ../../config
+
+echo 7 > /proc/sys/kernel/printk
+
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
+
+sz=`blockdev --getsize ${CACHE}`
+dmsetup create cache-flakey --table "0 ${sz} flakey ${CACHE} 0 5 1"
+CACHE=/dev/mapper/cache-flakey
+
+sz=`blockdev --getsize ${BACKING}`
+dmsetup create backing-flakey --table "0 ${sz} flakey ${BACKING} 0 20 0"
+BACKING=/dev/mapper/backing-flakey
+
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 8 enable_migration_modulator 1 sync_interval 1 update_record_interval 600 barrier_deadline_ms 3"
+
+dd if=/dev/urandom of=/dev/mapper/writeboost-vol
+if [ $? -eq 0 ]; then
+    echo BUG: dd should fail
+fi
+
+dmsetup remove writeboost-vol
+if [ $? -ne 0 ]; then
+    echo BUG: remove failed
+fi

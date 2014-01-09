@@ -1,27 +1,53 @@
 #!/bin/sh
 
+# Description
+# -----------
+# 1. write many files with cache device
+# 2. detach cache without all dirty data migrated
+# 3. mount the filesystem without cache device
+
 . ../../config
 
-echo 7 > /proc/sys/kernel/printk
-
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
-
-sz=`blockdev --getsize ${CACHE}`
-dmsetup create cache-flakey --table "0 ${sz} flakey ${CACHE} 0 5 1"
-CACHE=/dev/mapper/cache-flakey
-
 sz=`blockdev --getsize ${BACKING}`
-dmsetup create backing-flakey --table "0 ${sz} flakey ${BACKING} 0 20 0"
-BACKING=/dev/mapper/backing-flakey
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 2 allow_migrate 1"
 
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 8 enable_migration_modulator 1 sync_interval 1 update_record_interval 600 barrier_deadline_ms 3"
+#mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
+mkfs.ext4 /dev/mapper/writeboost-vol > /dev/null
 
-dd if=/dev/urandom of=/dev/mapper/writeboost-vol
-if [ $? -eq 0 ]; then
-    echo BUG: dd should fail
-fi
+# migrate the initial metadata of the fs
+dmsetup message writeboost-vol 0 drop_caches
 
+mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
+
+rm -rf /mnt/writeboost-vol/*
+cd /mnt/writeboost-vol
+dd if=/dev/urandom of=orig4k oflag=direct bs=4096 count=16
+i=0
+while [ $i -ne 1000 ]
+do
+    i=`expr $i + 1`
+    fn=`openssl rand -base64 24 | sed -e s:\/:x:g`
+    cp orig4k $fn
+done
+cd -
+echo \# files \(w\\ cache\)
+ls /mnt/writeboost-vol | wc -l
+
+dmsetup status writeboost-vol
+
+#dmsetup message writeboost-vol 0 drop_caches
+
+fuser -muv /mnt/writeboost-vol
+umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
-if [ $? -ne 0 ]; then
-    echo BUG: remove failed
+
+echo mount backing device
+mount $BACKING /mnt/writeboost-vol
+if  [ $? -ne 0 ]; then
+    echo BUG: failed to mount backing device only
 fi
+echo \# files \(wo cache\)
+ls /mnt/writeboost-vol | wc -l
+fuser -muv /mnt/writeboost-vol
+umount -l /mnt/writeboost-vol

@@ -169,7 +169,6 @@ enum RAMBUF_TYPE {
  */
 struct rambuffer {
 	void *data; /* The DRAM buffer. Used as the buffer to submit I/O */
-	struct completion done;
 };
 
 /*
@@ -375,6 +374,7 @@ struct wb_device {
 
 /*----------------------------------------------------------------*/
 
+void acquire_new_rambuffer(struct wb_device *);
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);

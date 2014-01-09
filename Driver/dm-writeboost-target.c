@@ -115,16 +115,18 @@ static void init_rambuffer(struct wb_device *wb)
 	memset(wb->current_rambuf->data, 0, 1 << 12);
 }
 
-static void acquire_new_rambuffer(struct wb_device *wb)
+/*
+ * Acquire new RAM buffer for the new segment.
+ * That we already acquired the new segment means the corresponding
+ * RAM buffer is available. We don't need any completion here.
+ */
+void acquire_new_rambuffer(struct wb_device *wb)
 {
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
 
-	div_u64_rem(wb->current_seg->id, wb->nr_rambuf_pool, &tmp32);
+	div_u64_rem(wb->current_seg->id - 1, wb->nr_rambuf_pool, &tmp32);
 	next_rambuf = wb->rambuf_pool + tmp32;
-
-	wait_for_completion(&next_rambuf->done);
-	reinit_completion(&next_rambuf->done);
 
 	wb->current_rambuf = next_rambuf;
 
@@ -149,7 +151,6 @@ static void acquire_new_seg(struct wb_device *wb)
 	}
 	BUG_ON(count_dirty_caches_remained(new_seg));
 
-	wait_for_flushing(wb, new_seg);
 	wait_for_migration(wb, new_seg);
 
 	discard_caches_inseg(wb, new_seg);

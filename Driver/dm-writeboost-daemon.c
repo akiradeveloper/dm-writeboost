@@ -98,8 +98,6 @@ void flush_proc(struct work_struct *work)
 	atomic64_set(&wb->last_flushed_segment_id, seg->id);
 	wake_up_interruptible(&wb->flush_wait_queue);
 
-	complete_all(&job->rambuf->done);
-
 	mempool_free(job, wb->flush_job_pool);
 }
 

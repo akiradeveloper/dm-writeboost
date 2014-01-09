@@ -125,6 +125,8 @@ void acquire_new_rambuffer(struct wb_device *wb)
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
 
+	wait_for_flushing(wb, SUB_ID(wb->current_seg->id, wb->nr_rambuf_pool));
+
 	div_u64_rem(wb->current_seg->id - 1, wb->nr_rambuf_pool, &tmp32);
 	next_rambuf = wb->rambuf_pool + tmp32;
 
@@ -151,7 +153,7 @@ static void acquire_new_seg(struct wb_device *wb)
 	}
 	BUG_ON(count_dirty_caches_remained(new_seg));
 
-	wait_for_migration(wb, new_seg);
+	wait_for_migration(wb, SUB_ID(next_id, wb->nr_segments));
 
 	discard_caches_inseg(wb, new_seg);
 
@@ -230,7 +232,7 @@ void flush_current_buffer(struct wb_device *wb)
 	wb->current_seg->length = 1;
 	mutex_unlock(&wb->io_lock);
 
-	wait_for_flushing(wb, old_seg);
+	wait_for_flushing(wb, old_seg->id);
 }
 
 /*----------------------------------------------------------------*/
@@ -539,7 +541,7 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 		needs_cleanup_prev_cache = false;
 
 	if (unlikely(needs_cleanup_prev_cache)) {
-		wait_for_flushing(wb, seg);
+		wait_for_flushing(wb, seg->id);
 		migrate_mb(wb, seg, old_mb, dirty_bits, true);
 	}
 
@@ -677,7 +679,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		 * to the cache device.
 		 * Without this, we read the wrong data from the cache device.
 		 */
-		wait_for_flushing(wb, found_seg);
+		wait_for_flushing(wb, found_seg->id);
 
 		if (likely(dirty_bits == 255)) {
 			bio_remap(bio, wb->cache_dev,

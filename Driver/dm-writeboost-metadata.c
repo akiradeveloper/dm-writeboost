@@ -920,7 +920,7 @@ static void acquire_first_seg(struct wb_device *wb)
 	u64 init_segment_id = atomic64_read(&wb->last_flushed_segment_id) + 1;
 	struct segment_header *new_seg = get_segment_header_by_id(wb, init_segment_id);
 
-	wait_for_migration(wb, new_seg);
+	wait_for_migration(wb, SUB_ID(init_segment_id, wb->nr_segments));
 
 	discard_caches_inseg(wb, new_seg);
 

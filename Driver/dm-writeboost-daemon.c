@@ -67,6 +67,11 @@ void flush_proc(struct work_struct *work)
 		.sector = seg->start_sector,
 		.count = (seg->length + 1) << 3,
 	};
+
+	/*
+	 * The actual write requests to the cache device are not serialized.
+	 * They may perform in parallel.
+	 */
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 	/*
@@ -74,8 +79,7 @@ void flush_proc(struct work_struct *work)
 	 * To serialize barrier ACK in logging we wait for the previous
 	 * segment to be persistently written (if needed).
 	 */
-	wait_event_interruptible(wb->flush_wait_queue,
-		 seg->id - atomic64_read(&wb->last_flushed_segment_id) == 1);
+	wait_for_flushing(wb, SUB_ID(seg->id, 1));
 
 	if (!bio_list_empty(&job->barrier_ios))
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
@@ -92,19 +96,19 @@ void flush_proc(struct work_struct *work)
 	}
 
 	/*
-	 * We can count up the last_flushed_segment_id
-	 * only after segment is written persistently.
+	 * We can count up the last_flushed_segment_id only after segment
+	 * is written persistently. Counting up the id is serialized.
 	 */
-	atomic64_set(&wb->last_flushed_segment_id, seg->id);
+	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up_interruptible(&wb->flush_wait_queue);
 
 	mempool_free(job, wb->flush_job_pool);
 }
 
-void wait_for_flushing(struct wb_device *wb, struct segment_header *seg)
+void wait_for_flushing(struct wb_device *wb, u64 id)
 {
 	wait_event_interruptible(wb->flush_wait_queue,
-		atomic64_read(&wb->last_flushed_segment_id) >= seg->id);
+		atomic64_read(&wb->last_flushed_segment_id) >= id);
 }
 
 /*----------------------------------------------------------------*/
@@ -372,7 +376,7 @@ int migrate_proc(void *data)
 	return 0;
 }
 
-void wait_for_migration(struct wb_device *wb, struct segment_header *seg)
+void wait_for_migration(struct wb_device *wb, u64 id)
 {
 	/*
 	 * Set urge_migrate to true to force the migartion daemon
@@ -381,7 +385,7 @@ void wait_for_migration(struct wb_device *wb, struct segment_header *seg)
 	wb->urge_migrate = true;
 	wake_up_process(wb->migrate_daemon);
 	wait_event_interruptible(wb->migrate_wait_queue,
-		atomic64_read(&wb->last_migrated_segment_id) >= seg->id);
+		atomic64_read(&wb->last_migrated_segment_id) >= id);
 	wb->urge_migrate = false;
 }
 

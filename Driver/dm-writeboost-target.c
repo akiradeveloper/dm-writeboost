@@ -120,14 +120,14 @@ static void init_rambuffer(struct wb_device *wb)
  * That we already acquired the new segment means the corresponding
  * RAM buffer is available. We don't need any completion here.
  */
-void acquire_new_rambuffer(struct wb_device *wb)
+static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
 
-	wait_for_flushing(wb, SUB_ID(wb->current_seg->id, wb->nr_rambuf_pool));
+	wait_for_flushing(wb, SUB_ID(id, wb->nr_rambuf_pool));
 
-	div_u64_rem(wb->current_seg->id - 1, wb->nr_rambuf_pool, &tmp32);
+	div_u64_rem(id - 1, wb->nr_rambuf_pool, &tmp32);
 	next_rambuf = wb->rambuf_pool + tmp32;
 
 	wb->current_rambuf = next_rambuf;
@@ -135,14 +135,18 @@ void acquire_new_rambuffer(struct wb_device *wb)
 	init_rambuffer(wb);
 }
 
-static void acquire_new_seg(struct wb_device *wb)
+/*
+ * Acquire the new segment and RAM buffer for the following writes.
+ * Gurantees all dirty caches in the segments are migrated and all metablocks
+ * in it are invalidated (linked to null head).
+ */
+void acquire_new_seg(struct wb_device *wb, u64 id)
 {
-	u64 next_id = wb->current_seg->id + 1;
-	struct segment_header *new_seg = get_segment_header_by_id(wb, next_id);
+	struct segment_header *new_seg = get_segment_header_by_id(wb, id);
 
 	/*
 	 * We wait for all requests to the new segment is consumed.
-	 * Mutex taken gurantees that no new I/O the this semgnet is coming in.
+	 * Mutex taken gurantees that no new I/O the this segment is coming in.
 	 */
 	size_t rep = 0;
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
@@ -153,7 +157,7 @@ static void acquire_new_seg(struct wb_device *wb)
 	}
 	BUG_ON(count_dirty_caches_remained(new_seg));
 
-	wait_for_migration(wb, SUB_ID(next_id, wb->nr_segments));
+	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
 
 	discard_caches_inseg(wb, new_seg);
 
@@ -161,16 +165,22 @@ static void acquire_new_seg(struct wb_device *wb)
 	 * We must not set new id to the new segment before
 	 * all wait_* events are done since they uses those id for waiting.
 	 */
-	new_seg->id = next_id;
+	new_seg->id = id;
 	wb->current_seg = new_seg;
+
+	acquire_new_rambuffer(wb, id);
+}
+
+static void prepare_new_seg(struct wb_device *wb)
+{
+	u64 next_id = wb->current_seg->id + 1;
+	acquire_new_seg(wb, next_id);
 
 	/*
 	 * Set the cursor to the last of the flushed segment.
 	 */
-	wb->cursor = new_seg->start_idx + (wb->nr_caches_inseg - 1);
-	new_seg->length = 0;
-
-	acquire_new_rambuffer(wb);
+	wb->cursor = wb->current_seg->start_idx + (wb->nr_caches_inseg - 1);
+	wb->current_seg->length = 0;
 }
 
 static void
@@ -212,7 +222,7 @@ static void queue_flush_job(struct wb_device *wb)
 static void queue_current_buffer(struct wb_device *wb)
 {
 	queue_flush_job(wb);
-	acquire_new_seg(wb);
+	prepare_new_seg(wb);
 }
 
 /*

@@ -915,27 +915,17 @@ static int replay_log_on_cache(struct wb_device *wb)
 /*
  * Acquire and initialize the first segment header for our caching.
  */
-static void acquire_first_seg(struct wb_device *wb)
+static void prepare_first_seg(struct wb_device *wb)
 {
 	u64 init_segment_id = atomic64_read(&wb->last_flushed_segment_id) + 1;
-	struct segment_header *new_seg = get_segment_header_by_id(wb, init_segment_id);
-
-	wait_for_migration(wb, SUB_ID(init_segment_id, wb->nr_segments));
-
-	discard_caches_inseg(wb, new_seg);
-
-	new_seg->id = init_segment_id;
-	wb->current_seg = new_seg;
-	BUG_ON(new_seg->id < 1);
+	acquire_new_seg(wb, init_segment_id);
 
 	/*
 	 * We always keep the intergrity between cursor
 	 * and seg->length.
 	 */
-	wb->cursor = new_seg->start_idx;
-	new_seg->length = 1;
-
-	acquire_new_rambuffer(wb);
+	wb->cursor = wb->current_seg->start_idx;
+	wb->current_seg->length = 1;
 }
 
 /*
@@ -958,7 +948,7 @@ static int __must_check recover_cache(struct wb_device *wb)
 		return r;
 	}
 
-	acquire_first_seg(wb);
+	prepare_first_seg(wb);
 	return 0;
 }
 

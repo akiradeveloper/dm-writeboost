@@ -378,7 +378,7 @@ struct wb_device {
 
 /*----------------------------------------------------------------*/
 
-void acquire_new_rambuffer(struct wb_device *);
+void acquire_new_seg(struct wb_device *, u64 id);
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);

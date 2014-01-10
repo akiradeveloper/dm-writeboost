@@ -233,7 +233,7 @@ static void memorize_data_to_migrate(struct wb_device *wb,
 }
 
 /*
- * We first take snapshot of the dirtiness in the segments.
+ * We first memorize the snapshot of the dirtiness in the segments.
  * The snapshot dirtiness is dirtier than that of any future moment
  * because it is only monotonously decreasing after flushed.
  * Therefore, we will migrate the possible dirtiest state of the

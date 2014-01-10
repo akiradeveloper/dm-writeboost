@@ -46,6 +46,35 @@ void flush_barrier_ios(struct work_struct *work)
 
 /*----------------------------------------------------------------*/
 
+static void
+process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
+{
+	int r = 0;
+	bool has_barrier = !bio_list_empty(&job->barrier_ios);
+
+	/*
+	 * Make all the data until now persistent.
+	 */
+	if (has_barrier)
+		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+
+	/*
+	 * Ack the chained barrier requests.
+	 */
+	if (has_barrier) {
+		struct bio *bio;
+		while ((bio = bio_list_pop(&job->barrier_ios))) {
+			LIVE_DEAD(
+				bio_endio(bio, 0),
+				bio_endio(bio, -EIO)
+			);
+		}
+	}
+
+	if (has_barrier)
+		update_barrier_deadline(wb);
+}
+
 void flush_proc(struct work_struct *work)
 {
 	int r = 0;
@@ -81,19 +110,7 @@ void flush_proc(struct work_struct *work)
 	 */
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
 
-	if (!bio_list_empty(&job->barrier_ios))
-		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-
-	if (!bio_list_empty(&job->barrier_ios)) {
-		struct bio *bio;
-		while ((bio = bio_list_pop(&job->barrier_ios))) {
-			LIVE_DEAD(
-				bio_endio(bio, 0),
-				bio_endio(bio, -EIO)
-			);
-		}
-		update_barrier_deadline(wb);
-	}
+	process_deferred_barriers(wb, job);
 
 	/*
 	 * We can count up the last_flushed_segment_id only after segment

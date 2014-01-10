@@ -24,7 +24,7 @@
 
 /*----------------------------------------------------------------*/
 
-#define SUB_ID(x, y) (x) > (y) ? (x) - (y) : 0
+#define SUB_ID(x, y) ((x) > (y) ? (x) - (y) : 0)
 
 /*----------------------------------------------------------------*/
 
@@ -423,7 +423,7 @@ sector_t dm_devsize(struct dm_dev *);
 		} \
 	} while (0)
 
-#define noop_proc do {} while(0)
+#define noop_proc do {} while (0)
 #define LIVE(proc) LIVE_DEAD(proc, noop_proc);
 #define DEAD(proc) LIVE_DEAD(noop_proc, proc);
 

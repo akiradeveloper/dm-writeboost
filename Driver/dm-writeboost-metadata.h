@@ -28,7 +28,7 @@ struct ht_head *ht_get_head(struct wb_device *, struct lookup_key *);
 struct metablock *ht_lookup(struct wb_device *,
 			    struct ht_head *, struct lookup_key *);
 void ht_register(struct wb_device *, struct ht_head *,
-		 struct lookup_key *, struct metablock *);
+		 struct metablock *, struct lookup_key *);
 void ht_del(struct wb_device *, struct metablock *);
 void discard_caches_inseg(struct wb_device *, struct segment_header *);
 

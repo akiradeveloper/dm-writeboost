@@ -731,7 +731,7 @@ write_not_found:
 
 	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, wb->cursor);
 	BUG_ON(new_mb->dirty_bits);
-	ht_register(wb, head, &key, new_mb);
+	ht_register(wb, head, new_mb, &key);
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);

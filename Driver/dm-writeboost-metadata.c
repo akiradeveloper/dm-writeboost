@@ -37,8 +37,7 @@ static u64 nr_parts(struct large_array *arr)
 
 static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 {
-	u64 i, j;
-	struct part *part;
+	u64 i;
 
 	struct large_array *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
@@ -55,9 +54,11 @@ static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 	}
 
 	for (i = 0; i < nr_parts(arr); i++) {
-		part = arr->parts + i;
+		struct part *part = arr->parts + i;
 		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
 		if (!part->memory) {
+			u8 j;
+
 			WBERR("failed to allocate part memory");
 			for (j = 0; j < i; j++) {
 				part = arr->parts + j;
@@ -314,7 +315,7 @@ void ht_del(struct wb_device *wb, struct metablock *mb)
 }
 
 void ht_register(struct wb_device *wb, struct ht_head *head,
-		 struct lookup_key *key, struct metablock *mb)
+		 struct metablock *mb, struct lookup_key *key)
 {
 	hlist_del(&mb->ht_list);
 	hlist_add_head(&mb->ht_list, &head->ht_list);
@@ -382,7 +383,6 @@ static int read_superblock_header(struct superblock_header_device *sup,
 
 bad_io:
 	kfree(buf);
-
 	return r;
 }
 
@@ -590,6 +590,8 @@ static int __must_check format_cache_device(struct wb_device *wb)
 /*
  * First check if the superblock and the passed arguments
  * are consistent and reformat the cache structure if they are not.
+ * If you want to reformat the cache device you must zeroed out
+ * the first one sector of the device.
  */
 static int might_format_cache_device(struct wb_device *wb)
 {
@@ -657,12 +659,11 @@ read_superblock_record(struct superblock_record_device *record,
 
 bad_io:
 	kfree(buf);
-
 	return r;
 }
 
 /*
- * Read whole segment on the cache device to a preallocated buffer.
+ * Read whole segment on the cache device to a pre-allocated buffer.
  */
 static int __must_check
 read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
@@ -749,7 +750,7 @@ apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
 	}
 
 	inc_nr_dirty_caches(wb);
-	ht_register(wb, head, &key, mb);
+	ht_register(wb, head, mb, &key);
 }
 
 /*
@@ -771,8 +772,8 @@ apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
 /*
  * If the RAM buffer is non-volatile
  * we first write back all the valid buffers on them.
- * By doing this, replay algorithm is only discussed
- * in cache device.
+ * By doing this, the discussion on replay algorithm is closed
+ * in replaying logs on only cache device.
  */
 static int writeback_non_volatile_buffers(struct wb_device *wb)
 {
@@ -801,7 +802,6 @@ static int find_max_id(struct wb_device *wb, u64 *max_id)
 		if (le64_to_cpu(header->id) > *max_id)
 			*max_id = le64_to_cpu(header->id);
 	}
-
 	kfree(rambuf);
 	return r;
 }
@@ -858,12 +858,12 @@ static int infer_last_migrated_id(struct wb_device *wb)
 	r = read_superblock_record(&record, wb);
 	if (r)
 		return r;
-	record_id = le64_to_cpu(record.last_migrated_segment_id);
 
 	atomic64_set(&wb->last_migrated_segment_id,
 		atomic64_read(&wb->last_flushed_segment_id) > wb->nr_segments ?
 		atomic64_read(&wb->last_flushed_segment_id) - wb->nr_segments : 0);
 
+	record_id = le64_to_cpu(record.last_migrated_segment_id);
 	if (record_id > atomic64_read(&wb->last_migrated_segment_id))
 		atomic64_set(&wb->last_migrated_segment_id, record_id);
 
@@ -1043,10 +1043,10 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 	/*
 	 * Free old buffers
 	 */
-	kfree(wb->emigrates);
+	kfree(wb->emigrates); /* kfree(NULL) is safe */
 	if (wb->migrate_buffer)
 		vfree(wb->migrate_buffer);
-	kfree(wb->dirtiness_snapshot); /* kfree(NULL) is safe */
+	kfree(wb->dirtiness_snapshot);
 
 	/*
 	 * Swap by new values
@@ -1082,7 +1082,7 @@ static void free_migration_buffer(struct wb_device *wb)
 		if (IS_ERR(wb->name##_daemon)) { \
 			r = PTR_ERR(wb->name##_daemon); \
 			wb->name##_daemon = NULL; \
-			WBERR("couldn't spawn" #name "daemon"); \
+			WBERR("couldn't spawn " #name " daemon"); \
 			goto bad_##name##_daemon; \
 		} \
 		wake_up_process(wb->name##_daemon); \

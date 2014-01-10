@@ -146,8 +146,7 @@ struct segment_header {
 	u64 id; /* Must be initialized to 0 */
 
 	/*
-	 * The count of metablocks in a segment to count in log apply.
-	 * If the RAM buffer is volatile, segment can be less than full length.
+	 * The number of metablocks in a segment to flush and then migrate.
 	 */
 	u8 length;
 

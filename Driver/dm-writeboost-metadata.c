@@ -240,6 +240,10 @@ static void free_segment_header_array(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
+struct ht_head {
+	struct hlist_head ht_list;
+};
+
 /*
  * Initialize the Hash Table.
  */

@@ -151,29 +151,23 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 			      size_t k)
 {
 	int r = 0;
-	u8 i, j;
 
 	size_t a = wb->nr_caches_inseg * k;
 	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 
+	u8 i;
 	for (i = 0; i < seg->length; i++) {
-		unsigned long offset;
-		void *base, *addr;
-		struct dm_io_request io_req_w;
-		struct dm_io_region region_w;
+		unsigned long offset = i << 12;
+		void *base = p + offset;
 
 		struct metablock *mb = seg->mb_array + i;
 		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
-
 		if (!dirty_bits)
 			continue;
 
-		offset = i << 12;
-		base = p + offset;
-
 		if (dirty_bits == 255) {
-			addr = base;
-			io_req_w = (struct dm_io_request) {
+			void *addr = base;
+			struct dm_io_request io_req_w = {
 				.client = wb_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
@@ -181,19 +175,23 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 				.mem.type = DM_IO_VMA,
 				.mem.ptr.vma = addr,
 			};
-			region_w = (struct dm_io_region) {
+			struct dm_io_region region_w = {
 				.bdev = wb->origin_dev->bdev,
 				.sector = mb->sector,
 				.count = 1 << 3,
 			};
 			IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
 		} else {
+			u8 j;
 			for (j = 0; j < 8; j++) {
-				bool b = dirty_bits & (1 << j);
-				if (!b)
+				struct dm_io_request io_req_w;
+				struct dm_io_region region_w;
+
+				void *addr = base + (j << SECTOR_SHIFT);
+				bool bit_on = dirty_bits & (1 << j);
+				if (!bit_on)
 					continue;
 
-				addr = base + (j << SECTOR_SHIFT);
 				io_req_w = (struct dm_io_request) {
 					.client = wb_io_client,
 					.bi_rw = WRITE,

@@ -6,7 +6,7 @@ It batches random writes into a big sequential write to a cache device.
 It is like dm-cache as a cache target but the difference is that Writeboost
 focuses on bursty writes and the lifetime of the SSD cache device.
 
-More documents and Tests are available in
+More documents and tests are available in
 https://github.com/akiradeveloper/dm-writeboost
 
 Design
@@ -15,7 +15,7 @@ There are 1 foreground and 6 background processes.
 
 Foreground
 ----------
-It accepts bios and store the write data to RAM buffer.
+It accepts bios and stores the write data to RAM buffer.
 When the buffer is full, it creates a "flush job" and queues it.
 
 Background
@@ -23,7 +23,7 @@ Background
 * wbflusher (Writeboost flusher)
 Executes a flush job.
 wbflusher exploits workqueue mechanism and may run in parallel.
-It exhibits the Sysfs UI to control the behavior.
+It exhibits the sysfs to control the behavior.
 
 * Barrier deadline worker
 Barrier flags such as REQ_FUA and REQ_FLUSH are acked lazily.
@@ -46,18 +46,18 @@ also a extension of I/O scheduler.
 * Migration Modulator
 Migration while the backing store is heavily loaded grows the device queue
 longer and affects the read from the backing store.
-Migration modulator surveils the load of the backing store and on and off
+Migration modulator surveils the load of the backing store and turns on/off
 the migration by switching `allow_migrate`.
 
 * Superblock Recorder
 Superblock is a last sector of first 1MB region in cache device containing
-what id of the segment lastly migrated. This daemon periodically update
+what id of the segment lastly migrated. This daemon periodically updates
 the region every `update_record_interval` seconds.
 
 * Sync Daemon
 This daemon forcefully writes out all the dirty data persistently every
 `sync_interval` seconds. Some careful users want to make all the writes
-persisnt periodically.
+persistent periodically.
 
 Target Interface
 ================
@@ -110,7 +110,7 @@ Status
 <lastly migrated id>
 <#dirty cache blocks>
 <stat (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
-<stat not full flushed>
+<#not full flushed>
 <#tunable args> [tunable args]
 
 Messages
@@ -130,8 +130,8 @@ Set to 1 to start migration.
   migrate_threshold (%)
 Default: 1 and 70
 Set to 1 to run migration modulator.
-Migration modulator surveils the load of backing store and set the migration
-started if the load is lower than the `migrate_threshold`.
+Migration modulator surveils the load of backing store and sets the
+migration started if the load is lower than the `migrate_threshold`.
 
 * nr_max_batched_migration (int)
 Default: 1MB / segment size

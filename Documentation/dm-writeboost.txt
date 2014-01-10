@@ -23,7 +23,8 @@ Background
 * wbflusher (Writeboost flusher)
 Executes a flush job.
 wbflusher exploits workqueue mechanism and may run in parallel.
-It exhibits the sysfs to control the behavior.
+It exhibits the sysfs (/sys/bus/workqueue/devices/wbflusher)
+to control the behavior.
 
 * Barrier deadline worker
 Barrier flags such as REQ_FUA and REQ_FLUSH are acked lazily.

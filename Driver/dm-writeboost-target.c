@@ -732,7 +732,7 @@ write_not_found:
 	advance_cursor(wb);
 
 	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, wb->cursor);
-	new_mb->dirty_bits = 0;
+	BUG_ON(new_mb->dirty_bits);
 	ht_register(wb, head, &key, new_mb);
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);

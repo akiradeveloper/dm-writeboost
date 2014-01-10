@@ -327,6 +327,10 @@ migrate_write:
 	}
 	BUG_ON(atomic_read(&wb->migrate_io_count));
 
+	/*
+	 * We clean up the metablocks because there is no reason
+	 * to leave the them dirty.
+	 */
 	for (k = 0; k < wb->num_emigrates; k++) {
 		seg = *(wb->emigrates + k);
 		cleanup_segment(wb, seg);
@@ -393,6 +397,10 @@ int migrate_proc(void *data)
 	return 0;
 }
 
+/*
+ * Wait for a segment to be migrated.
+ * After migrated the metablocks in the segment are clean.
+ */
 void wait_for_migration(struct wb_device *wb, u64 id)
 {
 	/*

@@ -73,7 +73,7 @@
 /*
  * Superblock Header (Immutable)
  * -----------------------------
- * First one sector of the super block region where value
+ * First one sector of the super block region whose value
  * is unchanged after formatted.
  */
 #define WB_MAGIC 0x57427374 /* Magic number "WBst" */
@@ -176,7 +176,7 @@ struct rambuffer {
 
 /*
  * wbflusher's favorite food.
- * foreground queue this object and later wbflusher
+ * foreground queues this object and wbflusher later pops
  * one job to submit journal write to the cache device.
  */
 struct flush_job {
@@ -224,7 +224,7 @@ struct wb_device {
 	 * Mutex is very light-weight.
 	 * To mitigate the overhead of the locking we chose to
 	 * use mutex.
-	 * To optimize the read path, rw_semaphore is a option
+	 * To optimize the read path, rw_semaphore is an option
 	 * but it means to sacrifice write path.
 	 */
 	struct mutex io_lock;
@@ -262,7 +262,6 @@ struct wb_device {
 
 	/********************
 	 * Chained Hash table
-	 * for cache lookup
 	 ********************/
 
 	u32 nr_caches; /* Const */
@@ -317,7 +316,7 @@ struct wb_device {
 	 * Data structures used by migrate daemon
 	 */
 	wait_queue_head_t migrate_wait_queue; /* wait for a segment to be migrated */
-	wait_queue_head_t wait_drop_caches; /* waiting for drop_caches */
+	wait_queue_head_t wait_drop_caches; /* wait for drop_caches */
 
 	wait_queue_head_t migrate_io_wait_queue; /* wait for migrate ios */
 	atomic_t migrate_io_count;
@@ -435,8 +434,8 @@ sector_t dm_devsize(struct dm_dev *);
  * Policies
  * --------
  * 1. Only -EIO will block up the system.
- * 2. -EOPNOTSUPP could be retuned if the target device is a virtual
- *    device and we request discard.
+ * 2. -EOPNOTSUPP could be returned if the target device is a virtual
+ *    device and we request discard to the device.
  * 3. -ENOMEM could be returned from blkdev_issue_discard (3.12-rc5)
  *    for example. Waiting for a while can make room for new allocation.
  * 4. For other unknown error codes we ignore them and ask the users to report.

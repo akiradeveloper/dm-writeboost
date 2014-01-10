@@ -961,8 +961,8 @@ static int __must_check recover_cache(struct wb_device *wb)
 static int __must_check init_rambuf_pool(struct wb_device *wb)
 {
 	size_t i;
-	size_t alloc_sz = 1 << (wb->segment_size_order + SECTOR_SHIFT);
-	u32 nr = div_u64(wb->rambuf_pool_amount * 1000, alloc_sz);
+	sector_t alloc_sz = 1 << wb->segment_size_order;
+	u32 nr = div_u64(wb->rambuf_pool_amount * 2, alloc_sz);
 
 	if (!nr)
 		return -EINVAL;
@@ -977,7 +977,7 @@ static int __must_check init_rambuf_pool(struct wb_device *wb)
 		size_t j;
 		struct rambuffer *rambuf = wb->rambuf_pool + i;
 
-		rambuf->data = kmalloc(alloc_sz, GFP_KERNEL);
+		rambuf->data = kmalloc(alloc_sz << SECTOR_SHIFT, GFP_KERNEL);
 		if (!rambuf->data) {
 			WBERR("failed to allocate rambuf data");
 			for (j = 0; j < i; j++) {

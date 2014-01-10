@@ -117,8 +117,6 @@ static void init_rambuffer(struct wb_device *wb)
 
 /*
  * Acquire new RAM buffer for the new segment.
- * That we already acquired the new segment means the corresponding
- * RAM buffer is available. We don't need any completion here.
  */
 static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {

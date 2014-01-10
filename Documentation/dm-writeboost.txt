@@ -1,64 +1,63 @@
 dm-writeboost
 =============
-writeboost target provides log-structured caching.
+Writeboost target provides log-structured caching.
 It batches random writes into a big sequential write to a cache device.
 
-It is like dm-cache but the difference is
-that writeboost focuses on handling bursty writes and lifetime of SSD cache device.
+It is like dm-cache as a cache target but the difference is that Writeboost
+focuses on bursty writes and the lifetime of the SSD cache device.
 
-Auxiliary PDF documents and Quick-start scripts are available in
+More documents and Tests are available in
 https://github.com/akiradeveloper/dm-writeboost
 
 Design
 ======
-There are one foreground process
-and 6 background daemons.
+There are 1 foreground and 6 background processes.
 
 Foreground
 ----------
-It accepts bios and put writes to RAM buffer.
+It accepts bios and store the write data to RAM buffer.
 When the buffer is full, it creates a "flush job" and queues it.
 
 Background
 ----------
-* Flush Daemon
-Pop a flush job from a queue and executes it.
+* wbflusher (Writeboost flusher)
+Executes a flush job.
+wbflusher exploits workqueue mechanism and may run in parallel.
+It exhibits the Sysfs UI to control the behavior.
 
-* Deferring ACK for barrier writes
-Barrier flags such as REQ_FUA and REQ_FLUSH are handled lazily.
-Immediately handling these bios badly slows down writeboost.
-It surveils the bios with these flags and forcefully flash them
-at worst case within `barrier_deadline_ms` period.
+* Barrier deadline worker
+Barrier flags such as REQ_FUA and REQ_FLUSH are acked lazily.
+Immediately handling these bios badly deteriorate the throughput.
+Bios with these flags are queued and forcefully processed at worst
+within `barrier_deadline_ms` period.
 
-* Migration Daemon
-It migrates, writes back cache data to backing store,
-the data on the cache device in segment granurality.
+* Migrate Daemon
+It migrates, or writes back, cache data to backing store.
 
 If `allow_migrate` is true, it migrates without impending situation.
 Being in impending situation is that there are no room in cache device
-for writing further flush jobs.
+for writing more flush jobs.
 
-Migration at a time is done batching `nr_max_batched_migration` segments at maximum.
-Therefore, unlike existing I/O scheduler,
-two dirty writes close in positional space but distant in time space can be merged.
-writetboost is also a extension of I/O scheduler.
+Migration is done batching `nr_max_batched_migration` segments at maximum
+at a time. Thus, unlike existing I/O scheduler, two dirty writes close in
+positional space but distant in time space can be merged. Writetboost is
+also a extension of I/O scheduler.
 
 * Migration Modulator
-Migration while the backing store is heavily loaded
-grows the device queue longer and thus makes the situation ever worse.
-This daemon modulates the migration by switching `allow_migrate`.
+Migration while the backing store is heavily loaded grows the device queue
+longer and affects the read from the backing store.
+Migration modulator surveils the load of the backing store and on and off
+the migration by switching `allow_migrate`.
 
 * Superblock Recorder
-Superblock is a last sector of first 1MB region in cache device.
-It contains what id of the segment lastly migrated.
-This daemon periodically update the region every `update_record_interval` seconds.
+Superblock is a last sector of first 1MB region in cache device containing
+what id of the segment lastly migrated. This daemon periodically update
+the region every `update_record_interval` seconds.
 
-* Dirty Synchronizer
-This daemon forcefully makes all the dirty writes persistent
-every `sync_interval` seconds.
-Since writeboost correctly implements the bio semantics
-writing the dirties out forcefully out of the main path is needless.
-However, some user want to be on the safe side by enabling this.
+* Sync Daemon
+This daemon forcefully writes out all the dirty data persistently every
+`sync_interval` seconds. Some careful users want to make all the writes
+persisnt periodically.
 
 Target Interface
 ================
@@ -71,17 +70,18 @@ Constructor
 <#optional args> <optional args>*
 <#tunable args> <tunable args>* (see 'Message')
 
-Optionals are tunables are unordered lists of k-v pair.
+Optionals are tunables are unordered lists of Key-Value pairs.
 
-Essential args and optional args are different
-for different buffer type.
+Essential args and optional args are different for different buffer type.
 
-<type> (the type of the buffer)
-0: volatile ram buffer (DRAM)
-1: non-volatile buffer backed by a block device
-2: non-volatile ram buffer (persistent memory)
+<type> (The type of the RAM buffer)
+0: volatile RAM buffer (DRAM)
+1: non-volatile buffer with a block I/F
+2: non-volatile buffer with PRAM I/F
 
-type 0
+Currently, only type 0 is supported.
+
+Type 0
 ------
 <essential args>
 backing_dev        : Slow device holding original data blocks.
@@ -93,12 +93,12 @@ segment_size_order : The size of RAM buffer
                      default 7
 rambuf_pool_amount : The amount of the RAM buffer pool (kB).
                      Too fewer amount may cause waiting for new buffer
-                     to become available again.
-                     But too much doesn't affect the performance.
+                     to become available again. But too much doesn't
+		     benefit the performance.
                      default 2048
 
-Note that cache device is re-formatted
-if the first sector of the cache device is zeroed out.
+Note that cache device is re-formatted if the first sector of the cache
+device is zeroed out.
 
 Status
 ------
@@ -109,8 +109,8 @@ Status
 <lastly flushed id>
 <lastly migrated id>
 <#dirty cache blocks>
-<stat info (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
-<stat count not full flushed>
+<stat (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
+<stat not full flushed>
 <#tunable args> [tunable args]
 
 Messages
@@ -130,24 +130,24 @@ Set to 1 to start migration.
   migrate_threshold (%)
 Default: 1 and 70
 Set to 1 to run migration modulator.
-Migration modulator surveils the load of backing store
-and set the migration started when the load is
-lower than the migrate_threshold.
+Migration modulator surveils the load of backing store and set the migration
+started if the load is lower than the `migrate_threshold`.
 
 * nr_max_batched_migration (int)
 Default: 1MB / segment size
-Number of segments to migrate simultaneously and atomically.
+Number of segments to migrate at a time.
 Set higher value to fully exploit the capacily of the backing store.
-Single HDD is capable of processing 1MB/sec random writes so
-the default value is set to 1MB / segment size.
-
-* sync_interval (sec)
-Default: 60
-All the dirty writes are guaranteed to be persistent by this interval.
+Even a single HDD is capable of processing 1MB/sec random writes so
+the default value is set to 1MB / segment size. Set higher value if
+you use RAID-ed drive as the backing store.
 
 * update_record_interval (sec)
 Default: 60
 The superblock record is updated every update_record_interval seconds.
+
+* sync_interval (sec)
+Default: 60
+All the dirty writes are guaranteed to be persistent every this interval.
 
 Example
 =======

@@ -144,7 +144,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 	/*
 	 * We wait for all requests to the new segment is consumed.
-	 * Mutex taken gurantees that no new I/O the this segment is coming in.
+	 * Mutex taken gurantees that no new I/O to this segment is coming in.
 	 */
 	size_t rep = 0;
 	while (atomic_read(&new_seg->nr_inflight_ios)) {
@@ -441,10 +441,10 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 		void *buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO);
 		u8 i;
 		for (i = 0; i < 8; i++) {
-			bool bit_on = dirty_bits & (1 << i);
 			struct dm_io_request io_req_r, io_req_w;
 			struct dm_io_region region_r, region_w;
 
+			bool bit_on = dirty_bits & (1 << i);
 			if (!bit_on)
 				continue;
 
@@ -599,7 +599,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 	bool found,
 	     on_buffer, /* is the metablock found on the RAM buffer? */
-	     need_queue_seg; /* need to queue the current seg? */
+	     needs_queue_seg; /* need to queue the current seg? */
 
 	struct per_bio_data *map_context;
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
@@ -653,10 +653,10 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	 * of a cache data.
 	 *
 	 * If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
-	 * only increase. The justification for this design is that the cache on the
+	 * only increases. The justification for this design is that the cache on the
 	 * RAM buffer is seldom migrated.
-	 * If the data is, on the otherhand, on the SSD after flushed the dirtiness
-	 * only decrease.
+	 * If the data is, on the other hand, on the SSD after flushed the dirtiness
+	 * only decreases.
 	 *
 	 * This simple rule frees us from the dirtiness fluctuating thus simplies
 	 * locking design.
@@ -722,9 +722,9 @@ write_not_found:
 	 * which is the last cache line in the segment.
 	 * We must flush the current segment and get the new one.
 	 */
-	need_queue_seg = !mb_idx_inseg(wb, wb->cursor + 1);
+	needs_queue_seg = !mb_idx_inseg(wb, wb->cursor + 1);
 
-	if (need_queue_seg)
+	if (needs_queue_seg)
 		queue_current_buffer(wb);
 
 	advance_cursor(wb);
@@ -749,7 +749,7 @@ write_on_buffer:
 	 * Deferred ACK for FUA request
 	 *
 	 * bio with REQ_FUA flag has data.
-	 * So, we must run through the path for the ordinary bio.
+	 * So, we must run through the path for usual bio.
 	 * And the data is now stored in the RAM buffer.
 	 */
 	if (bio->bi_rw & REQ_FUA) {
@@ -757,9 +757,8 @@ write_on_buffer:
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	LIVE_DEAD(
-		bio_endio(bio, 0),
-		bio_endio(bio, -EIO));
+	LIVE_DEAD(bio_endio(bio, 0),
+		  bio_endio(bio, -EIO));
 
 	return DM_MAPIO_SUBMITTED;
 }
@@ -963,7 +962,7 @@ static int init_core_struct(struct dm_target *ti)
 }
 
 /*
- * Create a writeboost device
+ * Create a Writeboost device
  *
  * <type>
  * <essential args>*
@@ -1096,6 +1095,10 @@ static int writeboost_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
 	return min(max_size, q->merge_bvec_fn(q, bvm, biovec));
 }
 
+/*
+ * Since Writeboost is just a cache target and the cache block size is fixed
+ * to 4KB. There is no reason to count the cache device in device iteration.
+ */
 static int writeboost_iterate_devices(struct dm_target *ti,
 				      iterate_devices_callout_fn fn, void *data)
 {

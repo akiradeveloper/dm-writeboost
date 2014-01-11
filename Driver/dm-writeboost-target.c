@@ -395,6 +395,11 @@ u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
 	return val;
 }
 
+/*
+ * Migrate the caches in a metablock on the SSD (after flushed).
+ * The caches on the SSD are considered to be persistent so we need to
+ * write them back with WRITE_FUA flag.
+ */
 static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 		       struct metablock *mb, u8 dirty_bits, bool thread)
 {
@@ -464,7 +469,7 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 
 			io_req_w = (struct dm_io_request) {
 				.client = wb_io_client,
-				.bi_rw = WRITE,
+				.bi_rw = WRITE_FUA,
 				.notify.fn = NULL,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = buf,

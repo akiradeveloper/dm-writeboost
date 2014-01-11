@@ -1094,8 +1094,9 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
  * Since Writeboost is just a cache target and the cache block size is fixed
  * to 4KB. There is no reason to count the cache device in device iteration.
  */
-static int writeboost_iterate_devices(struct dm_target *ti,
-				      iterate_devices_callout_fn fn, void *data)
+static int
+writeboost_iterate_devices(struct dm_target *ti,
+			   iterate_devices_callout_fn fn, void *data)
 {
 	struct wb_device *wb = ti->private;
 	struct dm_dev *orig = wb->origin_dev;
@@ -1107,7 +1108,6 @@ static int writeboost_iterate_devices(struct dm_target *ti,
 static void
 writeboost_io_hints(struct dm_target *ti, struct queue_limits *limits)
 {
-	blk_limits_io_min(limits, 512);
 	blk_limits_io_opt(limits, 4096);
 }
 
@@ -1189,6 +1189,11 @@ static struct target_type writeboost_target = {
 	.end_io = writeboost_end_io,
 	.ctr = writeboost_ctr,
 	.dtr = writeboost_dtr,
+	/*
+	 * .merge is not implemented
+	 * We split the passed I/O into 4KB cache block no matter
+	 * how big the I/O is.
+	 */
 	.postsuspend = writeboost_postsuspend,
 	.message = writeboost_message,
 	.status = writeboost_status,

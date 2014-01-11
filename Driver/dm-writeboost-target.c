@@ -907,7 +907,7 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		if (!r) {
 			argc--;
 		} else {
-			ti->error = "invalid optional key";
+			ti->error = "invalid tunable key";
 			break;
 		}
 	}

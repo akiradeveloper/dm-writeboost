@@ -589,9 +589,11 @@ static int __must_check format_cache_device(struct wb_device *wb)
 
 /*
  * First check if the superblock and the passed arguments
- * are consistent and reformat the cache structure if they are not.
- * If you want to reformat the cache device you must zeroed out
+ * are consistent and re-format the cache structure if they are not.
+ * If you want to re-format the cache device you must zeroed out
  * the first one sector of the device.
+ *
+ * After this, the segment_size_order is fixed.
  */
 static int might_format_cache_device(struct wb_device *wb)
 {
@@ -1088,15 +1090,26 @@ static void free_migration_buffer(struct wb_device *wb)
 		wake_up_process(wb->name##_daemon); \
 	} while (0)
 
+/*
+ * Setup the core info relavant to the cache format or geometry.
+ */
+static void setup_geom_info(struct wb_device *wb)
+{
+	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
+	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
+	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
+}
+
+/*
+ * Harmless init
+ * - allocate memory
+ * - setup the initial state of the objects
+ */
 static int harmless_init(struct wb_device *wb)
 {
 	int r = 0;
 
-	mutex_init(&wb->io_lock);
-
-	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
-	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
-	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
+	setup_geom_info(wb);
 
 	wb->buf_1_pool = mempool_create_kmalloc_pool(16, 1 << SECTOR_SHIFT);
 	if (!wb->buf_1_pool) {

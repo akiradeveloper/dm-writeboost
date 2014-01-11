@@ -964,6 +964,7 @@ static int init_core_struct(struct dm_target *ti)
 	ti->private = wb;
 	wb->ti = ti;
 
+	mutex_init(&wb->io_lock);
 	spin_lock_init(&wb->lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
 	clear_bit(WB_DEAD, &wb->flags);

@@ -401,10 +401,6 @@ int migrate_proc(void *data)
  */
 void wait_for_migration(struct wb_device *wb, u64 id)
 {
-	/*
-	 * Set urge_migrate to true to force the migartion daemon
-	 * to complete migarate of this segment immediately.
-	 */
 	wb->urge_migrate = true;
 	wake_up_process(wb->migrate_daemon);
 	wait_event_interruptible(wb->migrate_wait_queue,

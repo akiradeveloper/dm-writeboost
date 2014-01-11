@@ -2,17 +2,8 @@
 **L**og-structured **C**aching for Linux
 
 ## Notice
-Guys, we are strongly heading toward upstream.
-We won't look back anymore.
-
-All supports before 3.12 are off.
-porting-final tag is the last moment
-that this kernel module was portable.
-If you want to examine the performance impact of writeboost
-in your environment please use the revision.
-
-Sorry and thanks for those having tested
-in environments. writeboost will be in the main tree, I promise.
+Final patch to 3.14 is submitted.
+After merged, I will make an another repo to maintain the whole tree.
 
 ## Overview
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  

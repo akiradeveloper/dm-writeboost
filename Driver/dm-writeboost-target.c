@@ -1084,8 +1084,12 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	if (!strcasecmp(argv[0], "drop_caches")) {
-		return wait_event_interruptible(wb->wait_drop_caches,
-						!atomic64_read(&wb->nr_dirty_caches));
+		int r = 0;
+		wb->force_drop = true;
+		r = wait_event_interruptible(wb->wait_drop_caches,
+			     !atomic64_read(&wb->nr_dirty_caches));
+		wb->force_drop = false;
+		return r;
 	}
 
 	return do_consume_tunable_argv(wb, &as, 2);

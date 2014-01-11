@@ -310,6 +310,7 @@ struct wb_device {
 	struct task_struct *migrate_daemon;
 	int allow_migrate;
 	int urge_migrate; /* Start migration immediately */
+	int force_drop; /* Don't stop migration */
 	atomic64_t last_migrated_segment_id;
 
 	/*

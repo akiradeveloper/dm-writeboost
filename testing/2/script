@@ -27,11 +27,14 @@ fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
-echo Create device \(migration ON\)
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 1 allow_migrate 1 sync_interval 1 update_record_interval 1"
+echo Create device \(migration OFF\)
+dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 
-echo "Drop writeboost caches"
+echo "Drop writeboost caches (forcefully)"
 dmsetup message writeboost-vol 0 drop_caches
+
+echo "enable migration modulartor"
+dmsetup message writeboost-vol 0 enable_migration_modulator 1
 
 echo "Drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches

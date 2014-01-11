@@ -347,14 +347,14 @@ migrate_write:
 
 static void do_migrate_proc(struct wb_device *wb)
 {
-	bool allow_migrate;
 	u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
 	struct segment_header *seg;
 
-	allow_migrate = ACCESS_ONCE(wb->urge_migrate) ||
-			ACCESS_ONCE(wb->allow_migrate);
+	bool start_migrate = ACCESS_ONCE(wb->allow_migrate) ||
+			     ACCESS_ONCE(wb->urge_migrate)  ||
+			     ACCESS_ONCE(wb->force_drop);
 
-	if (!allow_migrate) {
+	if (!start_migrate) {
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		return;
 	}

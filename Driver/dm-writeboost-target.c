@@ -1069,8 +1069,6 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 }
 
-static void writeboost_resume(struct dm_target *ti) {}
-
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct wb_device *wb = ti->private;
@@ -1206,7 +1204,6 @@ static struct target_type writeboost_target = {
 	.ctr = writeboost_ctr,
 	.dtr = writeboost_dtr,
 	.postsuspend = writeboost_postsuspend,
-	.resume = writeboost_resume,
 	.merge = writeboost_merge,
 	.message = writeboost_message,
 	.status = writeboost_status,

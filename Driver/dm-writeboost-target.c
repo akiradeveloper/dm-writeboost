@@ -1090,20 +1090,6 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	return do_consume_tunable_argv(wb, &as, 2);
 }
 
-static int writeboost_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
-			    struct bio_vec *biovec, int max_size)
-{
-	struct wb_device *wb = ti->private;
-	struct dm_dev *device = wb->origin_dev;
-	struct request_queue *q = bdev_get_queue(device->bdev);
-
-	if (!q->merge_bvec_fn)
-		return max_size;
-
-	bvm->bi_bdev = device->bdev;
-	return min(max_size, q->merge_bvec_fn(q, bvm, biovec));
-}
-
 /*
  * Since Writeboost is just a cache target and the cache block size is fixed
  * to 4KB. There is no reason to count the cache device in device iteration.
@@ -1204,7 +1190,6 @@ static struct target_type writeboost_target = {
 	.ctr = writeboost_ctr,
 	.dtr = writeboost_dtr,
 	.postsuspend = writeboost_postsuspend,
-	.merge = writeboost_merge,
 	.message = writeboost_message,
 	.status = writeboost_status,
 	.io_hints = writeboost_io_hints,

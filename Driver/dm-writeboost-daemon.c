@@ -348,7 +348,6 @@ migrate_write:
 static void do_migrate_proc(struct wb_device *wb)
 {
 	u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
-	struct segment_header *seg;
 
 	bool start_migrate = ACCESS_ONCE(wb->allow_migrate) ||
 			     ACCESS_ONCE(wb->urge_migrate)  ||
@@ -376,7 +375,7 @@ static void do_migrate_proc(struct wb_device *wb)
 	 * Store emigrates
 	 */
 	for (i = 0; i < nr_mig; i++) {
-		seg = get_segment_header_by_id(wb,
+		struct segment_header *seg = get_segment_header_by_id(wb,
 			atomic64_read(&wb->last_migrated_segment_id) + 1 + i);
 		*(wb->emigrates + i) = seg;
 	}

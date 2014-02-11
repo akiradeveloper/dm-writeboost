@@ -729,14 +729,17 @@ static u32 find_min_id_plog(struct wb_device *wb, u64 *id)
 
 static int rebuild_plog(void *rambuffer, void *plog_buf)
 {
+	return 0;
 }
 
 static int flush_plog(struct wb_device *wb, void *plog_buf)
 {
+	return 0;
 }
 
 static int read_plog(void *plog_buf, struct wb_device *wb, u32 idx)
 {
+	return 0;
 }
 
 static int flush_plogs(struct wb_device *wb)

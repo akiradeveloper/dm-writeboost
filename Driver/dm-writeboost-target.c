@@ -800,21 +800,23 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 	unsigned tmp;
 
 	r = dm_read_arg(_args, as, &tmp, &ti->error);
-	if (r)
+	if (r) {
+		WBERR("%s", ti->error);
 		return r;
+	}
 	wb->type = tmp;
 
 	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
 			  &wb->origin_dev);
 	if (r) {
-		ti->error = "failed to get origin dev";
+		WBERR("failed to get origin dev");
 		return r;
 	}
 
 	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
 			  &wb->cache_dev);
 	if (r) {
-		ti->error = "failed to get cache dev";
+		WBERR("failed to get cache dev");
 		goto bad;
 	}
 
@@ -830,8 +832,10 @@ bad:
 		if (!argc) \
 			break; \
 		r = dm_read_arg(_args + (nr), as, &tmp, &ti->error); \
-		if (r) \
+		if (r) { \
+			WBERR("%s", ti->error); \
 			break; \
+		} \
 		wb->name = tmp; \
 	 } }
 
@@ -849,8 +853,10 @@ static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 
 	if (as->argc) {
 		r = dm_read_arg_group(_args, as, &argc, &ti->error);
-		if (r)
+		if (r) {
+			WBERR("%s", ti->error);
 			return r;
+		}
 	}
 
 	while (argc) {
@@ -927,8 +933,10 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 
 	if (as->argc) {
 		r = dm_read_arg_group(_args, as, &argc, &ti->error);
-		if (r)
+		if (r) {
+			WBERR("%s", ti->error);
 			return r;
+		}
 		/*
 		 * tunables are emitted only if
 		 * they were origianlly passed.

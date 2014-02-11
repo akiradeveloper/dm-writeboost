@@ -189,6 +189,23 @@ struct flush_job {
 
 /*----------------------------------------------------------------*/
 
+struct plog_meta {
+	u64 id;
+	u32 checksum; /* checksum of the data */
+	u8 idx; /* idx in the segment */
+	u8 len; /* length in sector */
+};
+
+struct plog_meta_device {
+	__le64 id;
+	__le32 checksum;
+	__u8 idx;
+	__u8 len;
+	__u8 padding[512 - 8 - 4 - 1 - 1];
+} __packed;
+
+/*----------------------------------------------------------------*/
+
 enum STATFLAG {
 	STAT_WRITE = 0,
 	STAT_HIT,
@@ -360,6 +377,27 @@ struct wb_device {
 	unsigned long sync_interval; /* tunable */
 
 	/*---------------------------------------------*/
+
+	/********************
+	 * Persistent Logging
+	 ********************/
+
+	/* common */
+	char *plog_dev_desc; /* passed as essential argv to describe the persistent device */
+	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
+	sector_t alloc_plog_head; /* next relative sector to allocate */
+	sector_t cur_plog_head; /* current relative sector to append */
+	sector_t plog_start_sector; /* the absolute start sector of the current plog */
+	u32 nr_plogs;
+
+	/* type 1 */
+	struct dm_dev *plog_dev_t1;
+
+	/* type 2 */
+	/* TODO (native pram interface supported) */
+
+	/*---------------------------------------------*/
+
 
 	/************
 	 * Statistics

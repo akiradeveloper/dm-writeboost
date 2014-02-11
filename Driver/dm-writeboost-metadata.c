@@ -720,6 +720,40 @@ void prepare_segment_header_device(void *rambuffer,
 	dest->length = src->length;
 }
 
+/*----------------------------------------------------------------*/
+
+static u32 find_min_id_plog(struct wb_device *wb, u64 *id)
+{
+	return 0;
+}
+
+static int rebuild_plog(void *rambuffer, void *plog_buf)
+{
+}
+
+static int flush_plog(struct wb_device *wb, void *plog_buf)
+{
+}
+
+static int read_plog(void *plog_buf, struct wb_device *wb, u32 idx)
+{
+}
+
+static int flush_plogs(struct wb_device *wb)
+{
+	u64 id;
+	for (i = find_min_id_plog(wb, &id); i < wb->nr_plogs, i++) {
+		u32 j;
+		div_u64_rem(i, wb->nr_plogs, &j);
+
+		read_plog(plog_buf, wb, idx);
+	}
+
+	return 0;
+}
+
+/*----------------------------------------------------------------*/
+
 static void
 apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
 		       struct segment_header_device *src, u8 i)
@@ -769,17 +803,6 @@ apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
 
 	for (i = 0; i < src->length; i++)
 		apply_metablock_device(wb, seg, src, i);
-}
-
-/*
- * If the RAM buffer is non-volatile
- * we first write back all the valid buffers on them.
- * By doing this, the discussion on replay algorithm is closed
- * in replaying logs on only cache device.
- */
-static int writeback_non_volatile_buffers(struct wb_device *wb)
-{
-	return 0;
 }
 
 static int find_max_id(struct wb_device *wb, u64 *max_id)
@@ -942,7 +965,7 @@ static int __must_check recover_cache(struct wb_device *wb)
 {
 	int r = 0;
 
-	r = writeback_non_volatile_buffers(wb);
+	r = flush_plogs(wb);
 	if (r) {
 		WBERR("failed to write back all the persistent data on non-volatile RAM");
 		return r;
@@ -1002,6 +1025,46 @@ static void free_rambuf_pool(struct wb_device *wb)
 		kfree(rambuf->data);
 	}
 	kfree(wb->rambuf_pool);
+}
+
+/*----------------------------------------------------------------*/
+
+struct int alloc_plog_t1(struct wb_device *wb)
+{
+	int r = 0;
+
+	r = dm_get_device(wb->ti, wb->plog_dev_desc, dm_table_get_mode(ti->table),
+			  &wb->plog_dev_t1);
+	if (r) {
+		WBERR("failed to get plog device");
+		return -EINVAL;
+	}
+
+	u32 nr_max = div_u64(dm_devsize(wb->plog_dev_t1), wb->plog_size);
+	if (nr_max < 1) {
+		WBERR("plog device too small");
+		return -EINVAL;
+	}
+
+	if (nr_max > wb->nr_rambuf_pool) {
+		wb->nr_plogs = wb->nr_rambuf_pool;
+	} else {
+		wb->nr_plogs = min(wb->nr_plogs, nr_max);
+	}
+
+	return 0;
+}
+
+static int alloc_plog(struct wb_device *wb)
+{
+	switch (wb->type) {
+		case 0:
+			return 0;
+		case 1:
+			return alloc_plog_t1(wb);
+		default:
+			BUG();
+	}
 }
 
 /*----------------------------------------------------------------*/
@@ -1098,6 +1161,10 @@ static void setup_geom_info(struct wb_device *wb)
 	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
 	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
 	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
+
+	if (wb->type) {
+		wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
+	}
 }
 
 /*
@@ -1129,6 +1196,13 @@ static int harmless_init(struct wb_device *wb)
 		WBERR("failed to allocate rambuf pool");
 		goto bad_init_rambuf_pool;
 	}
+
+	r = alloc_plog(wb);
+	if (r) {
+		WBERR("failed to alloc plog");
+		goto bad_alloc_plog;
+	}
+
 	wb->flush_job_pool = mempool_create_kmalloc_pool(
 				wb->nr_rambuf_pool, sizeof(struct flush_job));
 	if (!wb->flush_job_pool) {

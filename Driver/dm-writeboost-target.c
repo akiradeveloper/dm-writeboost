@@ -133,6 +133,21 @@ static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 	init_rambuffer(wb);
 }
 
+static void acquire_new_plog(struct wb_device *wb, u64 id)
+{
+	if (!wb->type)
+		return;
+
+	u32 tmp32;
+
+	wait_for_flushing(wb, SUB_ID(id, wb->nr_plogs));
+
+	div_u64_rem(id - 1, wb->nr_plogs, &tmp32);
+	wb->plog_start_sector = plog_size * tmp32;
+	wb->alloc_plog_head = 0;
+	wb->cur_plog_head = 0;
+}
+
 /*
  * Acquire the new segment and RAM buffer for the following writes.
  * Gurantees all dirty caches in the segments are migrated and all metablocks
@@ -167,6 +182,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	wb->current_seg = new_seg;
 
 	acquire_new_rambuffer(wb, id);
+	acquire_new_plog(wb, id);
 }
 
 static void prepare_new_seg(struct wb_device *wb)
@@ -584,6 +600,28 @@ write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
 	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_size);
 }
 
+static void
+__append_plog(struct wb_device *wb, struct metablock *mb,
+	      struct bio *bio, sector_t plog_head)
+{
+}
+
+static void
+append_plog(struct wb_device *wb, struct metablock *mb,
+	    struct bio *bio, sector_t plog_head)
+{
+	if (!wb->type)
+		return;
+
+	wait_event_interruptible(wb->plog_wait_queue,
+			wb->cur_plog_head == plog_head);
+
+	__append_plog(wb, mb, bio, plog_head);
+
+	wb->cur_plog_head += io_count(bio);
+	wake_up_interruptible(&wb->plog_wait_queue);
+}
+
 static void advance_cursor(struct wb_device *wb)
 {
 	u32 tmp32;
@@ -591,14 +629,25 @@ static void advance_cursor(struct wb_device *wb)
 	wb->cursor = tmp32;
 }
 
-static bool needs_queue_seg(struct wb_device *wb)
+static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 {
+	sector_t old = wb->alloc_plog_head;
+	wb->alloc_plog_head += io_count(bio);
+	return old;
+}
+
+static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
+{
+	bool plog_no_room = (wb->alloc_plog_head + io_count(bio)) > wb->plog_size;
+
 	/*
 	 * If wb->cursor is 254, 509, ...
 	 * which is the last cache line in the segment.
 	 * We must flush the current segment and get the new one.
 	 */
-	return !mb_idx_inseg(wb, wb->cursor + 1);
+	bool rambuf_no_room = !mb_idx_inseg(wb, wb->cursor + 1);
+
+	return plog_no_room || rambuf_no_room;
 }
 
 struct per_bio_data {
@@ -618,6 +667,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	struct segment_header *uninitialized_var(found_seg);
 	struct metablock *mb, *new_mb;
 
+	sector_t plog_head;
 	bool found,
 	     on_buffer; /* is the metablock found on the RAM buffer? */
 
@@ -741,6 +791,7 @@ write_not_found:
 		queue_current_buffer(wb);
 
 	advance_cursor(wb);
+	plog_head = advance_plog_head(wb);
 
 	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, wb->cursor);
 	BUG_ON(new_mb->dirty_bits);
@@ -755,6 +806,8 @@ write_on_buffer:
 	taint_mb(wb, wb->current_seg, mb, bio);
 
 	write_on_rambuffer(wb, wb->current_seg, mb, bio);
+
+	append_plog(wb, mb, bio, plog_head);
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
@@ -819,12 +872,15 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 			  &wb->cache_dev);
 	if (r) {
 		WBERR("failed to get cache dev");
-		goto bad;
+		goto bad_get_cache;
 	}
+
+	if (wb->type)
+		wb->plog_dev_desc = dm_shift_arg(as);
 
 	return r;
 
-bad:
+bad_get_cache:
 	dm_put_device(ti, wb->origin_dev);
 	return r;
 }
@@ -1018,6 +1074,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	wb->segment_size_order = 7;
 	wb->rambuf_pool_amount = 2048;
+	if (wb->type)
+		wb->nr_plogs = 1;
 	r = consume_optional_argv(wb, &as);
 	if (r) {
 		ti->error = "failed to consume optional argv";

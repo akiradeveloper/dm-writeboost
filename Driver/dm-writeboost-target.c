@@ -591,6 +591,16 @@ static void advance_cursor(struct wb_device *wb)
 	wb->cursor = tmp32;
 }
 
+static bool needs_queue_seg(struct wb_device *wb)
+{
+	/*
+	 * If wb->cursor is 254, 509, ...
+	 * which is the last cache line in the segment.
+	 * We must flush the current segment and get the new one.
+	 */
+	return !mb_idx_inseg(wb, wb->cursor + 1);
+}
+
 struct per_bio_data {
 	void *ptr;
 };
@@ -609,8 +619,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	struct metablock *mb, *new_mb;
 
 	bool found,
-	     on_buffer, /* is the metablock found on the RAM buffer? */
-	     needs_queue_seg; /* need to queue the current seg? */
+	     on_buffer; /* is the metablock found on the RAM buffer? */
 
 	struct per_bio_data *map_context;
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
@@ -728,14 +737,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	}
 
 write_not_found:
-	/*
-	 * If wb->cursor is 254, 509, ...
-	 * which is the last cache line in the segment.
-	 * We must flush the current segment and get the new one.
-	 */
-	needs_queue_seg = !mb_idx_inseg(wb, wb->cursor + 1);
-
-	if (needs_queue_seg)
+	if (needs_queue_seg(wb))
 		queue_current_buffer(wb);
 
 	advance_cursor(wb);

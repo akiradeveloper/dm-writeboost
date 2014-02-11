@@ -345,31 +345,42 @@ migrate_write:
 	IO(blkdev_issue_flush(wb->origin_dev->bdev, GFP_NOIO, NULL));
 }
 
-static void do_migrate_proc(struct wb_device *wb)
+static u32 calc_nr_mig(struct wb_device *wb)
 {
-	u32 i, nr_mig_candidates, nr_mig, nr_max_batch;
-
-	bool start_migrate = ACCESS_ONCE(wb->allow_migrate) ||
-			     ACCESS_ONCE(wb->urge_migrate)  ||
-			     ACCESS_ONCE(wb->force_drop);
-
-	if (!start_migrate) {
-		schedule_timeout_interruptible(msecs_to_jiffies(1000));
-		return;
-	}
+	u32 nr_mig_candidates, nr_max_batch;
 
 	nr_mig_candidates = atomic64_read(&wb->last_flushed_segment_id) -
 			    atomic64_read(&wb->last_migrated_segment_id);
-
-	if (!nr_mig_candidates) {
-		schedule_timeout_interruptible(msecs_to_jiffies(1000));
-		return;
-	}
+	if (!nr_mig_candidates)
+		return 0;
 
 	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
 	if (wb->nr_cur_batched_migration != nr_max_batch)
 		try_alloc_migration_buffer(wb, nr_max_batch);
-	nr_mig = min(nr_mig_candidates, wb->nr_cur_batched_migration);
+	return min(nr_mig_candidates, wb->nr_cur_batched_migration);
+}
+
+static bool should_migrate(struct wb_device *wb)
+{
+	return ACCESS_ONCE(wb->allow_migrate) ||
+	       ACCESS_ONCE(wb->urge_migrate)  ||
+	       ACCESS_ONCE(wb->force_drop);
+}
+
+static void do_migrate_proc(struct wb_device *wb)
+{
+	u32 i, nr_mig;
+
+	if (!should_migrate(wb)) {
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		return;
+	}
+
+	nr_mig = calc_nr_mig(wb);
+	if (!nr_mig) {
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		return;
+	}
 
 	/*
 	 * Store emigrates

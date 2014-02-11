@@ -153,9 +153,9 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 			WBWARN("too long to process all requests");
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
-	BUG_ON(count_dirty_caches_remained(new_seg));
 
 	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
+	BUG_ON(count_dirty_caches_remained(new_seg));
 
 	discard_caches_inseg(wb, new_seg);
 

@@ -570,8 +570,8 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 }
 
 static void
-write_on_buffer(struct wb_device *wb, struct segment_header *seg,
-		struct metablock *mb, struct bio *bio)
+write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
+		   struct metablock *mb, struct bio *bio)
 {
 	sector_t start_sector = ((mb_idx_inseg(wb, mb->idx) + 1) << 3) +
 				io_offset(bio);
@@ -754,7 +754,7 @@ write_not_found:
 write_on_buffer:
 	taint_mb(wb, wb->current_seg, mb, bio);
 
-	write_on_buffer(wb, wb->current_seg, mb, bio);
+	write_on_rambuffer(wb, wb->current_seg, mb, bio);
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 

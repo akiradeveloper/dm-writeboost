@@ -604,6 +604,35 @@ static void
 __append_plog(struct wb_device *wb, struct metablock *mb,
 	      struct bio *bio, sector_t plog_head)
 {
+	void *data = bio_data(bio);
+	u32 checksum = crc32c(WB_CKSUM_SEED, data, bio->bi_size);
+	struct plog_meta_device meta = {
+		.id = cpu_to_le64(wb->current_seg->id),
+		.checkum = cpu_to_le32(checksum),
+		.idx = (u8) mb_idx_inseg(wb, mb->idx),
+		.len = io_count(bio),
+	};
+	void *buf = wb->plog_buf;
+	memcpy(buf, &mata, sizeof(meta));
+	memcpy(buf + 512, data, bio->bi_size);
+
+	if (wb->type == 1) {
+		struct dm_io_request io_req = {
+			.client = wb_io_client,
+			.bi_rw = WRITE_FUA,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = buf,
+		};
+		struct dm_io_region region = {
+			.bdev = wb->plog_dev_t1,
+			.sector = wb->plog_start_sector + plog_head,
+			.count = 1 + io_count(bio),
+		};
+		IO(dm_safe_io(&io_req, 1, &region, NULL, true));
+
+		return;
+	}
 }
 
 static void

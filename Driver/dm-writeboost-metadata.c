@@ -587,6 +587,12 @@ static int __must_check format_cache_device(struct wb_device *wb)
 	return r;
 }
 
+static int clear_plog_device(struct wb_device *wb)
+{
+	/* TODO */
+	return 0;
+}
+
 /*
  * First check if the superblock and the passed arguments
  * are consistent and re-format the cache structure if they are not.
@@ -611,6 +617,11 @@ static int might_format_cache_device(struct wb_device *wb)
 			r = format_cache_device(wb);
 			if (r) {
 				WBERR("failed to format cache device");
+				return r;
+			}
+			r = clear_plog_device(wb);
+			if (r) {
+				WBERR("failed to clear plog device");
 				return r;
 			}
 		} else {
@@ -1060,14 +1071,37 @@ struct int alloc_plog_t1(struct wb_device *wb)
 
 static int alloc_plog(struct wb_device *wb)
 {
+	int r = 0;
+	wb->plog_buf = kmalloc(9 << SECTOR_SHIFT, GFP_KERNEL);
+	if (!wb->plog_buf) {
+		return -ENOMEM;
+	}
+
 	switch (wb->type) {
 		case 0:
-			return 0;
+			r = 0;
 		case 1:
-			return alloc_plog_t1(wb);
+			r = alloc_plog_t1(wb);
 		default:
 			BUG();
 	}
+
+	if (r) {
+		kfree(wb->plog_buf);
+		return r;
+	}
+
+	return r;
+}
+
+void free_plog(struct wb_device *wb)
+{
+	if (wb->type == 1) {
+		dm_put_device(wb->ti, wb->plog_device_t1);
+	} else {
+		BUG();
+	}
+	kfree(wb->plog_buf);
 }
 
 /*----------------------------------------------------------------*/
@@ -1181,6 +1215,12 @@ static int harmless_init(struct wb_device *wb)
 
 	setup_geom_info(wb);
 
+	r = alloc_plog(wb);
+	if (r) {
+		WBERR("failed to alloc plog");
+		goto bad_alloc_plog;
+	}
+
 	wb->buf_1_pool = mempool_create_kmalloc_pool(16, 1 << SECTOR_SHIFT);
 	if (!wb->buf_1_pool) {
 		r = -ENOMEM;
@@ -1198,12 +1238,6 @@ static int harmless_init(struct wb_device *wb)
 	if (r) {
 		WBERR("failed to allocate rambuf pool");
 		goto bad_init_rambuf_pool;
-	}
-
-	r = alloc_plog(wb);
-	if (r) {
-		WBERR("failed to alloc plog");
-		goto bad_alloc_plog;
 	}
 
 	wb->flush_job_pool = mempool_create_kmalloc_pool(
@@ -1239,6 +1273,8 @@ bad_init_rambuf_pool:
 bad_buf_8_pool:
 	mempool_destroy(wb->buf_1_pool);
 bad_buf_1_pool:
+	free_plog(wb);
+bad_alloc_plog:
 
 	return r;
 }
@@ -1349,7 +1385,7 @@ int __must_check resume_cache(struct wb_device *wb)
 {
 	int r = 0;
 
-	r = might_format_cache_device(wb);
+	r = might_format_cache_device(wb); /* FIXME relocate (with test). after harmless_init */
 	if (r)
 		goto bad_might_format_cache;
 	r = harmless_init(wb);

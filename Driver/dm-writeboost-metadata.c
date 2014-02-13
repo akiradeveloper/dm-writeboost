@@ -735,7 +735,17 @@ void prepare_segment_header_device(void *rambuffer,
 
 static u32 find_min_id_plog(struct wb_device *wb, u64 *id)
 {
-	return 0;
+	u32 i;
+	void *buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	u64 min_id = SZ_MAX;
+	struct plog_meta_block meta;
+	for (i = 0; i < wb->nr_plogs; i++) {
+		read_plog(buf, wb, i);
+		memcpy(&meta, buf, 512);
+		if (le64_to_cpu(meta.id) < min_id) {
+			min_id = le64_to_cpu(meta.id);
+		}
+	}
 }
 
 static int rebuild_plog(void *rambuffer, void *plog_buf)
@@ -748,7 +758,7 @@ static int flush_plog(struct wb_device *wb, void *plog_buf)
 	return 0;
 }
 
-static int read_plog(void *plog_buf, struct wb_device *wb, u32 idx)
+static int read_plog(void *buf, struct wb_device *wb, u32 idx)
 {
 	return 0;
 }
@@ -760,7 +770,7 @@ static int flush_plogs(struct wb_device *wb)
 		u32 j;
 		div_u64_rem(i, wb->nr_plogs, &j);
 
-		read_plog(plog_buf, wb, idx);
+		read_plog(buf, wb, idx);
 	}
 
 	return 0;

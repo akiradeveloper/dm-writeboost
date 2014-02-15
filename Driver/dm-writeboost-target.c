@@ -603,6 +603,11 @@ write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
 static void
 do_append_plog_t1(struct wb_device *wb, struct bio *bio, sector_t plog_head)
 {
+	/*
+	 * We must write the data with FUA flag to make sure that
+	 * the log is persistent when it's acked. Hoping that block device
+	 * with NVRAM equipped or battery-backed up DRAM ignores FUA flag.
+	 */
 	struct dm_io_request io_req = {
 		.client = wb_io_client,
 		.bi_rw = WRITE_FUA,
@@ -651,9 +656,11 @@ append_plog(struct wb_device *wb, struct metablock *mb,
 	wait_event_interruptible(wb->plog_wait_queue,
 			wb->cur_plog_head == plog_head);
 
-	__append_plog(wb, mb, bio, plog_head);
+	do_append_plog(wb, mb, bio, plog_head);
+	wb->cur_plog_head += (1 + io_count(bio));
 
-	wb->cur_plog_head += io_count(bio);
+	/* TODO FLUSH */
+
 	wake_up_interruptible(&wb->plog_wait_queue);
 }
 

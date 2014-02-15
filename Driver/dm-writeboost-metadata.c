@@ -800,9 +800,42 @@ static int flush_plog(struct wb_device *wb, void *plog_buf)
 	return 0;
 }
 
+static int read_plog_t1(void *buf, struct wb_device *wb, u32 idx)
+{
+	int r = 0;
+
+	struct dm_io_request io_req = {
+		.client = wb_io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	struct dm_io_region region = {
+		.bdev = wb->plog_dev_t1->bdev,
+		.sector = 0,
+		.count = wb->plog_size * idx;
+	};
+	r = dm_safe_io(&io_req, 1, &region, NULL, false);
+	if (r)
+		WBERR("I/O failed");
+
+	return r;
+}
+
 static int read_plog(void *buf, struct wb_device *wb, u32 idx)
 {
-	return 0;
+	int r = 0;
+
+	switch (wb->type) {
+		case 1:
+			r = read_plog_t1(buf, wb, idx);
+			break;
+		default:
+			BUG();
+	}
+
+	return r;
 }
 
 static int flush_plogs(struct wb_device *wb)

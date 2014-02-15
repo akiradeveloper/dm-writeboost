@@ -775,29 +775,82 @@ void prepare_segment_header_device(void *rambuffer,
 
 /*----------------------------------------------------------------*/
 
-static u32 find_min_id_plog(struct wb_device *wb, u64 *id)
+static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 {
 	u32 i;
-	void *buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
 	u64 min_id = SZ_MAX;
-	struct plog_meta_block meta;
+	struct plog_meta_device meta;
+
+	void *buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	if (r)
+		return -ENOMEM;
+
 	for (i = 0; i < wb->nr_plogs; i++) {
 		read_plog(buf, wb, i);
 		memcpy(&meta, buf, 512);
+
+		if (!le64_to_cpu(meta.id))
+			continue;
+
 		if (le64_to_cpu(meta.id) < min_id) {
 			min_id = le64_to_cpu(meta.id);
+			*idx = i;
 		}
 	}
+
+	if (min_id == SZ_MAX)
+		*idx = 0;
+		*id = 0;
 }
 
-static int rebuild_plog(void *rambuffer, void *plog_buf)
+static void rebuild_plog(void *rambuffer, void *plog_buf)
 {
+	/* TODO rebuiild metadata from log */
 	return 0;
+}
+
+static int flush_rambuf_t1(struct segment_header *seg, void *buf)
+{
+	struct dm_io_request io_req = {
+		.client = wb_io_client,
+		.bi_rw = WRITE,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	struct dm_io_region region = {
+		.bdev = wb->cache_dev->bdev,
+		.sector = seg->start_sector,
+		.count = (seg->length + 1) << 3,
+	};
+	r = dm_safe_io(&io_req, 1, &region, NULL, false);
+	if (r)
+		DMERR("I/O failed");
+	return r;
 }
 
 static int flush_plog(struct wb_device *wb, void *plog_buf)
 {
-	return 0;
+	struct segment_header *seg;
+	struct plog_meta_device meta;
+	void *rambuf = kzalloc(1 << wb->segment_size_order, GFP_KERNEL);
+	if (r)
+		return -ENOMEM;
+
+	rebuild_plog(rambuf, plog_buf);
+
+	memcpy(&meta, plog_buf);
+	seg = get_segment_header_by_id(wb, le64_to_cpu(meta.id));
+
+	switch (wb->type) {
+		case 1:
+			r = flush_rambuf_t1(seg, rambuf);
+			break;
+		default:
+			BUG();
+	}
+
+	return r;
 }
 
 static int read_plog_t1(void *buf, struct wb_device *wb, u32 idx)
@@ -840,15 +893,38 @@ static int read_plog(void *buf, struct wb_device *wb, u32 idx)
 
 static int flush_plogs(struct wb_device *wb)
 {
+	int r = 0;
 	u64 id;
-	for (i = find_min_id_plog(wb, &id); i < wb->nr_plogs, i++) {
+	u32 idx, i;
+	struct plog_meta_device meta;
+
+	void *buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	if (r)
+		return -ENOMEM;
+
+	r = find_min_id_plog(wb, &id, &idx);
+	if (r) /* FIXME */
+		return r;
+
+	if (!id)
+		return 0;
+
+	for (i = idx; i < wb->nr_plogs, i++) {
 		u32 j;
+
 		div_u64_rem(i, wb->nr_plogs, &j);
 
-		read_plog(buf, wb, idx);
+		read_plog(buf, wb, j);
+		memcpy(&meta, buf, 512);
+
+		if (le64_to_cpu(meta.id) != id)
+			break;
+
+		flush_plog(wb, buf);
+		id++;
 	}
 
-	return 0;
+	return r;
 }
 
 /*----------------------------------------------------------------*/

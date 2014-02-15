@@ -601,37 +601,43 @@ write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
 }
 
 static void
-__append_plog(struct wb_device *wb, struct metablock *mb,
-	      struct bio *bio, sector_t plog_head)
+do_append_plog_t1(struct wb_device *wb, struct bio *bio, sector_t plog_head)
 {
-	void *data = bio_data(bio);
-	u32 checksum = crc32c(WB_CKSUM_SEED, data, bio->bi_size);
+	struct dm_io_request io_req = {
+		.client = wb_io_client,
+		.bi_rw = WRITE_FUA,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = wb->plog_buf,
+	};
+	struct dm_io_region region = {
+		.bdev = wb->plog_dev_t1,
+		.sector = wb->plog_start_sector + plog_head,
+		.count = 1 + io_count(bio),
+	};
+	IO(dm_safe_io(&io_req, 1, &region, NULL, true));
+}
+
+static void
+do_append_plog(struct wb_device *wb, struct metablock *mb,
+	       struct bio *bio, sector_t plog_head)
+{
+	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
-		.checkum = cpu_to_le32(checksum),
-		.idx = (u8) mb_idx_inseg(wb, mb->idx),
+		.checkum = cpu_to_le32(cksum),
+		.idx = (u8) mb_idx_inseg(wb, mb->idx), /* FIXME remove u8 */
 		.len = io_count(bio),
 	};
-	void *buf = wb->plog_buf;
-	memcpy(buf, &mata, sizeof(meta));
-	memcpy(buf + 512, data, bio->bi_size);
+	memcpy(wb->plog_buf, &mata, sizeof(meta));
+	memcpy(wb->plog_buf + 512, bio_data(bio), bio->bi_size);
 
-	if (wb->type == 1) {
-		struct dm_io_request io_req = {
-			.client = wb_io_client,
-			.bi_rw = WRITE_FUA,
-			.notify.fn = NULL,
-			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = buf,
-		};
-		struct dm_io_region region = {
-			.bdev = wb->plog_dev_t1,
-			.sector = wb->plog_start_sector + plog_head,
-			.count = 1 + io_count(bio),
-		};
-		IO(dm_safe_io(&io_req, 1, &region, NULL, true));
-
-		return;
+	switch (wb->type) {
+		case 1:
+			do_append_plog_t1(wb, bio, plog_head);
+			break;
+		default:
+			BUG();
 	}
 }
 
@@ -658,25 +664,33 @@ static void advance_cursor(struct wb_device *wb)
 	wb->cursor = tmp32;
 }
 
+/*
+ * Advance the current head for newer logs.
+ * Returns the "current" head as the address for current appending.
+ */
 static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 {
 	sector_t old = wb->alloc_plog_head;
-	wb->alloc_plog_head += io_count(bio);
+	wb->alloc_plog_head += (1 + io_count(bio));
 	return old;
 }
 
 static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 {
-	bool plog_no_room = (wb->alloc_plog_head + io_count(bio)) > wb->plog_size;
+	/*
+	 * If there is no more space for appending new log
+	 * it's time to request new plog.
+	 */
+	bool plog_nospace = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
 
 	/*
 	 * If wb->cursor is 254, 509, ...
 	 * which is the last cache line in the segment.
 	 * We must flush the current segment and get the new one.
 	 */
-	bool rambuf_no_room = !mb_idx_inseg(wb, wb->cursor + 1);
+	bool rambuf_nospace = !mb_idx_inseg(wb, wb->cursor + 1);
 
-	return plog_no_room || rambuf_no_room;
+	return plog_nospace || rambuf_nospace;
 }
 
 struct per_bio_data {

@@ -1095,7 +1095,7 @@ static void free_rambuf_pool(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
-static int do_alloc_plog_t1(struct wb_device *wb)
+static int do_alloc_plog_dev_t1(struct wb_device *wb)
 {
 	int r = 0;
 
@@ -1108,8 +1108,8 @@ static int do_alloc_plog_t1(struct wb_device *wb)
 
 	u32 nr_max = div_u64(dm_devsize(wb->plog_dev_t1), wb->plog_size);
 	if (nr_max < 1) {
-		WBERR("plog device too small");
 		dm_put_device(wb->ti, wb->plog_dev_t1);
+		WBERR("plog device too small");
 		return -EINVAL;
 	}
 
@@ -1123,7 +1123,7 @@ static int do_alloc_plog_t1(struct wb_device *wb)
 		wb->nr_plogs = min(wb->nr_plogs, nr_max);
 	}
 
-	return 0;
+	return r;
 }
 
 /*
@@ -1131,7 +1131,7 @@ static int do_alloc_plog_t1(struct wb_device *wb)
  * After this funtion called members related to plog
  * is complete (e.g. nr_plogs is set).
  */
-static int do_alloc_plog(struct wb_device *wb)
+static int do_alloc_plog_dev(struct wb_device *wb)
 {
 	int r = 0;
 
@@ -1140,7 +1140,7 @@ static int do_alloc_plog(struct wb_device *wb)
 			r = 0;
 			break;
 		case 1:
-			r = do_alloc_plog_t1(wb);
+			r = do_alloc_plog_dev_t1(wb);
 			break;
 		default:
 			BUG();
@@ -1149,7 +1149,7 @@ static int do_alloc_plog(struct wb_device *wb)
 	return r;
 }
 
-static void do_free_plog(struct wb_device *wb)
+static void do_free_plog_dev(struct wb_device *wb)
 {
 	switch (wb->type) {
 		case 0:
@@ -1162,7 +1162,11 @@ static void do_free_plog(struct wb_device *wb)
 	}
 }
 
-static int alloc_plog(struct wb_device *wb, bool clear)
+/*
+ * Allocate plog device and the data structures related.
+ * Clear the device if required.
+ */
+static int alloc_plog_dev(struct wb_device *wb, bool clear)
 {
 	int r = 0;
 
@@ -1171,14 +1175,14 @@ static int alloc_plog(struct wb_device *wb, bool clear)
 		return -ENOMEM;
 	}
 
-	r = do_alloc_plog(wb);
+	r = do_alloc_plog_dev(wb);
 	if (r) {
 		WBERR("failed to alloc plog");
 		goto bad;
 	}
 
 	if (clear) {
-		r = clear_plog_device(wb)
+		r = clear_plog_dev(wb)
 		if (r) {
 			WBERR("failed to clear plog device");
 			goto bad;
@@ -1192,7 +1196,7 @@ bad:
 	return r;
 }
 
-void free_plog(struct wb_device *wb)
+void free_plog_dev(struct wb_device *wb)
 {
 	do_free_plog(wb);
 	kfree(wb->plog_buf);
@@ -1283,20 +1287,6 @@ static void free_migration_buffer(struct wb_device *wb)
 		} \
 		wake_up_process(wb->name##_daemon); \
 	} while (0)
-
-/*
- * Setup the core info relavant to the cache format or geometry.
- */
-static void setup_geom_info(struct wb_device *wb)
-{
-	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
-	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
-	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
-
-	if (wb->type) {
-		wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
-	}
-}
 
 /*
  * Harmless init
@@ -1461,6 +1451,27 @@ bad_sync_daemon:
 	return r;
 }
 
+/*
+ * Setup the core info relavant to the cache format or geometry.
+ */
+static void setup_geom_info(struct wb_device *wb)
+{
+	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
+	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
+	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
+
+	if (wb->type) {
+		/* FIXME purge */
+		wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
+	}
+}
+
+/*
+ * Initialize core devices
+ * - cache device (SSD)
+ * - persistent log device (PRAM or SSD)
+ * - RAM buffers (DRAM)
+ */
 static int init_devices(struct wb_device *wb)
 {
 	int r = 0;

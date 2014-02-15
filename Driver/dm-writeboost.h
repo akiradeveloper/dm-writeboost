@@ -396,7 +396,7 @@ struct wb_device {
 	struct dm_dev *plog_dev_t1;
 
 	/* type 2 */
-	/* TODO (native pram interface supported) */
+	/* TODO */
 
 	/*---------------------------------------------*/
 

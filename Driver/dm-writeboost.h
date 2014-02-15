@@ -385,6 +385,7 @@ struct wb_device {
 	/* common */
 	char *plog_dev_desc; /* passed as essential argv to describe the persistent device */
 	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
+	sector_t plog_size; /* FIXME To be computed */
 	sector_t alloc_plog_head; /* next relative sector to allocate */
 	sector_t cur_plog_head; /* current relative sector to append */
 	sector_t plog_start_sector; /* the absolute start sector of the current plog */

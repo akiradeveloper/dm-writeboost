@@ -587,16 +587,29 @@ static int __must_check format_cache_device(struct wb_device *wb)
 	return r;
 }
 
-static int clear_plog_device_t1(struct wb_device *wb)
+static int clear_plog_dev_t1(struct wb_device *wb)
 {
-	struct dm_io_request io_req = {
+	void *buf = kzalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	if (!buf) {
+		WBERR("failed to allocate buffer"); /* TODO */
+		return -ENOMEM;
+	}
 
+	struct dm_io_request io_req = {
+		.client = wb_io_client,
+		.bi_rw = WRITE_FUA,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
 	};
 
 	struct dm_io_region region = {
+		.bdev = wb->plog_dev_t1,
+		.sector = 0,
+		.count = wb->plog_size,
 	};
 
-	r = dm_safe_io();
+	r = dm_safe_io(&io_req, 1, &region, NULL, false);
 	if (r) {
 		WBERR("I/O failed");
 		return r;
@@ -608,10 +621,19 @@ static int clear_plog_device_t1(struct wb_device *wb)
 /*
  * Clear plog device if the cache device was formatted.
  */
-static int clear_plog_device(struct wb_device *wb)
+static int clear_plog_dev(struct wb_device *wb)
 {
 	int r = 0;
 
+	switch (wb->type) {
+		case 0:
+			break;
+		case 1:
+			clear_plog_dev_t1(wb);
+			break;
+		default:
+			BUG();
+	}
 
 	return 0;
 }

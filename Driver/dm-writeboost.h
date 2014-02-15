@@ -160,12 +160,6 @@ struct segment_header {
 
 /*----------------------------------------------------------------*/
 
-enum RAMBUF_TYPE {
-	BUF_NORMAL = 0, /* Volatile DRAM */
-	BUF_NV_BLK, /* Non-volatile with block I/F */
-	BUF_NV_RAM, /* Non-volatile with PRAM I/F */
-};
-
 /*
  * RAM buffer is a buffer that any dirty data are first written to.
  * type member in wb_device indicates the buffer type.
@@ -227,7 +221,13 @@ enum WB_FLAG {
  * The context of the cache driver.
  */
 struct wb_device {
-	enum RAMBUF_TYPE type;
+	/*
+	 * type
+	 * 0: only RAM buffers
+	 * 1: with persistent block device
+	 * 2: with persistent RAM device
+	 */
+	int type;
 
 	struct dm_target *ti;
 

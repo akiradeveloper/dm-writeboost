@@ -587,9 +587,32 @@ static int __must_check format_cache_device(struct wb_device *wb)
 	return r;
 }
 
+static int clear_plog_device_t1(struct wb_device *wb)
+{
+	struct dm_io_request io_req = {
+
+	};
+
+	struct dm_io_region region = {
+	};
+
+	r = dm_safe_io();
+	if (r) {
+		WBERR("I/O failed");
+		return r;
+	}
+
+	return r;
+}
+
+/*
+ * Clear plog device if the cache device was formatted.
+ */
 static int clear_plog_device(struct wb_device *wb)
 {
-	/* TODO */
+	int r = 0;
+
+
 	return 0;
 }
 
@@ -601,7 +624,7 @@ static int clear_plog_device(struct wb_device *wb)
  *
  * After this, the segment_size_order is fixed.
  */
-static int might_format_cache_device(struct wb_device *wb)
+static int might_format_cache_device(struct wb_device *wb, bool *formatted)
 {
 	int r = 0;
 
@@ -614,14 +637,11 @@ static int might_format_cache_device(struct wb_device *wb)
 
 	if (need_format) {
 		if (allow_format) {
+			*formatted = true;
+
 			r = format_cache_device(wb);
 			if (r) {
 				WBERR("failed to format cache device");
-				return r;
-			}
-			r = clear_plog_device(wb);
-			if (r) {
-				WBERR("failed to clear plog device");
 				return r;
 			}
 		} else {
@@ -1053,7 +1073,7 @@ static void free_rambuf_pool(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
-struct int alloc_plog_t1(struct wb_device *wb)
+static int do_alloc_plog_t1(struct wb_device *wb)
 {
 	int r = 0;
 
@@ -1067,9 +1087,14 @@ struct int alloc_plog_t1(struct wb_device *wb)
 	u32 nr_max = div_u64(dm_devsize(wb->plog_dev_t1), wb->plog_size);
 	if (nr_max < 1) {
 		WBERR("plog device too small");
+		dm_put_device(wb->ti, wb->plog_dev_t1);
 		return -EINVAL;
 	}
 
+	/*
+	 * The number of plogs is at most the number ram buffers
+	 * i.e. more plogs are meaningless.
+	 */
 	if (nr_max > wb->nr_rambuf_pool) {
 		wb->nr_plogs = wb->nr_rambuf_pool;
 	} else {
@@ -1079,38 +1104,75 @@ struct int alloc_plog_t1(struct wb_device *wb)
 	return 0;
 }
 
-static int alloc_plog(struct wb_device *wb)
+/*
+ * Allocate the persistent device.
+ * After this funtion called members related to plog
+ * is complete (e.g. nr_plogs is set).
+ */
+static int do_alloc_plog(struct wb_device *wb)
 {
 	int r = 0;
-	wb->plog_buf = kmalloc(9 << SECTOR_SHIFT, GFP_KERNEL);
-	if (!wb->plog_buf) {
-		return -ENOMEM;
-	}
 
 	switch (wb->type) {
 		case 0:
 			r = 0;
+			break;
 		case 1:
-			r = alloc_plog_t1(wb);
+			r = do_alloc_plog_t1(wb);
+			break;
 		default:
 			BUG();
-	}
-
-	if (r) {
-		kfree(wb->plog_buf);
-		return r;
 	}
 
 	return r;
 }
 
+static void do_free_plog(struct wb_device *wb)
+{
+	switch (wb->type) {
+		case 0:
+			break;
+		case 1:
+			dm_put_device(wb->ti, wb->plog_dev_t1);
+			break;
+		default:
+			BUG();
+	}
+}
+
+static int alloc_plog(struct wb_device *wb, bool clear)
+{
+	int r = 0;
+
+	wb->plog_buf = kmalloc((1 + 8) << SECTOR_SHIFT, GFP_KERNEL);
+	if (!wb->plog_buf) {
+		return -ENOMEM;
+	}
+
+	r = do_alloc_plog(wb);
+	if (r) {
+		WBERR("failed to alloc plog");
+		goto bad;
+	}
+
+	if (clear) {
+		r = clear_plog_device(wb)
+		if (r) {
+			WBERR("failed to clear plog device");
+			goto bad;
+		}
+	}
+
+	return r;
+
+bad:
+	kfree(wb->plog_buf);
+	return r;
+}
+
 void free_plog(struct wb_device *wb)
 {
-	if (wb->type == 1) {
-		dm_put_device(wb->ti, wb->plog_device_t1);
-	} else {
-		BUG();
-	}
+	do_free_plog(wb);
 	kfree(wb->plog_buf);
 }
 
@@ -1223,14 +1285,6 @@ static int harmless_init(struct wb_device *wb)
 {
 	int r = 0;
 
-	setup_geom_info(wb);
-
-	r = alloc_plog(wb);
-	if (r) {
-		WBERR("failed to alloc plog");
-		goto bad_alloc_plog;
-	}
-
 	wb->buf_1_pool = mempool_create_kmalloc_pool(16, 1 << SECTOR_SHIFT);
 	if (!wb->buf_1_pool) {
 		r = -ENOMEM;
@@ -1242,12 +1296,6 @@ static int harmless_init(struct wb_device *wb)
 		r = -ENOMEM;
 		WBERR("failed to allocate 8 sector pool");
 		goto bad_buf_8_pool;
-	}
-
-	r = init_rambuf_pool(wb);
-	if (r) {
-		WBERR("failed to allocate rambuf pool");
-		goto bad_init_rambuf_pool;
 	}
 
 	wb->flush_job_pool = mempool_create_kmalloc_pool(
@@ -1391,13 +1439,38 @@ bad_sync_daemon:
 	return r;
 }
 
+static int init_devices(struct wb_device *wb)
+{
+	int r = 0;
+
+	bool formatted = false;
+
+	r = might_format_cache_device(wb, &formatted);
+	if (r)
+		goto bad_might_format_cache;
+
+	setup_geom_info(wb);
+
+	r = init_rambuf_pool(wb);
+	if (r) {
+		WBERR("failed to allocate rambuf pool");
+		goto bad_init_rambuf_pool;
+	}
+
+	r = alloc_plog(wb, formatted);
+	if (r)
+		goto bad_alloc_plog;
+
+	return r;
+}
+
 int __must_check resume_cache(struct wb_device *wb)
 {
 	int r = 0;
 
-	r = might_format_cache_device(wb); /* FIXME relocate (with test). after harmless_init */
+	r = init_devices(wb);
 	if (r)
-		goto bad_might_format_cache;
+		goto bad_devices;
 	r = harmless_init(wb);
 	if (r)
 		goto bad_harmless_init;
@@ -1449,7 +1522,6 @@ bad_recover:
 bad_migrate_daemon:
 	harmless_free(wb);
 bad_harmless_init:
-bad_might_format_cache:
 
 	return r;
 }

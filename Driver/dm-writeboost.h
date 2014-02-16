@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
+#include <linux/crc32c.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
@@ -183,13 +184,18 @@ struct flush_job {
 
 /*----------------------------------------------------------------*/
 
+/*
+ * plog = metadata (512B) + data (512B-4096B)
+ * A plog contains a self-contained information of a accepted write.
+ */
+
 struct plog_meta_device {
 	__le64 id;
 	__le64 sector;
 	__le32 checksum; /* checksum of the data */
 	__u8 idx; /* idx in the segment */
 	__u8 len; /* length in sector */
-	__u8 padding[512 - 8 - 4 - 1 - 1];
+	__u8 padding[512 - 8 - 8 - 4 - 1 - 1];
 } __packed;
 
 /*----------------------------------------------------------------*/
@@ -377,14 +383,14 @@ struct wb_device {
 	 ********************/
 
 	/* common */
-	char *plog_dev_desc; /* passed as essential argv to describe the persistent device */
+	char plog_dev_desc[16]; /* passed as essential argv to describe the persistent device */
 	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
-	sector_t plog_size; /* FIXME To be computed */
+	sector_t plog_size; /* Const. the size of a plog in sector */
 	sector_t alloc_plog_head; /* next relative sector to allocate */
 	sector_t cur_plog_head; /* current relative sector to append */
 	sector_t plog_start_sector; /* the absolute start sector of the current plog */
 	void *plog_buf; /* 9 sector pre-allocated buffer for the plog write */
-	u32 nr_plogs;
+	u32 nr_plogs; /* Const. number of plogs */
 
 	/* type 1 */
 	struct dm_dev *plog_dev_t1;

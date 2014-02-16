@@ -769,8 +769,8 @@ void prepare_segment_header_device(void *rambuffer,
 	}
 
 	dest->id = cpu_to_le64(src->id);
-	dest->checksum = cpu_to_le32(calc_checksum(rambuffer, src->length));
 	dest->length = src->length;
+	dest->checksum = cpu_to_le32(calc_checksum(rambuffer, src->length));
 }
 
 /*----------------------------------------------------------------*/
@@ -798,15 +798,13 @@ static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 		}
 	}
 
-	if (min_id == SZ_MAX)
+	if (min_id == SZ_MAX) {
 		*idx = 0;
 		*id = 0;
-}
+	}
 
-static void rebuild_plog(void *rambuffer, void *plog_buf)
-{
-	/* TODO rebuiild metadata from log */
-	return 0;
+	kfree(buf);
+	return r;
 }
 
 static int flush_rambuf_t1(struct segment_header *seg, void *buf)
@@ -837,7 +835,7 @@ static int flush_plog(struct wb_device *wb, void *plog_buf)
 	if (r)
 		return -ENOMEM;
 
-	rebuild_plog(rambuf, plog_buf);
+	rebuild_rambuf(rambuf, plog_buf);
 
 	memcpy(&meta, plog_buf);
 	seg = get_segment_header_by_id(wb, le64_to_cpu(meta.id));
@@ -850,6 +848,7 @@ static int flush_plog(struct wb_device *wb, void *plog_buf)
 			BUG();
 	}
 
+	kfree(rambuf);
 	return r;
 }
 
@@ -924,6 +923,7 @@ static int flush_plogs(struct wb_device *wb)
 		id++;
 	}
 
+	kfree(buf);
 	return r;
 }
 

@@ -183,18 +183,12 @@ struct flush_job {
 
 /*----------------------------------------------------------------*/
 
-struct plog_meta {
-	u64 id;
-	u32 checksum; /* checksum of the data */
-	u8 idx; /* idx in the segment */
-	u8 len; /* length in sector */
-};
-
 struct plog_meta_device {
 	__le64 id;
-	__le32 checksum;
-	__u8 idx;
-	__u8 len;
+	__le64 sector;
+	__le32 checksum; /* checksum of the data */
+	__u8 idx; /* idx in the segment */
+	__u8 len; /* length in sector */
 	__u8 padding[512 - 8 - 4 - 1 - 1];
 } __packed;
 
@@ -424,6 +418,7 @@ void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct met
 u8 read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
 void invalidate_previous_cache(struct wb_device *, struct segment_header *,
 			       struct metablock *old_mb, bool overwrite_fullsize);
+void rebuild_rambuf(void *rambuf, void *plog_buf);
 
 /*----------------------------------------------------------------*/
 

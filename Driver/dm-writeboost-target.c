@@ -267,11 +267,16 @@ static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 	bio->bi_sector = sector;
 }
 
-static u8 io_offset(struct bio *bio)
+static u8 do_io_offset(sector_t sector)
 {
 	u32 tmp32;
-	div_u64_rem(bio->bi_sector, 1 << 3, &tmp32);
+	div_u64_rem(sector, 1 << 3, &tmp32);
 	return tmp32;
+}
+
+static u8 io_offset(struct bio *bio)
+{
+	return do_io_offset(bio->bi_sector);
 }
 
 static sector_t io_count(struct bio *bio)
@@ -358,6 +363,7 @@ static void taint_mb(struct wb_device *wb, struct segment_header *seg,
 	} else {
 		u8 i;
 		u8 acc_bits = 0;
+		/* FIXME i = 0; ... */
 		for (i = io_offset(bio); i < (io_offset(bio) + io_count(bio)); i++)
 			acc_bits += (1 << i);
 
@@ -630,6 +636,7 @@ do_append_plog(struct wb_device *wb, struct metablock *mb,
 	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
+		.sector = cpu_to_le64(bio->bi_sector),
 		.checkum = cpu_to_le32(cksum),
 		.idx = (u8) mb_idx_inseg(wb, mb->idx), /* FIXME remove u8 */
 		.len = io_count(bio),
@@ -662,6 +669,54 @@ append_plog(struct wb_device *wb, struct metablock *mb,
 	/* TODO FLUSH */
 
 	wake_up_interruptible(&wb->plog_wait_queue);
+}
+
+/*
+ * Rebuild a RAM buffer (metadata and data) from a plog
+ */
+void rebuild_rambuf(void *rambuffer, void *plog_buf)
+{
+	struct segment_header_device *seg = rambuffer;
+	struct metablock_device *mb;
+
+	void *cur = plog_buf;
+	while (true) {
+		u8 i;
+		u32 actual, expected;
+
+		struct plog_meta_device meta;
+		memcpy(&meta, cur, 512);
+		sector_cpu = le64_to_cpu(meta.sector);
+
+		actual = crc32c(WB_CKSUM_SEED, cur + 512, meta.len << SECTOR_SHIFT);
+		expected = le32_to_cpu(meta.checksum);
+
+		if (actual != expected)
+			return;
+
+		/* update header data */
+		seg->id = meta.id;
+		if ((meta.idx + 1) > seg->length)
+			seg->length = meta.idx + 1;
+
+		/* metadata */
+		mb = seg->mbarr + meta.idx;
+		mb->sector = meta.sector;
+		for (i = 0; i < meta.len; i++) {
+			mb->dirty_bits |= (1 << (do_io_offset(sector_cpu) + i));
+		}
+
+		/* data */
+		bytes = do_io_offset(sector_cpu) << SECTOR_SHIFT;
+		addr = rambuf + (1  + meta.idx) * (1 << 12) + bytes;
+		memcpy(addr, cur + 512, meta.len << SECTOR_SHIFT);
+
+		/* shift to the next "possible" plog */
+		cur += (1 + meta.len) << SECTOR_SHIFT;
+	}
+
+	/* checksum */
+	seg->checksum = cpu_to_le32(calc_checksum(rambuffer, seg->length));
 }
 
 static void advance_cursor(struct wb_device *wb)

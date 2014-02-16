@@ -215,7 +215,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf)
 		expected = le32_to_cpu(meta.checksum);
 
 		if (actual != expected)
-			return;
+			break;
 
 		/* update header data */
 		seg->id = meta.id;
@@ -240,6 +240,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf)
 
 	/* checksum */
 	seg->checksum = cpu_to_le32(calc_checksum(rambuffer, seg->length));
+	wbdebug("id:%u, len:%u, cksum:%u", seg->id, seg->length, calc_checksum(rambuffer, seg->length));
 }
 
 /*
@@ -977,7 +978,7 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 	struct dm_target *ti = wb->ti;
 
 	static struct dm_arg _args[] = {
-		{0, 0, "invalid buffer type"},
+		{0, 1, "invalid buffer type"},
 	};
 	unsigned tmp;
 
@@ -1002,10 +1003,10 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 		goto bad_get_cache;
 	}
 
+	/*
+	 * plog device will be later allocated with this descriptor.
+	 */
 	if (wb->type)
-		/*
-		 * plog device will be later allocated with this descriptor.
-		 */
 		strcpy(wb->plog_dev_desc, dm_shift_arg(as));
 
 	return r;

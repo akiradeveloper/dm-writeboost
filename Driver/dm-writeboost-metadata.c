@@ -982,7 +982,7 @@ static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 }
 
 static int flush_rambuf(struct wb_device *wb,
-			struct segment_header *seg, void *buf)
+			struct segment_header *seg, void *rambuf)
 {
 	int r = 0;
 	struct dm_io_request io_req = {
@@ -990,13 +990,17 @@ static int flush_rambuf(struct wb_device *wb,
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = buf,
+		.mem.ptr.addr = rambuf,
 	};
 	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
 		.sector = seg->start_sector,
-		.count = (seg->length + 1) << 3,
 	};
+
+	struct segment_header_device *hd = rambuf;
+	region.count = (hd->length + 1) << 3;
+	wbdebug("sector:%u, count:%u", region.sector, region.count);
+
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
 	if (r)
 		DMERR("I/O failed");
@@ -1015,7 +1019,7 @@ static int flush_plog(struct wb_device *wb, void *plog_buf)
 	struct plog_meta_device meta;
 	memcpy(&meta, plog_buf, 512);
 
-	rambuf = kzalloc(1 << wb->segment_size_order, GFP_KERNEL);
+	rambuf = kzalloc(1 << (wb->segment_size_order + SECTOR_SHIFT), GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
 	rebuild_rambuf(rambuf, plog_buf);
@@ -1054,7 +1058,6 @@ static int flush_plogs(struct wb_device *wb)
 		DMINFO("couldn't find any valid plog");
 		goto bad;
 	}
-
 
 	for (i = 0; i < wb->nr_plogs; i++) {
 		u32 j;
@@ -1281,8 +1284,9 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 
 		checksum1 = le32_to_cpu(header->checksum);
 		checksum2 = calc_checksum(rambuf, header->length);
+		wbdebug("id:%u, len:%u", header->id, header->length);
 		if (checksum1 != checksum2) {
-			DMWARN("checksum inconsistent id:%llu checksum:%u != %u",
+			DMWARN("checksum inconsistent id:%llu checksum: %u != %u",
 			       (long long unsigned int) le64_to_cpu(header->id),
 			       checksum1, checksum2);
 			continue;
@@ -1728,4 +1732,6 @@ void free_cache(struct wb_device *wb)
 	free_migration_buffer(wb);
 
 	harmless_free(wb);
+
+	free_devices(wb);
 }

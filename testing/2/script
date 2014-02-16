@@ -1,12 +1,19 @@
 #!/sin/sh
 
+T=$1
+
 . ../../config
 
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 sz=`blockdev --getsize ${BACKING}`
 
 echo Create device \(migration OFF\)
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+if [ $T -eq 0 ]; then
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+elif [ $T -eq 1 ]; then
+    exit
+fi
+
 echo 8 > /sys/bus/workqueue/devices/wbflusher/max_active
 
 mkfs.xfs -f /dev/mapper/writeboost-vol
@@ -28,7 +35,11 @@ umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
 echo Create device \(migration OFF\)
-dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+if [ $T -eq 0 ]; then
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+elif [ $T -eq 1 ]; then
+    exit
+fi
 
 echo "Drop writeboost caches (forcefully)"
 dmsetup message writeboost-vol 0 drop_caches

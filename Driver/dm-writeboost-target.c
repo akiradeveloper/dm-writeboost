@@ -761,16 +761,25 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 	 * If there is no more space for appending new log
 	 * it's time to request new plog.
 	 */
-	bool plog_nospace = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
+	bool plog_no_space = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
 
 	/*
 	 * If wb->cursor is 254, 509, ...
 	 * which is the last cache line in the segment.
 	 * We must flush the current segment and get the new one.
 	 */
-	bool rambuf_nospace = !mb_idx_inseg(wb, wb->cursor + 1);
+	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor + 1);
 
-	return plog_nospace || rambuf_nospace;
+	return plog_no_space || rambuf_no_space;
+}
+
+/*
+ * queue_current_buffer if the RAM buffer or plog can't make space any more.
+ */
+static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
+{
+	if (needs_queue_seg(wb, bio))
+		queue_current_buffer(wb);
 }
 
 struct per_bio_data {

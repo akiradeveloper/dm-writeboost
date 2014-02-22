@@ -421,6 +421,8 @@ void flush_current_buffer(struct wb_device *wb)
 {
 	struct segment_header *old_seg;
 
+	wbdebug("");
+
 	mutex_lock(&wb->io_lock);
 	old_seg = wb->current_seg;
 

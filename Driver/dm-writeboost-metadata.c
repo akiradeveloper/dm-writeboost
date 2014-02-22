@@ -1003,7 +1003,7 @@ static int flush_rambuf(struct wb_device *wb,
 
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
 	if (r)
-		DMERR("I/O failed");
+		WBERR("I/O failed");
 	return r;
 }
 
@@ -1027,7 +1027,7 @@ static int flush_plog(struct wb_device *wb, void *plog_buf)
 	seg = get_segment_header_by_id(wb, le64_to_cpu(meta.id));
 	r = flush_rambuf(wb, seg, rambuf);
 	if (r)
-		DMERR("failed to flush a plog");
+		WBERR("failed to flush a plog");
 
 	kfree(rambuf);
 	return r;
@@ -1046,7 +1046,7 @@ static int flush_plogs(struct wb_device *wb)
 
 	r = find_min_id_plog(wb, &next_id, &orig_idx);
 	if (r) {
-		DMERR("failed to find the min id on the plog device");
+		WBERR("failed to find the min id on the plog device");
 		goto bad;
 	}
 

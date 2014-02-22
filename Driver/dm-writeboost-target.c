@@ -362,10 +362,7 @@ static void prepare_new_seg(struct wb_device *wb)
 	u64 next_id = wb->current_seg->id + 1;
 	acquire_new_seg(wb, next_id);
 
-	/*
-	 * Set the cursor to the last of the flushed segment.
-	 */
-	wb->cursor = wb->current_seg->start_idx + (wb->nr_caches_inseg - 1);
+	wb->cursor = wb->current_seg->start_idx;
 	wb->current_seg->length = 0;
 }
 
@@ -414,6 +411,23 @@ static void queue_current_buffer(struct wb_device *wb)
 }
 
 /*
+ * Set cursor to the initial position.
+ * The initial position of the cursor is not the beginning
+ * of the segment but the one forward.
+ * This is to avoid incurring unnecessary queue_current_buffer()
+ * by being recognized; queue_current_buffer() is invoked if
+ * the cursor is the beginning of the segment (cursor means the
+ * next metablock index to allocate).
+ *
+ * cursor and length is consistent to avoid unexpected bug.
+ */
+void cursor_init(struct wb_device *wb)
+{
+	wb->cursor = wb->current_seg->start_idx + 1;
+	wb->current_seg->length = 1;
+}
+
+/*
  * Flush out all the transient data at a moment but _NOT_ persistently.
  * Clean up the writes before termination is an example of the usecase.
  */
@@ -428,11 +442,7 @@ void flush_current_buffer(struct wb_device *wb)
 
 	queue_current_buffer(wb);
 
-	/*
-	 * cursor and seg->length should be consistent.
-	 */
-	wb->cursor = wb->current_seg->start_idx;
-	wb->current_seg->length = 1;
+	cursor_init(wb);
 	mutex_unlock(&wb->io_lock);
 
 	wait_for_flushing(wb, old_seg->id);
@@ -751,27 +761,27 @@ write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
 	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_size);
 }
 
-static void advance_cursor(struct wb_device *wb)
+static u32 advance_cursor(struct wb_device *wb)
 {
-	u32 tmp32;
+	u32 tmp32, old = wb->cursor;
 	div_u64_rem(wb->cursor + 1, wb->nr_caches, &tmp32);
 	wb->cursor = tmp32;
+	return old;
 }
 
 static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 {
 	/*
-	 * If there is no more space for appending new log
+	 * if there is no more space for appending new log
 	 * it's time to request new plog.
 	 */
 	bool plog_no_space = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
 
 	/*
-	 * If wb->cursor is 254, 509, ...
-	 * which is the last cache line in the segment.
-	 * We must flush the current segment and get the new one.
+	 * we request a new RAM buffer (hence segment)
+	 * if cursor is at the begining of the "next" segment.
 	 */
-	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor + 1);
+	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
 
 	return plog_no_space || rambuf_no_space;
 }
@@ -781,6 +791,9 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
  */
 static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 {
+	if (!bio->bi_rw)
+		return;
+
 	if (needs_queue_seg(wb, bio))
 		queue_current_buffer(wb);
 }
@@ -813,12 +826,12 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	DEAD(bio_endio(bio, -EIO); return DM_MAPIO_SUBMITTED);
 
 	/*
-	 * We only discard sectors on only the backing store because
+	 * we only discard sectors on only the backing store because
 	 * blocks on cache device are unlikely to be discarded.
 	 * Discarding blocks is likely to be operated long after writing;
 	 * the block is likely to be migrated before that.
 	 *
-	 * Moreover, it is very hard to implement discarding cache blocks.
+	 * moreover, it is very hard to implement discarding cache blocks.
 	 */
 	if (bio->bi_rw & REQ_DISCARD) {
 		bio_remap(bio, origin_dev, bio->bi_sector);
@@ -826,10 +839,10 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	}
 
 	/*
-	 * Defered ACK for flush requests
+	 * defered ACK for flush requests
 	 *
-	 * In device-mapper, bio with REQ_FLUSH is guaranteed to have no data.
-	 * So, we can simply defer it for lazy execution.
+	 * in device-mapper, bio with REQ_FLUSH is guaranteed to have no data.
+	 * so, we can simply defer it for lazy execution.
 	 */
 	if (bio->bi_rw & REQ_FLUSH) {
 		BUG_ON(bio->bi_size);
@@ -840,6 +853,9 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			wbdebug();
 			int r = 0;
 			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+			wbdebug();
+			LIVE_DEAD(bio_endio(bio, 0),
+				  bio_endio(bio, -EIO));
 		}
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -847,6 +863,13 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	wbdebug();
 
 	mutex_lock(&wb->io_lock);
+	/*
+	 * for design clarity, we insert this function here right after mutex is taken.
+	 * making the state valid before anything else is always a good practice in the
+	 * in programming.
+	 */
+	might_queue_current_buffer(wb, bio);
+
 	mb = ht_lookup(wb, head, &key);
 	if (mb) {
 		found_seg = mb_to_seg(wb, mb);
@@ -920,6 +943,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 	if (found) {
 		if (unlikely(on_buffer)) {
+			plog_head = advance_plog_head(wb, bio);
 			mutex_unlock(&wb->io_lock);
 			wbdebug();
 			goto write_on_buffer;
@@ -933,17 +957,15 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	}
 
 write_not_found:
-	might_queue_current_buffer(wb, bio);
 	plog_head = advance_plog_head(wb, bio);
 
-	advance_cursor(wb);
-
-	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, wb->cursor);
+	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
 	BUG_ON(new_mb->dirty_bits);
 	ht_register(wb, head, new_mb, &key);
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);
+
 	wbdebug();
 
 	mb = new_mb;

@@ -65,10 +65,8 @@ process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 	if (has_barrier) {
 		struct bio *bio;
 		while ((bio = bio_list_pop(&job->barrier_ios))) {
-			LIVE_DEAD(
-				bio_endio(bio, 0),
-				bio_endio(bio, -EIO)
-			);
+			LIVE_DEAD(bio_endio(bio, 0),
+				  bio_endio(bio, -EIO));
 		}
 	}
 

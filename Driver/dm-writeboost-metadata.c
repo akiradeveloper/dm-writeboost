@@ -1164,7 +1164,8 @@ void prepare_segment_header_device(void *rambuffer,
 	struct segment_header_device *dest = rambuffer;
 	u32 i;
 
-	BUG_ON((src->length - 1) != mb_idx_inseg(wb, wb->cursor));
+	wbdebug("%u ?= %u", src->length, wb->cursor - src->start_idx);
+	BUG_ON((src->length) != (wb->cursor - src->start_idx));
 
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;
@@ -1377,11 +1378,7 @@ static void prepare_first_seg(struct wb_device *wb)
 	u64 init_segment_id = atomic64_read(&wb->last_flushed_segment_id) + 1;
 	acquire_new_seg(wb, init_segment_id);
 
-	/*
-	 * cursor and seg->length should be consistent.
-	 */
-	wb->cursor = wb->current_seg->start_idx;
-	wb->current_seg->length = 1;
+	cursor_init(wb);
 }
 
 /*

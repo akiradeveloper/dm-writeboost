@@ -1049,6 +1049,7 @@ static int flush_plogs(struct wb_device *wb)
 		WBERR("failed to find the min id on the plog device");
 		goto bad;
 	}
+	wbdebug();
 
 	/*
 	 * If there is no valid plog on the plog device we quit.
@@ -1058,6 +1059,7 @@ static int flush_plogs(struct wb_device *wb)
 		DMINFO("couldn't find any valid plog");
 		goto bad;
 	}
+	wbdebug();
 
 	for (i = 0; i < wb->nr_plogs; i++) {
 		u32 j;
@@ -1073,6 +1075,7 @@ static int flush_plogs(struct wb_device *wb)
 		flush_plog(wb, plog_buf);
 		next_id++;
 	}
+	wbdebug();
 
 bad:
 	kfree(plog_buf);
@@ -1400,6 +1403,7 @@ static int __must_check recover_cache(struct wb_device *wb)
 		WBERR("failed to replay log");
 		return r;
 	}
+	wbdebug();
 
 	prepare_first_seg(wb);
 	return 0;

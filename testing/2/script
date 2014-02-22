@@ -11,18 +11,22 @@ echo Create device \(migration OFF\)
 if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 elif [ $T -eq 1 ]; then
-    exit
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
 fi
 
 echo 8 > /sys/bus/workqueue/devices/wbflusher/max_active
 
+echo mk.xfs ...
 mkfs.xfs -f /dev/mapper/writeboost-vol
 
+echo mounting ...
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
 RUBY=ruby-1.9.3-p362
 cp ../${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
+
+echo extract ruby.tar.gz ...
 tar xvfz ${RUBY}.tar.gz > /dev/null
 
 dmsetup suspend writeboost-vol
@@ -38,7 +42,7 @@ echo Create device \(migration OFF\)
 if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 elif [ $T -eq 1 ]; then
-    exit
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
 fi
 
 echo "Drop writeboost caches (forcefully)"

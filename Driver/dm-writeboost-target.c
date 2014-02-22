@@ -421,7 +421,7 @@ void flush_current_buffer(struct wb_device *wb)
 {
 	struct segment_header *old_seg;
 
-	wbdebug("");
+	wbdebug();
 
 	mutex_lock(&wb->io_lock);
 	old_seg = wb->current_seg;
@@ -834,13 +834,17 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	if (bio->bi_rw & REQ_FLUSH) {
 		BUG_ON(bio->bi_size);
 		if (!wb->type) {
+			wbdebug();
 			queue_barrier_io(wb, bio);
 		} else {
+			wbdebug();
 			int r = 0;
 			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 		}
 		return DM_MAPIO_SUBMITTED;
 	}
+
+	wbdebug();
 
 	mutex_lock(&wb->io_lock);
 	mb = ht_lookup(wb, head, &key);
@@ -917,21 +921,22 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	if (found) {
 		if (unlikely(on_buffer)) {
 			mutex_unlock(&wb->io_lock);
+			wbdebug();
 			goto write_on_buffer;
 		} else {
 			invalidate_previous_cache(wb, found_seg, mb,
 						  io_fullsize(bio));
 			atomic_dec(&found_seg->nr_inflight_ios);
+			wbdebug();
 			goto write_not_found;
 		}
 	}
 
 write_not_found:
-	if (needs_queue_seg(wb, bio))
-		queue_current_buffer(wb);
+	might_queue_current_buffer(wb, bio);
+	plog_head = advance_plog_head(wb, bio);
 
 	advance_cursor(wb);
-	plog_head = advance_plog_head(wb, bio);
 
 	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, wb->cursor);
 	BUG_ON(new_mb->dirty_bits);
@@ -939,6 +944,7 @@ write_not_found:
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);
+	wbdebug();
 
 	mb = new_mb;
 
@@ -947,7 +953,9 @@ write_on_buffer:
 
 	write_on_rambuffer(wb, wb->current_seg, mb, bio);
 
+	wbdebug("cur_plog_head:%u, plog_head:%u", wb->cur_plog_head, plog_head);
 	append_plog(wb, mb, bio, plog_head);
+	wbdebug();
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
@@ -959,6 +967,7 @@ write_on_buffer:
 	 * And the data is now stored in the RAM buffer.
 	 */
 	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
+		wbdebug();
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1232,6 +1241,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		ti->error = "failed to resume cache";
 		goto bad_resume_cache;
 	}
+	wbdebug();
 
 	r = consume_tunable_argv(wb, &as);
 	if (r) {
@@ -1281,6 +1291,7 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	int r = 0;
 	struct wb_device *wb = ti->private;
 
+	wbdebug();
 	flush_current_buffer(wb);
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 }

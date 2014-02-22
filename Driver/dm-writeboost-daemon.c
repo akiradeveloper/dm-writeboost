@@ -40,6 +40,7 @@ void flush_barrier_ios(struct work_struct *work)
 	if (bio_list_empty(&wb->barrier_ios))
 		return;
 
+	wbdebug();
 	atomic64_inc(&wb->count_non_full_flushed);
 	flush_current_buffer(wb);
 }
@@ -521,6 +522,8 @@ int sync_proc(void *data)
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
+
+		wbdebug();
 
 		flush_current_buffer(wb);
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));

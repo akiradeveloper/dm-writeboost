@@ -1375,8 +1375,7 @@ static void prepare_first_seg(struct wb_device *wb)
 	acquire_new_seg(wb, init_segment_id);
 
 	/*
-	 * We always keep the intergrity between cursor
-	 * and seg->length.
+	 * cursor and seg->length should be consistent.
 	 */
 	wb->cursor = wb->current_seg->start_idx;
 	wb->current_seg->length = 1;

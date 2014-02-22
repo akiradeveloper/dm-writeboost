@@ -428,6 +428,9 @@ void flush_current_buffer(struct wb_device *wb)
 
 	queue_current_buffer(wb);
 
+	/*
+	 * cursor and seg->length should be consistent.
+	 */
 	wb->cursor = wb->current_seg->start_idx;
 	wb->current_seg->length = 1;
 	mutex_unlock(&wb->io_lock);

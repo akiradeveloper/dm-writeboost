@@ -781,7 +781,9 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 	 * if there is no more space for appending new log
 	 * it's time to request new plog.
 	 */
-	bool plog_no_space = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
+	bool plog_no_space = false;
+	if (wb->type)
+		plog_no_space = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
 
 	/*
 	 * we request a new RAM buffer (hence segment)
@@ -800,8 +802,10 @@ static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 	if (!bio->bi_rw)
 		return;
 
-	if (needs_queue_seg(wb, bio))
+	if (needs_queue_seg(wb, bio)) {
+		wbdebug();
 		queue_current_buffer(wb);
+	}
 }
 
 struct per_bio_data {

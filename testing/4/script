@@ -16,20 +16,23 @@ sz=`blockdev --getsize ${BACKING}`
 if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 2 allow_migrate 1"
 elif [ $T -eq 1 ]; then
-    exit
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 2 segment_size_order 10 4 allow_migrate 1 sync_interval 0"
 fi
 
+echo making filsystem
 #mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
 mkfs.ext4 /dev/mapper/writeboost-vol > /dev/null
 
 # migrate the initial metadata of the fs
 dmsetup message writeboost-vol 0 drop_caches
 
+echo mount
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 
 rm -rf /mnt/writeboost-vol/*
 cd /mnt/writeboost-vol
 dd if=/dev/urandom of=orig4k oflag=direct bs=4096 count=16
+echo creating random files
 i=0
 while [ $i -ne 1000 ]
 do
@@ -45,11 +48,12 @@ dmsetup status writeboost-vol
 
 #dmsetup message writeboost-vol 0 drop_caches
 
+echo unmount
 fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
-echo mount backing device
+echo mount backing device only
 mount $BACKING /mnt/writeboost-vol
 if  [ $? -ne 0 ]; then
     echo BUG: failed to mount backing device only

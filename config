@@ -13,15 +13,16 @@ BACKING=/dev/vg2/back18g
 # BACKING=/dev/sda2
 export BACKING
 
-# CACHE=/dev/vg1/cache3m
-CACHE=/dev/vg1/cache2g
+CACHE=/dev/vg1/cache3m
+# CACHE=/dev/vg1/cache2g
 # CACHE=/dev/vdd2
 # CACHE=/dev/sdd2
 # CACHE=/dev/loop0
 # CACHE=/dev/sda1
 export CACHE
 
-PLOG=/dev/vg1/cache3m
+PLOG=/dev/vg1/cache2g
+# PLOG=/dev/vg1/cache3m
 export PLOG
 
 echo BACKING: ${BACKING}

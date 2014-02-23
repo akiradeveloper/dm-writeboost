@@ -763,9 +763,15 @@ write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
 
 static u32 advance_cursor(struct wb_device *wb)
 {
-	u32 tmp32, old = wb->cursor;
-	div_u64_rem(wb->cursor + 1, wb->nr_caches, &tmp32);
-	wb->cursor = tmp32;
+	u32 old;
+	/*
+	 * if cursor is out of boundary
+	 * we put it back to the origin (i.e. log rotate)
+	 */
+	if (wb->cursor == wb->nr_caches)
+		wb->cursor = 0;
+	old = wb->cursor;
+	wb->cursor++;
 	return old;
 }
 

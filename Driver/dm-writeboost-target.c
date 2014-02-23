@@ -341,6 +341,8 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
+	wbdebug("WAIT MIG");
+
 	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
 	BUG_ON(count_dirty_caches_remained(new_seg));
 
@@ -355,6 +357,8 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 	acquire_new_rambuffer(wb, id);
 	acquire_new_plog(wb, id);
+
+	wbdebug("ACQUIRED RESOURCES");
 }
 
 static void prepare_new_seg(struct wb_device *wb)
@@ -438,12 +442,14 @@ void flush_current_buffer(struct wb_device *wb)
 	wbdebug();
 
 	mutex_lock(&wb->io_lock);
+	wbdebug("lock");
 	old_seg = wb->current_seg;
 
 	queue_current_buffer(wb);
 
 	cursor_init(wb);
 	mutex_unlock(&wb->io_lock);
+	wbdebug("unlock");
 
 	wait_for_flushing(wb, old_seg->id);
 }
@@ -777,11 +783,12 @@ static u32 advance_cursor(struct wb_device *wb)
 
 static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 {
+	bool plog_no_space = false, rambuf_no_space = false;
+
 	/*
 	 * if there is no more space for appending new log
 	 * it's time to request new plog.
 	 */
-	bool plog_no_space = false;
 	if (wb->type)
 		plog_no_space = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
 
@@ -789,7 +796,7 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 	 * we request a new RAM buffer (hence segment)
 	 * if cursor is at the begining of the "next" segment.
 	 */
-	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
+	rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
 
 	return plog_no_space || rambuf_no_space;
 }
@@ -803,8 +810,9 @@ static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 		return;
 
 	if (needs_queue_seg(wb, bio)) {
-		wbdebug();
+		wbdebug("BEFORE sector:%u", bio->bi_sector);
 		queue_current_buffer(wb);
+		wbdebug("AFTER sector:%u", bio->bi_sector);
 	}
 }
 
@@ -844,6 +852,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	 * moreover, it is very hard to implement discarding cache blocks.
 	 */
 	if (bio->bi_rw & REQ_DISCARD) {
+		wbdebug("DISCARD");
 		bio_remap(bio, origin_dev, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
@@ -855,24 +864,23 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	 * so, we can simply defer it for lazy execution.
 	 */
 	if (bio->bi_rw & REQ_FLUSH) {
+		wbdebug("FLUSH");
 		BUG_ON(bio->bi_size);
 		if (!wb->type) {
-			wbdebug();
 			queue_barrier_io(wb, bio);
 		} else {
-			wbdebug();
 			int r = 0;
 			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-			wbdebug();
 			LIVE_DEAD(bio_endio(bio, 0),
 				  bio_endio(bio, -EIO));
 		}
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	wbdebug();
+	wbdebug("START sector:%u", bio->bi_sector);
 
 	mutex_lock(&wb->io_lock);
+	wbdebug("lock sector:%u", bio->bi_sector);
 	/*
 	 * for design clarity, we insert this function here right after mutex is taken.
 	 * making the state valid before anything else is always a good practice in the
@@ -892,6 +900,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		on_buffer = is_on_buffer(wb, mb->idx);
 
 	inc_stat(wb, rw, found, on_buffer, io_fullsize(bio));
+	wbdebug("rw:%d, found:%d, on_buffer:%d, fullsize:%d", rw, found, on_buffer, io_fullsize(bio));
 
 	/*
 	 * (Locking)
@@ -913,6 +922,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		u8 dirty_bits;
 
 		mutex_unlock(&wb->io_lock);
+		wbdebug("unlock sector:%u", bio->bi_sector);
 
 		if (!found) {
 			bio_remap(bio, origin_dev, bio->bi_sector);
@@ -921,11 +931,15 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 		dirty_bits = read_mb_dirtiness(wb, found_seg, mb);
 		if (unlikely(on_buffer)) {
-			if (dirty_bits)
+			if (dirty_bits) {
+				wbdebug("BEFORE sector:%u", bio->bi_sector);
 				migrate_buffered_mb(wb, mb, dirty_bits);
+				wbdebug("AFTER sector:%u", bio->bi_sector);
+			}
 
 			atomic_dec(&found_seg->nr_inflight_ios);
 			bio_remap(bio, origin_dev, bio->bi_sector);
+			wbdebug("REMAP");
 			return DM_MAPIO_REMAPPED;
 		}
 
@@ -955,7 +969,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		if (unlikely(on_buffer)) {
 			plog_head = advance_plog_head(wb, bio);
 			mutex_unlock(&wb->io_lock);
-			wbdebug();
+			wbdebug("unlock sector:%u", bio->bi_sector);
 			goto write_on_buffer;
 		} else {
 			invalidate_previous_cache(wb, found_seg, mb,
@@ -975,8 +989,9 @@ write_not_found:
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);
+	wbdebug("unlock sector:%u", bio->bi_sector);
 
-	wbdebug();
+	/* wbdebug(); */
 
 	mb = new_mb;
 
@@ -985,9 +1000,9 @@ write_on_buffer:
 
 	write_on_rambuffer(wb, wb->current_seg, mb, bio);
 
-	wbdebug("cur_plog_head:%u, plog_head:%u", wb->cur_plog_head, plog_head);
+	/* wbdebug("cur_plog_head:%u, plog_head:%u", wb->cur_plog_head, plog_head); */
 	append_plog(wb, mb, bio, plog_head);
-	wbdebug();
+	/* wbdebug(); */
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
@@ -999,7 +1014,7 @@ write_on_buffer:
 	 * And the data is now stored in the RAM buffer.
 	 */
 	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
-		wbdebug();
+		wbdebug("FUA");
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}

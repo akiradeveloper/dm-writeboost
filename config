@@ -21,9 +21,11 @@ CACHE=/dev/vg1/cache3m
 # CACHE=/dev/sda1
 export CACHE
 
-PLOG=/dev/vg1/cache2g
+# PLOG=/dev/vg1/cache2g
 # PLOG=/dev/vg1/cache3m
+PLOG=/dev/vdd2
 export PLOG
 
 echo BACKING: ${BACKING}
 echo CACHE  : ${CACHE}
+echo PLOG   : ${PLOG}

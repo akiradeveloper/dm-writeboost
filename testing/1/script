@@ -16,6 +16,7 @@ fi
 echo 8 > /sys/bus/workqueue/devices/wbflusher/max_active
 
 mkfs.ext4 /dev/mapper/writeboost-vol > /dev/null
+#mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
 
 mount ${OPTIONS} /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*

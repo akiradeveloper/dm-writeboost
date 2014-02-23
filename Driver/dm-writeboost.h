@@ -40,8 +40,13 @@
  * Only for debugging.
  * Don't include this macro in the production code.
  */
+// #define DEBUG
+#ifdef DEBUG
 #define wbdebug(f, args...) \
 	DMINFO("debug@%s() L.%d " f, __func__, __LINE__, ## args)
+#else
+#define wbdebug(f, args...)
+#endif
 
 #define WBERR(f, args...) \
 	DMERR("err@%s() " f, __func__, ## args)

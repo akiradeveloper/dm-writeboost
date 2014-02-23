@@ -17,11 +17,12 @@ if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 2 allow_migrate 1"
 elif [ $T -eq 1 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 2 segment_size_order 10 4 allow_migrate 1 sync_interval 0"
+    # dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 5 rambuf_pool_amount 4096 8 enable_migration_modulator 1 sync_interval 0 update_record_interval 1 barrier_deadline_ms 3"
 fi
 
 echo making filsystem
-#mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
 mkfs.ext4 /dev/mapper/writeboost-vol > /dev/null
+# mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
 
 # migrate the initial metadata of the fs
 dmsetup message writeboost-vol 0 drop_caches

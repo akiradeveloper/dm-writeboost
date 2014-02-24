@@ -956,15 +956,15 @@ static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 	u32 i;
 	u64 min_id = SZ_MAX, id_cpu;
 
-	void *buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	void *plog_buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
 
 	*id = 0; *idx = 0;
 	for (i = 0; i < wb->nr_plogs; i++) {
 		struct plog_meta_device meta;
-		read_plog(buf, wb, i);
-		memcpy(&meta, buf, 512);
+		read_plog(plog_buf, wb, i);
+		memcpy(&meta, plog_buf, 512);
 
 		id_cpu = le64_to_cpu(meta.id);
 
@@ -977,7 +977,7 @@ static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 		}
 	}
 
-	kfree(buf);
+	kfree(plog_buf);
 	return r;
 }
 
@@ -1039,8 +1039,12 @@ static int flush_plogs(struct wb_device *wb)
 	u64 next_id;
 	u32 i, orig_idx;
 	struct plog_meta_device meta;
+	void *plog_buf;
 
-	void *plog_buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	if (!wb->type)
+		return 0;
+
+	plog_buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
 

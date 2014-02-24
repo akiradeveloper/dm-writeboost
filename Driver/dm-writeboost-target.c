@@ -163,11 +163,11 @@ do_append_plog(struct wb_device *wb, struct metablock *mb,
 	memcpy(wb->plog_buf + 512, bio_data(bio), bio->bi_size);
 
 	switch (wb->type) {
-		case 1:
-			do_append_plog_t1(wb, bio, plog_head);
-			break;
-		default:
-			BUG();
+	case 1:
+		do_append_plog_t1(wb, bio, plog_head);
+		break;
+	default:
+		BUG();
 	}
 }
 
@@ -225,9 +225,8 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf)
 		/* metadata */
 		mb = seg->mbarr + meta.idx;
 		mb->sector = meta.sector;
-		for (i = 0; i < meta.len; i++) {
+		for (i = 0; i < meta.len; i++)
 			mb->dirty_bits |= (1 << (do_io_offset(sector_cpu) + i));
-		}
 
 		/* data */
 		bytes = do_io_offset(sector_cpu) << SECTOR_SHIFT;

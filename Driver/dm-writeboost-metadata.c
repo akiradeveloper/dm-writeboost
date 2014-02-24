@@ -724,11 +724,11 @@ static int do_clear_plog_dev(struct wb_device *wb, u32 idx)
 	int r = 0;
 
 	switch (wb->type) {
-		case 1:
-			r = clear_plog_dev_t1(wb, idx);
-			break;
-		default:
-			BUG();
+	case 1:
+		r = clear_plog_dev_t1(wb, idx);
+		break;
+	default:
+		BUG();
 	}
 
 	return r;
@@ -773,11 +773,10 @@ static int do_alloc_plog_dev_t1(struct wb_device *wb)
 	 * The number of plogs is at most the number ram buffers
 	 * i.e. more plogs are meaningless.
 	 */
-	if (nr_max > wb->nr_rambuf_pool) {
+	if (nr_max > wb->nr_rambuf_pool)
 		wb->nr_plogs = wb->nr_rambuf_pool;
-	} else {
+	else
 		wb->nr_plogs = min(wb->nr_plogs, nr_max);
-	}
 
 	return r;
 }
@@ -792,11 +791,11 @@ static int do_alloc_plog_dev(struct wb_device *wb)
 	int r = 0;
 
 	switch (wb->type) {
-		case 1:
-			r = do_alloc_plog_dev_t1(wb);
-			break;
-		default:
-			BUG();
+	case 1:
+		r = do_alloc_plog_dev_t1(wb);
+		break;
+	default:
+		BUG();
 	}
 
 	return r;
@@ -805,11 +804,11 @@ static int do_alloc_plog_dev(struct wb_device *wb)
 static void do_free_plog_dev(struct wb_device *wb)
 {
 	switch (wb->type) {
-		case 1:
-			dm_put_device(wb->ti, wb->plog_dev_t1);
-			break;
-		default:
-			BUG();
+	case 1:
+		dm_put_device(wb->ti, wb->plog_dev_t1);
+		break;
+	default:
+		BUG();
 	}
 }
 
@@ -828,9 +827,8 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 	init_waitqueue_head(&wb->plog_wait_queue);
 
 	wb->plog_buf = kmalloc((1 + 8) << SECTOR_SHIFT, GFP_KERNEL);
-	if (!wb->plog_buf) {
+	if (!wb->plog_buf)
 		return -ENOMEM;
-	}
 
 	r = do_alloc_plog_dev(wb);
 	if (r) {
@@ -855,7 +853,7 @@ bad_alloc_plog_dev:
 	return r;
 }
 
-void free_plog_dev(struct wb_device *wb)
+static void free_plog_dev(struct wb_device *wb)
 {
 	if (!wb->type)
 		return;
@@ -939,11 +937,11 @@ static int read_plog(void *buf, struct wb_device *wb, u32 idx)
 	int r = 0;
 
 	switch (wb->type) {
-		case 1:
-			r = read_plog_t1(buf, wb, idx);
-			break;
-		default:
-			BUG();
+	case 1:
+		r = read_plog_t1(buf, wb, idx);
+		break;
+	default:
+		BUG();
 	}
 
 	return r;

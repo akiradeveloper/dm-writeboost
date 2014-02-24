@@ -806,7 +806,7 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
  */
 static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 {
-	if (!bio->bi_rw)
+	if (bio_data_dir(bio) == READ)
 		return;
 
 	if (needs_queue_seg(wb, bio)) {
@@ -824,7 +824,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	struct wb_device *wb = ti->private;
 	struct dm_dev *origin_dev = wb->origin_dev;
-	int rw = bio_data_dir(bio);
+	int rw = bio_data_dir(bio) == WRITE;
 	struct lookup_key key = {
 		.sector = calc_cache_alignment(bio->bi_sector),
 	};

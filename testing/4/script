@@ -21,8 +21,9 @@ elif [ $T -eq 1 ]; then
 fi
 
 echo making filsystem
-mkfs.ext4 /dev/mapper/writeboost-vol > /dev/null
+mkfs.ext4 -v /dev/mapper/writeboost-vol
 # mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
+exit
 
 # migrate the initial metadata of the fs
 dmsetup message writeboost-vol 0 drop_caches

@@ -819,6 +819,20 @@ struct per_bio_data {
 	void *ptr;
 };
 
+struct deferred_flush_bio {
+	struct work_struct work;
+	struct bio *bio;
+};
+
+static void process_deferred_flush_bio(struct work_struct *work)
+{
+	struct deferred_flush_bio *dfb = container_of(work, struct deferred_flush_bio, work);
+	schedule_timeout_interruptible(msecs_to_jiffies(1000));
+	bio_endio(dfb->bio, 0);
+	kfree(dfb);
+	DMINFO("flushed"); /* OK */
+}
+
 static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	struct wb_device *wb = ti->private;
@@ -840,7 +854,10 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
 	map_context->ptr = NULL;
 
-	DEAD(bio_endio(bio, -EIO); return DM_MAPIO_SUBMITTED);
+	DEAD(
+		bio_endio(bio, -EIO);
+		return DM_MAPIO_SUBMITTED
+	);
 
 	/*
 	 * we only discard sectors on only the backing store because
@@ -863,23 +880,32 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	 * so, we can simply defer it for lazy execution.
 	 */
 	if (bio->bi_rw & REQ_FLUSH) {
-		wbdebug("FLUSH");
+		WBINFO("FLUSH");
 		BUG_ON(bio->bi_size);
-		if (!wb->type) {
-			queue_barrier_io(wb, bio);
-		} else {
+		/* if (!wb->type) { */
+		/* bio_endio(bio, 0); */ /* NOT OK */
+		/* bio_remap(bio, wb->cache_dev, 0); */
+		/* generic_make_request(bio); */
+			/* queue_barrier_io(wb, bio); #<{(| OK |)}># */
+		/* } else { */
 			int r = 0;
-			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-			LIVE_DEAD(bio_endio(bio, 0),
-				  bio_endio(bio, -EIO));
-		}
+			/* IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL)); */
+			struct deferred_flush_bio *dfb = kmalloc(sizeof(*dfb), GFP_NOIO);
+			dfb->bio = bio;
+			INIT_WORK(&dfb->work, process_deferred_flush_bio);
+			queue_work(wb->flusher_wq, &dfb->work);
+			/* schedule_work(&dfb->work); */
+		/* 	LIVE_DEAD(bio_endio(bio, 0), */
+		/* 		  bio_endio(bio, -EIO)); */
+		/* } */
+		DMINFO("FLUSHED");
 		return DM_MAPIO_SUBMITTED;
 	}
 
 	wbdebug("START sector:%u", bio->bi_sector);
 
 	mutex_lock(&wb->io_lock);
-	wbdebug("lock sector:%u", bio->bi_sector);
+	/* wbdebug("lock sector:%u", bio->bi_sector); */
 	/*
 	 * for design clarity, we insert this function here right after mutex is taken.
 	 * making the state valid before anything else is always a good practice in the
@@ -921,7 +947,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		u8 dirty_bits;
 
 		mutex_unlock(&wb->io_lock);
-		wbdebug("unlock sector:%u", bio->bi_sector);
+		/* wbdebug("unlock sector:%u", bio->bi_sector); */
 
 		if (!found) {
 			bio_remap(bio, origin_dev, bio->bi_sector);
@@ -968,7 +994,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 		if (unlikely(on_buffer)) {
 			plog_head = advance_plog_head(wb, bio);
 			mutex_unlock(&wb->io_lock);
-			wbdebug("unlock sector:%u", bio->bi_sector);
+			/* wbdebug("unlock sector:%u", bio->bi_sector); */
 			goto write_on_buffer;
 		} else {
 			invalidate_previous_cache(wb, found_seg, mb,
@@ -988,7 +1014,7 @@ write_not_found:
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);
-	wbdebug("unlock sector:%u", bio->bi_sector);
+	/* wbdebug("unlock sector:%u", bio->bi_sector); */
 
 	/* wbdebug(); */
 

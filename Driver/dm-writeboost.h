@@ -40,7 +40,7 @@
  * Only for debugging.
  * Don't include this macro in the production code.
  */
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
 #define wbdebug(f, args...) \
 	DMINFO("debug@%s() L.%d " f, __func__, __LINE__, ## args)

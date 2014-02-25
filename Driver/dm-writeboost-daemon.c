@@ -52,6 +52,7 @@ process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 {
 	int r = 0;
 	bool has_barrier = !bio_list_empty(&job->barrier_ios);
+	wbdebug("has_barrier:%d", has_barrier);
 
 	/*
 	 * Make all the data until now persistent.
@@ -107,7 +108,9 @@ void flush_proc(struct work_struct *work)
 	 * To serialize barrier ACK in logging we wait for the previous
 	 * segment to be persistently written (if needed).
 	 */
+	wbdebug("WAIT BEFORE:%u", seg->id);
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
+	wbdebug("WAIT AFTER:%u", seg->id);
 
 	process_deferred_barriers(wb, job);
 
@@ -117,6 +120,7 @@ void flush_proc(struct work_struct *work)
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up_interruptible(&wb->flush_wait_queue);
+	wbdebug("WAKE UP:%u", seg->id);
 
 	mempool_free(job, wb->flush_job_pool);
 }

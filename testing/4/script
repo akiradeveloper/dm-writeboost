@@ -3,7 +3,7 @@
 # Description
 # -----------
 # 1. write many files with cache device
-# 2. detach cache without all dirty data migrated
+# 2. detach cache without migrated
 # 3. mount the filesystem without cache device
 
 T=$1
@@ -23,7 +23,6 @@ fi
 echo making filsystem
 mkfs.ext4 -v /dev/mapper/writeboost-vol
 # mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
-exit
 
 # migrate the initial metadata of the fs
 dmsetup message writeboost-vol 0 drop_caches

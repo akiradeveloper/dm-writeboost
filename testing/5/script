@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# Description
+# -----------
+# what if disk fails?
+
 T=$1
 
 . ../../config
@@ -31,3 +35,5 @@ dmsetup remove writeboost-vol
 if [ $? -ne 0 ]; then
     echo BUG: remove failed
 fi
+
+dmsetup remove writeboost-vol

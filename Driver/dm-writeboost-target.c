@@ -889,14 +889,15 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			/* queue_barrier_io(wb, bio); #<{(| OK |)}># */
 		/* } else { */
 			int r = 0;
-			/* IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL)); */
-			struct deferred_flush_bio *dfb = kmalloc(sizeof(*dfb), GFP_NOIO);
-			dfb->bio = bio;
-			INIT_WORK(&dfb->work, process_deferred_flush_bio);
-			queue_work(wb->flusher_wq, &dfb->work);
+			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+			flush_current_buffer(wb); /* inserting only this line make it */
+			LIVE_DEAD(bio_endio(bio, 0),
+				  bio_endio(bio, -EIO));
+			/* struct deferred_flush_bio *dfb = kmalloc(sizeof(*dfb), GFP_NOIO); */
+			/* dfb->bio = bio; */
+			/* INIT_WORK(&dfb->work, process_deferred_flush_bio); */
+			/* queue_work(wb->flusher_wq, &dfb->work); */
 			/* schedule_work(&dfb->work); */
-		/* 	LIVE_DEAD(bio_endio(bio, 0), */
-		/* 		  bio_endio(bio, -EIO)); */
 		/* } */
 		DMINFO("FLUSHED");
 		return DM_MAPIO_SUBMITTED;

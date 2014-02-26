@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# Description
+# -----------
+# can compile?
+
 T=$1
 
 . ../../config

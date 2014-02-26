@@ -1,5 +1,9 @@
 #!/sin/sh
 
+# Description
+# -----------
+# can compile after cache resume?
+
 T=$1
 
 . ../../config

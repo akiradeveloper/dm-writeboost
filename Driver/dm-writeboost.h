@@ -425,7 +425,7 @@ void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct met
 u8 read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
 void invalidate_previous_cache(struct wb_device *, struct segment_header *,
 			       struct metablock *old_mb, bool overwrite_fullsize);
-void rebuild_rambuf(void *rambuf, void *plog_buf);
+void rebuild_rambuf(void *rambuf, void *plog_buf, u64 log_id);
 
 /*----------------------------------------------------------------*/
 

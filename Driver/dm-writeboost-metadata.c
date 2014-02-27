@@ -996,6 +996,8 @@ static int flush_rambuf(struct wb_device *wb,
 	};
 
 	struct segment_header_device *hd = rambuf;
+	WBINFO("id:%u", cpu_to_le64(hd->id)); // 438
+
 	region.count = (hd->length + 1) << 3;
 	wbdebug("sector:%u, count:%u", region.sector, region.count);
 
@@ -1008,21 +1010,18 @@ static int flush_rambuf(struct wb_device *wb,
 /*
  * Flush a plog (stored in a buffer) to the cache device.
  */
-static int flush_plog(struct wb_device *wb, void *plog_buf)
+static int flush_plog(struct wb_device *wb, void *plog_buf, u64 log_id)
 {
 	int r = 0;
 	struct segment_header *seg;
 	void *rambuf;
 
-	struct plog_meta_device meta;
-	memcpy(&meta, plog_buf, 512);
-
 	rambuf = kzalloc(1 << (wb->segment_size_order + SECTOR_SHIFT), GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
-	rebuild_rambuf(rambuf, plog_buf);
+	rebuild_rambuf(rambuf, plog_buf, log_id);
 
-	seg = get_segment_header_by_id(wb, le64_to_cpu(meta.id));
+	seg = get_segment_header_by_id(wb, log_id);
 	r = flush_rambuf(wb, seg, rambuf);
 	if (r)
 		WBERR("failed to flush a plog");
@@ -1065,16 +1064,25 @@ static int flush_plogs(struct wb_device *wb)
 
 	for (i = 0; i < wb->nr_plogs; i++) {
 		u32 j;
+		u64 log_id;
 
 		div_u64_rem(orig_idx + i, wb->nr_plogs, &j);
 
 		read_plog(plog_buf, wb, j);
+		/*
+		 * the id of the head log is the log_id
+		 * that is identical within this plog.
+		 */
 		memcpy(&meta, plog_buf, 512);
+		log_id = le64_to_cpu(meta.id);
 
-		if (le64_to_cpu(meta.id) != next_id)
+		if (log_id != next_id)
 			break;
 
-		flush_plog(wb, plog_buf);
+		/*
+		 * now at least one log is valid in this plog.
+		 */
+		flush_plog(wb, plog_buf, log_id);
 		next_id++;
 	}
 	wbdebug();
@@ -1285,6 +1293,9 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 
 		header = rambuf;
 
+		if (le64_to_cpu(header->id))
+			WBINFO("id:%u", le64_to_cpu(header->id));
+
 		if (!le64_to_cpu(header->id))
 			continue;
 
@@ -1292,7 +1303,7 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		checksum2 = calc_checksum(rambuf, header->length);
 		wbdebug("id:%u, len:%u", header->id, header->length);
 		if (checksum1 != checksum2) {
-			DMWARN("checksum inconsistent id:%llu checksum: %u != %u",
+			WBWARN("checksum inconsistent id:%llu checksum: %u != %u",
 			       (long long unsigned int) le64_to_cpu(header->id),
 			       checksum1, checksum2);
 			continue;
@@ -1353,12 +1364,15 @@ static int replay_log_on_cache(struct wb_device *wb)
 		WBERR("failed to find max id");
 		return r;
 	}
+	WBINFO("max_id:%u", max_id);
+
 	r = apply_valid_segments(wb, &max_id);
 	if (r) {
 		WBERR("failed to apply valid segments");
 		return r;
 	}
 
+	WBINFO("max_id:%u", max_id);
 	/*
 	 * Setup last_flushed_segment_id
 	 */

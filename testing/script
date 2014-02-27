@@ -1,7 +1,7 @@
 #!/bin/sh
 T=$1
 TR=`pwd`
-for i in 1 2 3 4 5
+for i in 1 2 3 4 5 6
 do
     echo Testing No.$i
     cd $TR/$i

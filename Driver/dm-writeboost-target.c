@@ -192,9 +192,10 @@ append_plog(struct wb_device *wb, struct metablock *mb,
 }
 
 /*
- * Rebuild a RAM buffer (metadata and data) from a plog
+ * rebuild a RAM buffer (metadata and data) from a plog.
+ * all valid logs are of id "log_id".
  */
-void rebuild_rambuf(void *rambuffer, void *plog_buf)
+void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 {
 	struct segment_header_device *seg = rambuffer;
 	struct metablock_device *mb;
@@ -217,8 +218,12 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf)
 		if (actual != expected)
 			break;
 
+		if (log_id != le64_to_cpu(meta.id))
+			break;
+
 		/* update header data */
 		seg->id = meta.id;
+		WBINFO("id:%u", le64_to_cpu(meta.id));
 		if ((meta.idx + 1) > seg->length)
 			seg->length = meta.idx + 1;
 
@@ -340,11 +345,13 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
-	wbdebug("WAIT MIG");
-
+	WBINFO("BEFORE WAIT MIG");
 	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
-	BUG_ON(count_dirty_caches_remained(new_seg));
-
+	WBINFO("AFTER WAIT MIG");
+	if (count_dirty_caches_remained(new_seg)) {
+		WBERR("%u dirty caches remained. id:%u", count_dirty_caches_remained(new_seg), id);
+		BUG();
+	}
 	discard_caches_inseg(wb, new_seg);
 
 	/*

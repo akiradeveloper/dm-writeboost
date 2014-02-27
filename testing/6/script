@@ -2,55 +2,23 @@
 
 # Description
 # -----------
-# does the read hit on the buffer work?
+# stress test (posted to dm-devel)
 
 T=$1
 
 . ../../config
 
-# echo create test data
-# dd if=/dev/urandom of=./data-8 bs=512 count=8
-# dd if=/dev/urandom of=./data-1 bs=512 count=1
-
-echo making expected data \(4k\)
-dd if=./data-8 of=./expect.dump bs=512 count=8 oflag=direct
-dd if=./data-1 of=./expect.dump bs=512 count=1 seek=1 conv=notrunc oflag=direct
-
-echo clear devices
-dd if=/dev/zero of=${BACKING} bs=512 count=8 oflag=direct
-dd if=/dev/zero of=${CACHE} bs=512 count=8 oflag=direct
-
-echo making wb device
+dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 sz=`blockdev --getsize ${BACKING}`
+
 if [ $T -eq 0 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 rambuf_pool_amount 8192 segment_size_order 7 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 1 sync_interval 1 update_record_interval 1 barrier_deadline_ms 3"
 elif [ $T -eq 1 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 rambuf_pool_amount 8192 segment_size_order 7 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 1 sync_interval 0 update_record_interval 1 barrier_deadline_ms 3"
 fi
 
-# (1) write 4k
-dd if=./data-8 of=/dev/mapper/writeboost-vol bs=512 count=8 oflag=direct
+echo 8 > /sys/bus/workqueue/devices/wbflusher/max_active
 
-# (2) write 1-sector
-# write back the previous cache
-# 1-sector on the buffer
-dd if=./data-1 of=/dev/mapper/writeboost-vol bs=512 count=1 seek=1 oflag=direct
-
-# (3) wait for flushing the buffer. buffer is now clean then
-dmsetup message writeboost-vol 0 sync_interval 1
-sleep 5
-dmsetup message writeboost-vol 0 sync_interval 0
-
-# (4) write 1-sector on the buffer. 1-sector on the buffer
-dd if=./data-1 of=/dev/mapper/writeboost-vol bs=512 count=1 seek=1 oflag=direct
-
-# (5) on-buffer read hit
-echo 3 > /proc/sys/vm/drop_caches
-dd if=/dev/mapper/writeboost-vol of=./actual.dump bs=512 count=8
-
-diff ./actual.dump ./expect.dump
-if [ $? -ne 0 ]; then
-    echo BUG: dump NOT expected!!!
-fi
+./dm-stress-test.sh -n 100 -r 10 -d /dev/mapper/writeboost-vol -t p
 
 dmsetup remove writeboost-vol

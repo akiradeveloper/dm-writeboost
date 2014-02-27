@@ -42,7 +42,7 @@ echo 3 > /proc/sys/vm/drop_caches
 echo make test
 make test > /dev/null
 
-cd
+cd # cd - ?
 
 fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol

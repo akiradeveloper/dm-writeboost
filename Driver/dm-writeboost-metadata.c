@@ -996,7 +996,7 @@ static int flush_rambuf(struct wb_device *wb,
 	};
 
 	struct segment_header_device *hd = rambuf;
-	WBINFO("id:%u", cpu_to_le64(hd->id)); // 438
+	wbdebug("id:%u", cpu_to_le64(hd->id));
 
 	region.count = (hd->length + 1) << 3;
 	wbdebug("sector:%u, count:%u", region.sector, region.count);
@@ -1057,7 +1057,7 @@ static int flush_plogs(struct wb_device *wb)
 	 */
 	if (!next_id) {
 		r = 0;
-		DMINFO("couldn't find any valid plog");
+		WBINFO("couldn't find any valid plog");
 		goto bad;
 	}
 	wbdebug();
@@ -1294,7 +1294,7 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		header = rambuf;
 
 		if (le64_to_cpu(header->id))
-			WBINFO("id:%u", le64_to_cpu(header->id));
+			wbdebug("id:%u", le64_to_cpu(header->id));
 
 		if (!le64_to_cpu(header->id))
 			continue;
@@ -1364,7 +1364,7 @@ static int replay_log_on_cache(struct wb_device *wb)
 		WBERR("failed to find max id");
 		return r;
 	}
-	WBINFO("max_id:%u", max_id);
+	wbdebug("max_id:%u", max_id);
 
 	r = apply_valid_segments(wb, &max_id);
 	if (r) {
@@ -1372,7 +1372,7 @@ static int replay_log_on_cache(struct wb_device *wb)
 		return r;
 	}
 
-	WBINFO("max_id:%u", max_id);
+	wbdebug("max_id:%u", max_id);
 	/*
 	 * Setup last_flushed_segment_id
 	 */

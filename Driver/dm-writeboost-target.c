@@ -223,7 +223,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 
 		/* update header data */
 		seg->id = meta.id;
-		WBINFO("id:%u", le64_to_cpu(meta.id));
+		wbdebug("id:%u", le64_to_cpu(meta.id));
 		if ((meta.idx + 1) > seg->length)
 			seg->length = meta.idx + 1;
 
@@ -345,9 +345,9 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
-	WBINFO("BEFORE WAIT MIG");
+	wbdebug("BEFORE WAIT MIG");
 	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
-	WBINFO("AFTER WAIT MIG");
+	wbdebug("AFTER WAIT MIG");
 	if (count_dirty_caches_remained(new_seg)) {
 		WBERR("%u dirty caches remained. id:%u", count_dirty_caches_remained(new_seg), id);
 		BUG();
@@ -873,7 +873,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	 * so, we can simply defer it for lazy execution.
 	 */
 	if (bio->bi_rw & REQ_FLUSH) {
-		WBINFO("FLUSH");
+		wbdebug("FLUSH");
 		BUG_ON(bio->bi_size);
 		if (!wb->type) {
 			queue_barrier_io(wb, bio);
@@ -883,7 +883,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 			LIVE_DEAD(bio_endio(bio, 0),
 				  bio_endio(bio, -EIO));
 		}
-		DMINFO("FLUSHED");
+		wbdebug("FLUSHED");
 		return DM_MAPIO_SUBMITTED;
 	}
 

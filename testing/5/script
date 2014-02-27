@@ -35,5 +35,3 @@ dmsetup remove writeboost-vol
 if [ $? -ne 0 ]; then
     echo BUG: remove failed
 fi
-
-dmsetup remove writeboost-vol

@@ -398,7 +398,7 @@ static void do_migrate_proc(struct wb_device *wb)
 
 	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
 	wake_up_interruptible(&wb->migrate_wait_queue);
-	DMINFO("done migrate last id:%u", atomic64_read(&wb->last_migrated_segment_id));
+	wbdebug("done migrate last id:%u", atomic64_read(&wb->last_migrated_segment_id));
 }
 
 int migrate_proc(void *data)

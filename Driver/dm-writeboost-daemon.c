@@ -40,6 +40,7 @@ void flush_barrier_ios(struct work_struct *work)
 	if (bio_list_empty(&wb->barrier_ios))
 		return;
 
+	wbdebug();
 	atomic64_inc(&wb->count_non_full_flushed);
 	flush_current_buffer(wb);
 }
@@ -51,6 +52,7 @@ process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 {
 	int r = 0;
 	bool has_barrier = !bio_list_empty(&job->barrier_ios);
+	wbdebug("has_barrier:%d", has_barrier);
 
 	/*
 	 * Make all the data until now persistent.
@@ -64,10 +66,8 @@ process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 	if (has_barrier) {
 		struct bio *bio;
 		while ((bio = bio_list_pop(&job->barrier_ios))) {
-			LIVE_DEAD(
-				bio_endio(bio, 0),
-				bio_endio(bio, -EIO)
-			);
+			LIVE_DEAD(bio_endio(bio, 0),
+				  bio_endio(bio, -EIO));
 		}
 	}
 
@@ -108,7 +108,9 @@ void flush_proc(struct work_struct *work)
 	 * To serialize barrier ACK in logging we wait for the previous
 	 * segment to be persistently written (if needed).
 	 */
+	wbdebug("WAIT BEFORE:%u", seg->id);
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
+	wbdebug("WAIT AFTER:%u", seg->id);
 
 	process_deferred_barriers(wb, job);
 
@@ -118,6 +120,7 @@ void flush_proc(struct work_struct *work)
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up_interruptible(&wb->flush_wait_queue);
+	wbdebug("WAKE UP:%u", seg->id);
 
 	mempool_free(job, wb->flush_job_pool);
 }
@@ -395,6 +398,7 @@ static void do_migrate_proc(struct wb_device *wb)
 
 	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
 	wake_up_interruptible(&wb->migrate_wait_queue);
+	wbdebug("done migrate last id:%u", atomic64_read(&wb->last_migrated_segment_id));
 }
 
 int migrate_proc(void *data)
@@ -521,6 +525,8 @@ int sync_proc(void *data)
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
+
+		wbdebug();
 
 		flush_current_buffer(wb);
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));

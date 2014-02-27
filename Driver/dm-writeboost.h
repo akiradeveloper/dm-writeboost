@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
+#include <linux/crc32c.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 
@@ -39,8 +40,13 @@
  * Only for debugging.
  * Don't include this macro in the production code.
  */
+// #define DEBUG
+#ifdef DEBUG
 #define wbdebug(f, args...) \
 	DMINFO("debug@%s() L.%d " f, __func__, __LINE__, ## args)
+#else
+#define wbdebug(f, args...)
+#endif
 
 #define WBERR(f, args...) \
 	DMERR("err@%s() " f, __func__, ## args)
@@ -160,12 +166,6 @@ struct segment_header {
 
 /*----------------------------------------------------------------*/
 
-enum RAMBUF_TYPE {
-	BUF_NORMAL = 0, /* Volatile DRAM */
-	BUF_NV_BLK, /* Non-volatile with block I/F */
-	BUF_NV_RAM, /* Non-volatile with PRAM I/F */
-};
-
 /*
  * RAM buffer is a buffer that any dirty data are first written to.
  * type member in wb_device indicates the buffer type.
@@ -186,6 +186,22 @@ struct flush_job {
 	struct rambuffer *rambuf; /* RAM buffer to flush */
 	struct bio_list barrier_ios; /* List of deferred bios */
 };
+
+/*----------------------------------------------------------------*/
+
+/*
+ * plog = metadata (512B) + data (512B-4096B)
+ * A plog contains a self-contained information of a accepted write.
+ */
+
+struct plog_meta_device {
+	__le64 id;
+	__le64 sector;
+	__le32 checksum; /* checksum of the data */
+	__u8 idx; /* idx in the segment */
+	__u8 len; /* length in sector */
+	__u8 padding[512 - 8 - 8 - 4 - 1 - 1];
+} __packed;
 
 /*----------------------------------------------------------------*/
 
@@ -210,7 +226,13 @@ enum WB_FLAG {
  * The context of the cache driver.
  */
 struct wb_device {
-	enum RAMBUF_TYPE type;
+	/*
+	 * type
+	 * 0: only RAM buffers
+	 * 1: with persistent block device
+	 * 2: with persistent RAM device
+	 */
+	int type;
 
 	struct dm_target *ti;
 
@@ -240,12 +262,7 @@ struct wb_device {
 	 * Current position
 	 ******************/
 
-	/*
-	 * Current metablock index
-	 * which is the last place already written
-	 * *not* the position to write hereafter.
-	 */
-	u32 cursor;
+	u32 cursor; /* metablock index to write next */
 	struct segment_header *current_seg;
 	struct rambuffer *current_rambuf;
 
@@ -361,6 +378,29 @@ struct wb_device {
 
 	/*---------------------------------------------*/
 
+	/********************
+	 * Persistent Logging
+	 ********************/
+
+	/* common */
+	char plog_dev_desc[16]; /* passed as essential argv to describe the persistent device */
+	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
+	sector_t plog_size; /* Const. the size of a plog in sector */
+	sector_t alloc_plog_head; /* next relative sector to allocate */
+	sector_t cur_plog_head; /* current relative sector to append */
+	sector_t plog_start_sector; /* the absolute start sector of the current plog */
+	void *plog_buf; /* 9 sector pre-allocated buffer for the plog write */
+	u32 nr_plogs; /* Const. number of plogs */
+
+	/* type 1 */
+	struct dm_dev *plog_dev_t1;
+
+	/* type 2 */
+	/* TODO */
+
+	/*---------------------------------------------*/
+
+
 	/************
 	 * Statistics
 	 ************/
@@ -378,12 +418,14 @@ struct wb_device {
 /*----------------------------------------------------------------*/
 
 void acquire_new_seg(struct wb_device *, u64 id);
+void cursor_init(struct wb_device *);
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);
 u8 read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
 void invalidate_previous_cache(struct wb_device *, struct segment_header *,
 			       struct metablock *old_mb, bool overwrite_fullsize);
+void rebuild_rambuf(void *rambuf, void *plog_buf, u64 log_id);
 
 /*----------------------------------------------------------------*/
 

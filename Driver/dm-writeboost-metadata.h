@@ -36,6 +36,7 @@ void discard_caches_inseg(struct wb_device *, struct segment_header *);
 
 void prepare_segment_header_device(void *rambuffer, struct wb_device *,
 				   struct segment_header *src);
+u32 calc_checksum(void *rambuffer, u8 length);
 
 /*----------------------------------------------------------------*/
 

@@ -819,20 +819,6 @@ struct per_bio_data {
 	void *ptr;
 };
 
-struct deferred_flush_bio {
-	struct work_struct work;
-	struct bio *bio;
-};
-
-static void process_deferred_flush_bio(struct work_struct *work)
-{
-	struct deferred_flush_bio *dfb = container_of(work, struct deferred_flush_bio, work);
-	schedule_timeout_interruptible(msecs_to_jiffies(1000));
-	bio_endio(dfb->bio, 0);
-	kfree(dfb);
-	DMINFO("flushed"); /* OK */
-}
-
 static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	struct wb_device *wb = ti->private;
@@ -882,23 +868,14 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	if (bio->bi_rw & REQ_FLUSH) {
 		WBINFO("FLUSH");
 		BUG_ON(bio->bi_size);
-		/* if (!wb->type) { */
-		/* bio_endio(bio, 0); */ /* NOT OK */
-		/* bio_remap(bio, wb->cache_dev, 0); */
-		/* generic_make_request(bio); */
-			/* queue_barrier_io(wb, bio); #<{(| OK |)}># */
-		/* } else { */
+		if (!wb->type) {
+			queue_barrier_io(wb, bio);
+		} else {
 			int r = 0;
 			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-			flush_current_buffer(wb); /* inserting only this line make it */
 			LIVE_DEAD(bio_endio(bio, 0),
 				  bio_endio(bio, -EIO));
-			/* struct deferred_flush_bio *dfb = kmalloc(sizeof(*dfb), GFP_NOIO); */
-			/* dfb->bio = bio; */
-			/* INIT_WORK(&dfb->work, process_deferred_flush_bio); */
-			/* queue_work(wb->flusher_wq, &dfb->work); */
-			/* schedule_work(&dfb->work); */
-		/* } */
+		}
 		DMINFO("FLUSHED");
 		return DM_MAPIO_SUBMITTED;
 	}

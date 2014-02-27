@@ -22,9 +22,11 @@ fi
 
 echo making filsystem
 mkfs.ext4 -v /dev/mapper/writeboost-vol
-# mkfs.xfs -f /dev/mapper/writeboost-vol > /dev/null
+# mkfs.xfs -f /dev/mapper/writeboost-vol
 
-# migrate the initial metadata of the fs
+echo dropping caches
+dmsetup suspend writeboost-vol
+dmsetup resume writeboost-vol
 dmsetup message writeboost-vol 0 drop_caches
 
 echo mount

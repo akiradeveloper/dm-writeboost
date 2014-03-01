@@ -112,6 +112,11 @@ static bool io_fullsize(struct bio *bio)
 	return io_count(bio) == (1 << 3);
 }
 
+static bool io_write(struct bio *bio)
+{
+	return bio_data_dir(bio) == WRITE;
+}
+
 /*
  * We use 4KB alignment address of original request the for the lookup key.
  */
@@ -815,212 +820,114 @@ static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 	if (bio_data_dir(bio) == READ)
 		return;
 
-	if (needs_queue_seg(wb, bio)) {
-		wbdebug("BEFORE sector:%u", bio->bi_sector);
+	if (needs_queue_seg(wb, bio))
 		queue_current_buffer(wb);
-		wbdebug("AFTER sector:%u", bio->bi_sector);
-	}
 }
 
-struct per_bio_data {
-	void *ptr;
+/*
+ * process bio with REQ_DISCARD
+ *
+ * we only discard sectors on only the backing store because blocks on
+ * cache device are unlikely to be discarded.
+ * discarding blocks is likely to be operated long after writing;
+ * the block is likely to be migrated before that.
+ *
+ * moreover, it is very hard to implement discarding cache blocks.
+ */
+static int process_discard_bio(struct wb_device *wb, struct bio *bio)
+{
+	wbdebug("DISCARD");
+	bio_remap(bio, wb->origin_dev, bio->bi_sector);
+	return DM_MAPIO_REMAPPED;
+}
+
+/*
+ * process bio with REQ_FLUSH
+ */
+static int process_flush_bio(struct wb_device *wb, struct bio *bio)
+{
+	/*
+	 * in device-mapper bio with REQ_FLUSH is for sure to have not data.
+	 */
+	BUG_ON(bio->bi_size);
+
+	if (!wb->type) {
+		queue_barrier_io(wb, bio);
+	} else {
+		int r = 0;
+		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+		LIVE_DEAD(
+			bio_endio(bio, 0);
+			,
+			bio_endio(bio, -EIO);
+		);
+	}
+	return DM_MAPIO_SUBMITTED;
+}
+
+struct lookup_result {
+	struct ht_head *head; /* lookup head used */
+	struct lookup_key key; /* lookup key used */
+
+	struct segment_header *found_seg;
+	struct metablock *found_mb;
+
+	bool found; /* cache hit? */
+	bool on_buffer; /* is the metablock found on the RAM buffer? */
 };
 
-static int writeboost_map(struct dm_target *ti, struct bio *bio)
+/*
+ * lookup a bio relevant cache data.
+ * in hit case # inflight ios is incremented.
+ */
+static void cache_lookup(struct wb_device *wb, struct bio *bio,
+			 struct lookup_result *res)
 {
-	struct wb_device *wb = ti->private;
-	struct dm_dev *origin_dev = wb->origin_dev;
-	int rw = bio_data_dir(bio) == WRITE;
-	struct lookup_key key = {
+	res->key = (struct lookup_key) {
 		.sector = calc_cache_alignment(bio->bi_sector),
 	};
-	struct ht_head *head = ht_get_head(wb, &key);
+	res->head = ht_get_head(wb, &res->key);
 
-	struct segment_header *uninitialized_var(found_seg);
-	struct metablock *mb, *new_mb;
+	res->found_mb = ht_lookup(wb, res->head, &res->key);
+	if (res->found_mb) {
+		res->found_seg = mb_to_seg(wb, res->found_mb);
+		atomic_inc(&res->found_seg->nr_inflight_ios);
+	}
 
+	res->found = (res->found_mb != NULL);
+
+	res->on_buffer = false;
+	if (res->found)
+		res->on_buffer = is_on_buffer(wb, res->found_mb->idx);
+
+	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
+	wbdebug("rw:%d, found:%d, on_buffer:%d, fullsize:%d", rw, res->found, res->on_buffer, io_fullsize(bio));
+}
+
+struct write_pos {
+	struct metablock *mb;
 	sector_t plog_head;
-	bool found,
-	     on_buffer; /* is the metablock found on the RAM buffer? */
+};
 
-	struct per_bio_data *map_context;
-	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
-	map_context->ptr = NULL;
+/*
+ * write bio data to RAM buffer and plog (if available).
+ */
+static int write_on_devices(struct wb_device *wb, struct bio *bio,
+			    struct write_pos *pos)
+{
+	taint_mb(wb, wb->current_seg, pos->mb, bio);
 
-	DEAD(
-		bio_endio(bio, -EIO);
-		return DM_MAPIO_SUBMITTED
-	);
+	write_on_rambuffer(wb, wb->current_seg, pos->mb, bio);
 
-	/*
-	 * we only discard sectors on only the backing store because
-	 * blocks on cache device are unlikely to be discarded.
-	 * Discarding blocks is likely to be operated long after writing;
-	 * the block is likely to be migrated before that.
-	 *
-	 * moreover, it is very hard to implement discarding cache blocks.
-	 */
-	if (bio->bi_rw & REQ_DISCARD) {
-		wbdebug("DISCARD");
-		bio_remap(bio, origin_dev, bio->bi_sector);
-		return DM_MAPIO_REMAPPED;
-	}
-
-	/*
-	 * defered ACK for flush requests
-	 *
-	 * in device-mapper, bio with REQ_FLUSH is guaranteed to have no data.
-	 * so, we can simply defer it for lazy execution.
-	 */
-	if (bio->bi_rw & REQ_FLUSH) {
-		wbdebug("FLUSH");
-		BUG_ON(bio->bi_size);
-		if (!wb->type) {
-			queue_barrier_io(wb, bio);
-		} else {
-			int r = 0;
-			IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-			LIVE_DEAD(bio_endio(bio, 0),
-				  bio_endio(bio, -EIO));
-		}
-		wbdebug("FLUSHED");
-		return DM_MAPIO_SUBMITTED;
-	}
-
-	wbdebug("START sector:%u", bio->bi_sector);
-
-	mutex_lock(&wb->io_lock);
-	/* wbdebug("lock sector:%u", bio->bi_sector); */
-	/*
-	 * for design clarity, we insert this function here right after mutex is taken.
-	 * making the state valid before anything else is always a good practice in the
-	 * in programming.
-	 */
-	might_queue_current_buffer(wb, bio);
-
-	mb = ht_lookup(wb, head, &key);
-	if (mb) {
-		found_seg = mb_to_seg(wb, mb);
-		atomic_inc(&found_seg->nr_inflight_ios);
-	}
-
-	found = (mb != NULL);
-	on_buffer = false;
-	if (found)
-		on_buffer = is_on_buffer(wb, mb->idx);
-
-	inc_stat(wb, rw, found, on_buffer, io_fullsize(bio));
-	wbdebug("rw:%d, found:%d, on_buffer:%d, fullsize:%d", rw, found, on_buffer, io_fullsize(bio));
-
-	/*
-	 * (Locking)
-	 * A cache data is placed either on RAM buffer or SSD if it was flushed.
-	 * To ease the locking, we establish a simple rule for the dirtiness
-	 * of a cache data.
-	 *
-	 * If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
-	 * only increases. The justification for this design is that the cache on the
-	 * RAM buffer is seldom migrated.
-	 * If the data is, on the other hand, on the SSD after flushed the dirtiness
-	 * only decreases.
-	 *
-	 * This simple rule frees us from the dirtiness fluctuating thus simplies
-	 * locking design.
-	 */
-
-	if (!rw) {
-		u8 dirty_bits;
-
-		mutex_unlock(&wb->io_lock);
-		/* wbdebug("unlock sector:%u", bio->bi_sector); */
-
-		if (!found) {
-			bio_remap(bio, origin_dev, bio->bi_sector);
-			return DM_MAPIO_REMAPPED;
-		}
-
-		dirty_bits = read_mb_dirtiness(wb, found_seg, mb);
-		if (unlikely(on_buffer)) {
-			if (dirty_bits) {
-				wbdebug("BEFORE sector:%u", bio->bi_sector);
-				migrate_buffered_mb(wb, mb, dirty_bits);
-				wbdebug("AFTER sector:%u", bio->bi_sector);
-			}
-
-			atomic_dec(&found_seg->nr_inflight_ios);
-			bio_remap(bio, origin_dev, bio->bi_sector);
-			wbdebug("REMAP");
-			return DM_MAPIO_REMAPPED;
-		}
-
-		/*
-		 * We must wait for the (maybe) queued segment to be flushed
-		 * to the cache device.
-		 * Without this, we read the wrong data from the cache device.
-		 */
-		wait_for_flushing(wb, found_seg->id);
-
-		if (likely(dirty_bits == 255)) {
-			bio_remap(bio, wb->cache_dev,
-				  calc_mb_start_sector(wb, found_seg, mb->idx) +
-				  io_offset(bio));
-			map_context->ptr = found_seg;
-		} else {
-			migrate_mb(wb, found_seg, mb, dirty_bits, true);
-			cleanup_mb_if_dirty(wb, found_seg, mb);
-
-			atomic_dec(&found_seg->nr_inflight_ios);
-			bio_remap(bio, origin_dev, bio->bi_sector);
-		}
-		return DM_MAPIO_REMAPPED;
-	}
-
-	if (found) {
-		if (unlikely(on_buffer)) {
-			plog_head = advance_plog_head(wb, bio);
-			mutex_unlock(&wb->io_lock);
-			/* wbdebug("unlock sector:%u", bio->bi_sector); */
-			goto write_on_buffer;
-		} else {
-			invalidate_previous_cache(wb, found_seg, mb,
-						  io_fullsize(bio));
-			atomic_dec(&found_seg->nr_inflight_ios);
-			wbdebug();
-			goto write_not_found;
-		}
-	}
-
-write_not_found:
-	plog_head = advance_plog_head(wb, bio);
-
-	new_mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	BUG_ON(new_mb->dirty_bits);
-	ht_register(wb, head, new_mb, &key);
-
-	atomic_inc(&wb->current_seg->nr_inflight_ios);
-	mutex_unlock(&wb->io_lock);
-	/* wbdebug("unlock sector:%u", bio->bi_sector); */
-
-	/* wbdebug(); */
-
-	mb = new_mb;
-
-write_on_buffer:
-	taint_mb(wb, wb->current_seg, mb, bio);
-
-	write_on_rambuffer(wb, wb->current_seg, mb, bio);
-
-	/* wbdebug("cur_plog_head:%u, plog_head:%u", wb->cur_plog_head, plog_head); */
-	append_plog(wb, mb, bio, plog_head);
-	/* wbdebug(); */
+	append_plog(wb, pos->mb, bio, pos->plog_head);
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
 	/*
-	 * Deferred ACK for FUA request
+	 * deferred ACK for FUA request
 	 *
 	 * bio with REQ_FUA flag has data.
-	 * So, we must run through the path for usual bio.
+	 * so, we must run through the path for usual bio.
 	 * And the data is now stored in the RAM buffer.
 	 */
 	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
@@ -1029,10 +936,156 @@ write_on_buffer:
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	LIVE_DEAD(bio_endio(bio, 0),
-		  bio_endio(bio, -EIO));
+	LIVE_DEAD(
+		bio_endio(bio, 0);
+		,
+		bio_endio(bio, -EIO);
+	);
 
 	return DM_MAPIO_SUBMITTED;
+}
+
+/*
+ * decide where to write the data according to the result of cache lookup.
+ */
+static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
+			      struct write_pos *pos)
+{
+	struct lookup_result res;
+
+	mutex_lock(&wb->io_lock);
+
+	/*
+	 * for design clarity, we insert this function here right after mutex is taken.
+	 * making the state valid before anything else is always a good practice in the
+	 * in programming.
+	 */
+	might_queue_current_buffer(wb, bio);
+
+	cache_lookup(wb, bio, &res);
+
+	if (res.found) {
+		pos->mb = res.found_mb;
+		if (unlikely(res.on_buffer)) {
+			pos->plog_head = advance_plog_head(wb, bio);
+			mutex_unlock(&wb->io_lock);
+			return;
+		} else {
+			invalidate_previous_cache(wb, res.found_seg, res.found_mb,
+						  io_fullsize(bio));
+			atomic_dec(&res.found_seg->nr_inflight_ios);
+		}
+	}
+
+	pos->plog_head = advance_plog_head(wb, bio);
+	pos->mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
+	BUG_ON(pos->mb->dirty_bits);
+
+	ht_register(wb, res.head, pos->mb, &res.key);
+
+	atomic_inc(&wb->current_seg->nr_inflight_ios);
+	mutex_unlock(&wb->io_lock);
+}
+
+static int process_write(struct wb_device *wb, struct bio *bio)
+{
+	struct write_pos pos;
+	prepare_write_pos(wb, bio, &pos);
+	return write_on_devices(wb, bio, &pos);
+}
+
+struct per_bio_data {
+	void *ptr;
+};
+static int process_read(struct wb_device *wb, struct bio *bio)
+{
+	struct lookup_result res;
+	u8 dirty_bits;
+
+	mutex_lock(&wb->io_lock);
+	cache_lookup(wb, bio, &res);
+	mutex_unlock(&wb->io_lock);
+
+	if (!res.found) {
+		bio_remap(bio, wb->origin_dev, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
+
+	dirty_bits = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
+	if (unlikely(res.on_buffer)) {
+		if (dirty_bits)
+			migrate_buffered_mb(wb, res.found_mb, dirty_bits);
+
+		atomic_dec(&res.found_seg->nr_inflight_ios);
+		bio_remap(bio, wb->origin_dev, bio->bi_sector);
+		return DM_MAPIO_REMAPPED;
+	}
+
+	/*
+	 * We must wait for the (maybe) queued segment to be flushed
+	 * to the cache device.
+	 * Without this, we read the wrong data from the cache device.
+	 */
+	wait_for_flushing(wb, res.found_seg->id);
+
+	if (likely(dirty_bits == 255)) {
+		struct per_bio_data *map_context =
+			dm_per_bio_data(bio, wb->ti->per_bio_data_size);
+		map_context->ptr = res.found_seg;
+
+		bio_remap(bio, wb->cache_dev,
+			  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
+			  io_offset(bio));
+	} else {
+		migrate_mb(wb, res.found_seg, res.found_mb, dirty_bits, true);
+		cleanup_mb_if_dirty(wb, res.found_seg, res.found_mb);
+
+		atomic_dec(&res.found_seg->nr_inflight_ios);
+		bio_remap(bio, wb->origin_dev, bio->bi_sector);
+	}
+	return DM_MAPIO_REMAPPED;
+}
+
+/*
+ * (Locking)
+ * A cache data is placed either on RAM buffer or SSD if it was flushed.
+ * To ease the locking, we establish a simple rule for the dirtiness
+ * of a cache data.
+ *
+ * If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
+ * only increases. The justification for this design is that the cache on the
+ * RAM buffer is seldom migrated.
+ * If the data is, on the other hand, on the SSD after flushed the dirtiness
+ * only decreases.
+ *
+ * This simple rule frees us from the dirtiness fluctuating thus simplies
+ * locking design.
+ */
+static int process_bio(struct wb_device *wb, struct bio *bio)
+{
+	return io_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
+}
+
+static int writeboost_map(struct dm_target *ti, struct bio *bio)
+{
+	struct wb_device *wb = ti->private;
+
+	struct per_bio_data *map_context;
+	map_context = dm_per_bio_data(bio, ti->per_bio_data_size);
+	map_context->ptr = NULL;
+
+	DEAD(
+		bio_endio(bio, -EIO);
+		return DM_MAPIO_SUBMITTED;
+	);
+
+	if (bio->bi_rw & REQ_DISCARD)
+		return process_discard_bio(wb, bio);
+
+	if (bio->bi_rw & REQ_FLUSH)
+		return process_flush_bio(wb, bio);
+
+	return process_bio(wb, bio);
 }
 
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
@@ -1298,7 +1351,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		ti->error = "failed to resume cache";
 		goto bad_resume_cache;
 	}
-	wbdebug();
 
 	r = consume_tunable_argv(wb, &as);
 	if (r) {
@@ -1348,7 +1400,6 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	int r = 0;
 	struct wb_device *wb = ti->private;
 
-	wbdebug();
 	flush_current_buffer(wb);
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 }

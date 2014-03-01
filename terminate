@@ -1,4 +1,0 @@
-#!/bin/sh
-
-echo remove writeboost-vol ...
-dmsetup remove writeboost-vol

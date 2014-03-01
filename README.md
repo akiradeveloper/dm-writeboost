@@ -2,8 +2,12 @@
 **L**og-structured **C**aching for Linux
 
 ## Notice
-Final patch to 3.14 is submitted.
-After merged, I will make an another repo to maintain the whole tree.
+I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
+
+What's new
+
+* Persistent Logging (plog) is implemented
+* Fully refactored (e.g. writeboost_map())
 
 ## Overview
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  
@@ -31,17 +35,11 @@ You are ready for nice scripts for quick starting.
 
 (2) Compile
 
-	$ source build
-
-(3) Load
-
-	# cd Driver
-	# insmod dm-writeboost.ko
-	# cd -
+	$ sh build.sh
 
 (3) Run prepare script (Edit if you want)
 
-	# source prepare  
+	# sh prepare.sh
 
 and you are now ready for `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
 Try testing and performance and see what's happening.  

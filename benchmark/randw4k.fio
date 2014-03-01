@@ -1,14 +1,19 @@
 [global]
 filename=/dev/mapper/writeboost-vol
+# filename=/dev/bcache0
+# filename=/dev/sdd2
+# filename=/dev/loop0
+numjobs=1
 randrepeat=1
 ioengine=libaio
 bs=4k
 ba=4k
-size=16GB
+#size=16GB
+runtime=5
 direct=1
 gtod_reduce=1
 norandommap
-iodepth=64
+iodepth=32
 stonewall
 
 [perf]

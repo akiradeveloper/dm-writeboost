@@ -1,0 +1,74 @@
+
+// use nr_segments
+---------- get_segment_header_by_id -----------
+migrate-daemon.c migrate_proc 302 seg = get_segment_header_by_id(
+migrate-daemon.c wait_for_migration 328 struct segment_header *seg = get_segment_header_by_id(cache, id);
+queue-flush-job.c queue_flushing 82 new_seg = get_segment_header_by_id(cache, next_id);
+queue-flush-job.c queue_current_buffer 122 get_segment_header_by_id(cache, next_id);
+recover.c update_by_segment_header_device 92 get_segment_header_by_id(cache, src->global_id);
+recover.c recover_cache 274 seg = get_segment_header_by_id(cache, init_segment_id);
+target.c get_segment_header_by_id 17 static struct segment_header *get_segment_header_by_id(struct wb_cache *cache,
+
+// uses nr_segments preset
+---------- calc_segment_lap -----------
+queue-flush-job.c prepare_segment_header_device 16 dest->lap = cpu_to_le32(calc_segment_lap(cache, src->global_id));
+target.c calc_segment_lap 26 static u32 calc_segment_lap(struct wb_cache *cache, size_t segment_id)
+
+// with calc_mb_start_sector
+---------- calc_segment_header_start -----------
+format-segment.c format_cache_device 80 .sector = calc_segment_header_start(i),
+recover.c read_segment_header_device 65 .sector = calc_segment_header_start(segment_idx),
+target.c calc_segment_header_start 39 static sector_t calc_segment_header_start(size_t segment_idx)
+
+---------- calc_mb_start_sector -----------
+handle-io.c <global> 330 calc_mb_start_sector(seg, mb->idx)
+handle-io.c migrate_mb 53 .sector = calc_mb_start_sector(seg, mb->idx),
+handle-io.c migrate_mb 94 src = calc_mb_start_sector(seg, mb->idx) + i;
+target.c calc_mb_start_sector 32 static sector_t calc_mb_start_sector(struct segment_header *seg,
+
+---------- calc_nr_segments -----------
+cache-alloc.c resume_cache 23 cache->nr_segments = calc_nr_segments(cache->device);
+format-segment.c format_cache_device 18 u64 i, nr_segments = calc_nr_segments(dev);
+target.c calc_nr_segments 49 static u64 calc_nr_segments(struct dm_dev *dev)
+
+// util
+---------- dm_devsize -----------
+target.c dm_devsize 44 static sector_t dm_devsize(struct dm_dev *dev)
+target.c calc_nr_segments 51 sector_t devsize = dm_devsize(dev);
+target.c writeboost_iterate_devices 340 sector_t len = dm_devsize(orig);
+
+// 
+---------- inc_nr_dirty_caches -----------
+handle-io.c <global> 455 inc_nr_dirty_caches(wb);
+recover.c update_by_segment_header_device 110 inc_nr_dirty_caches(cache->wb);
+target.c inc_nr_dirty_caches 55 static void inc_nr_dirty_caches(struct wb_device *wb)
+
+// cleanup_mb_if_dirty follow
+---------- dec_nr_dirty_caches -----------
+target.c dec_nr_dirty_caches 61 static void dec_nr_dirty_caches(struct wb_device *wb)
+target.c cleanup_mb_if_dirty 82 dec_nr_dirty_caches(cache->wb);
+
+// handle-io
+---------- cleanup_mb_if_dirty -----------
+handle-io.c <global> 351 cleanup_mb_if_dirty(cache, seg, mb);
+handle-io.c <global> 385 cleanup_mb_if_dirty(cache, seg, mb);
+migrate-daemon.c cleanup_segment 154 cleanup_mb_if_dirty(cache, seg, mb);
+target.c cleanup_mb_if_dirty 67 static void cleanup_mb_if_dirty(struct wb_cache *cache,
+
+// handle-io
+---------- atomic_read_mb_dirtiness -----------
+handle-io.c <global> 291 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+handle-io.c <global> 367 u8 dirty_bits = atomic_read_mb_dirtiness(seg, mb);
+migrate-daemon.c memorize_dirty_state 125 atomic_read_mb_dirtiness(seg, mb);
+target.c atomic_read_mb_dirtiness 85 static u8 atomic_read_mb_dirtiness(struct segment_header *seg,
+
+// queue-flush
+---------- count_dirty_caches_remained -----------
+queue-flush-job.c queue_flushing 92 BUG_ON(count_dirty_caches_remained(new_seg));
+target.c count_dirty_caches_remained 98 static u8 count_dirty_caches_remained(struct segment_header *seg)
+
+// handle-io
+---------- is_on_buffer -----------
+handle-io.c <global> 277 on_buffer = is_on_buffer(cache, mb->idx);
+target.c is_on_buffer 111 static bool is_on_buffer(struct wb_cache *cache, cache_nr mb_idx)
+

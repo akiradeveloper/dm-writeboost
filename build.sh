@@ -1,6 +1,6 @@
 #!/bin/sh
 
-cd Driver
+cd src
 make clean
 make 2> ../compile.log
 cd -

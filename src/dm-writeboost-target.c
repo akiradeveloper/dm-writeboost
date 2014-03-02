@@ -178,15 +178,19 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
 	if (!wb->type)
 		return;
 
+	WBINFO("BEFORE WAIT cur:%u, head:%u", wb->cur_plog_head, job->plog_head);
 	wait_event_interruptible(wb->plog_wait_queue,
 				 wb->cur_plog_head == job->plog_head);
 
+	/* WBINFO("IO"); */
 	do_append_plog(wb, bio, job);
 	wb->cur_plog_head += (1 + bio_sectors(bio));
 
+	/* WBINFO("FLUSH"); */
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
 	wake_up_interruptible(&wb->plog_wait_queue);
+	/* WBINFO("AFTER WAKEUP"); */
 }
 
 /*
@@ -267,6 +271,7 @@ static void acquire_new_plog(struct wb_device *wb, u64 id)
 
 	div_u64_rem(id - 1, wb->nr_plogs, &tmp32);
 	wb->plog_start_sector = wb->plog_size * tmp32;
+	WBINFO("CLEAR PLOG HEAD");
 	wb->alloc_plog_head = 0;
 	wb->cur_plog_head = 0;
 }
@@ -367,6 +372,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 static void prepare_new_seg(struct wb_device *wb)
 {
+	WBINFO("PREPARE NEW SEG");
 	u64 next_id = wb->current_seg->id + 1;
 	acquire_new_seg(wb, next_id);
 
@@ -398,6 +404,8 @@ static void queue_flush_job(struct wb_device *wb)
 	struct flush_job *job;
 	size_t rep = 0;
 
+	WBINFO("QUEUE FLUSH JOB");
+	flush_workqueue(wb->write_job_wq);
 	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
 		rep++;
 		if (rep == 1000)
@@ -414,8 +422,11 @@ static void queue_flush_job(struct wb_device *wb)
 
 static void queue_current_buffer(struct wb_device *wb)
 {
+	WBINFO("START QUEUE CURRENT BUFFER");
 	queue_flush_job(wb);
+	/* smp_mb(); */
 	prepare_new_seg(wb);
+	WBINFO("DONE QUEUE CURRENT BUFFER");
 }
 
 /*
@@ -964,15 +975,19 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 static int process_write_job(struct wb_device *wb, struct bio *bio,
 			     struct write_job *job)
 {
+	WBINFO("process");
 	/*
 	 * update the dirtiness of the metablock
 	 */
 	taint_mb(wb, wb->current_seg, job->mb, bio);
 
+	/* WBINFO("RAM buf"); */
 	write_on_rambuffer(wb, bio, job);
 
+	WBINFO("PLOG");
 	append_plog(wb, bio, job);
 
+	/* WBINFO("DEC"); */
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
 	/*
@@ -988,6 +1003,7 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 		return DM_MAPIO_SUBMITTED;
 	}
 
+	/* WBINFO("ACK"); */
 	LIVE_DEAD(
 		bio_endio(bio, 0);
 		,
@@ -1010,6 +1026,7 @@ static void write_job_proc(struct work_struct *work)
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
 	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
+	BUG_ON(!job);
 
 	/*
 	 * first decide where to write the bio data
@@ -1028,7 +1045,9 @@ static int process_write(struct wb_device *wb, struct bio *bio)
 	job->wb = wb;
 	job->bio = bio;
 	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
+	BUG_ON(!job->plog_buf);
 	INIT_WORK(&job->work, write_job_proc);
+	WBINFO("QUEUE head head:%u", job->plog_head);
 	queue_work(wb->write_job_wq, &job->work);
 
 	return DM_MAPIO_SUBMITTED;

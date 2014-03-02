@@ -122,8 +122,15 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
 
 /*----------------------------------------------------------------*/
 
-static void
-do_append_plog_t1(struct wb_device *wb, struct bio *bio, sector_t plog_head)
+struct write_job {
+	void *plog_buf; /* write buffer */
+
+	struct metablock *mb; /* pos */
+	sector_t plog_head; /* pos */
+};
+
+static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
+			      struct write_job *job)
 {
 	int r = 0;
 
@@ -137,43 +144,41 @@ do_append_plog_t1(struct wb_device *wb, struct bio *bio, sector_t plog_head)
 		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = wb->plog_buf,
+		.mem.ptr.addr = job->plog_buf,
 	};
 	struct dm_io_region region = {
 		.bdev = wb->plog_dev_t1->bdev,
-		.sector = wb->plog_start_sector + plog_head,
+		.sector = wb->plog_start_sector + job->plog_head,
 		.count = 1 + bio_sectors(bio),
 	};
 	IO(dm_safe_io(&io_req, 1, &region, NULL, true));
 }
 
-static void
-do_append_plog(struct wb_device *wb, struct metablock *mb,
-	       struct bio *bio, sector_t plog_head)
+static void do_append_plog(struct wb_device *wb, struct bio *bio,
+			   struct write_job *job)
 {
 	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
 		.sector = cpu_to_le64(bio->bi_sector),
 		.checksum = cpu_to_le32(cksum),
-		.idx = mb_idx_inseg(wb, mb->idx),
+		.idx = mb_idx_inseg(wb, job->mb->idx),
 		.len = bio_sectors(bio),
 	};
-	memcpy(wb->plog_buf, &meta, 512);
-	memcpy(wb->plog_buf + 512, bio_data(bio), bio->bi_size);
+	memcpy(job->plog_buf, &meta, 512);
+	memcpy(job->plog_buf + 512, bio_data(bio), bio->bi_size);
 
 	switch (wb->type) {
 	case 1:
-		do_append_plog_t1(wb, bio, plog_head);
+		do_append_plog_t1(wb, bio, job);
 		break;
 	default:
 		BUG();
 	}
 }
 
-static void
-append_plog(struct wb_device *wb, struct metablock *mb,
-	    struct bio *bio, sector_t plog_head)
+static void append_plog(struct wb_device *wb, struct bio *bio,
+			struct write_job *job)
 {
 	int r = 0;
 
@@ -181,9 +186,9 @@ append_plog(struct wb_device *wb, struct metablock *mb,
 		return;
 
 	wait_event_interruptible(wb->plog_wait_queue,
-			wb->cur_plog_head == plog_head);
+				 wb->cur_plog_head == job->plog_head);
 
-	do_append_plog(wb, mb, bio, plog_head);
+	do_append_plog(wb, bio, job);
 	wb->cur_plog_head += (1 + bio_sectors(bio));
 
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
@@ -421,10 +426,10 @@ static void queue_current_buffer(struct wb_device *wb)
 }
 
 /*
- * Set cursor to the initial position.
- * The initial position of the cursor is not the beginning
+ * set cursor to the initial position.
+ * the initial position of the cursor is not the beginning
  * of the segment but the one forward.
- * This is to avoid incurring unnecessary queue_current_buffer()
+ * this is to avoid incurring unnecessary queue_current_buffer()
  * by being recognized; queue_current_buffer() is invoked if
  * the cursor is the beginning of the segment (cursor means the
  * next metablock index to allocate).
@@ -506,7 +511,8 @@ static void dec_nr_dirty_caches(struct wb_device *wb)
 }
 
 /*
- * Increase the dirtiness of a metablock.
+ * increase the dirtiness of a metablock.
+ * @seg the segment_header that includes @mb
  */
 static void taint_mb(struct wb_device *wb, struct segment_header *seg,
 		     struct metablock *mb, struct bio *bio)
@@ -758,11 +764,10 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 
 /*----------------------------------------------------------------*/
 
-static void
-write_on_rambuffer(struct wb_device *wb, struct segment_header *seg,
-		   struct metablock *mb, struct bio *bio)
+static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
+			       struct write_job *job)
 {
-	sector_t start_sector = ((mb_idx_inseg(wb, mb->idx) + 1) << 3) +
+	sector_t start_sector = ((mb_idx_inseg(wb, job->mb->idx) + 1) << 3) +
 				io_offset(bio);
 	size_t start_byte = start_sector << SECTOR_SHIFT;
 	void *data = bio_data(bio);
@@ -899,22 +904,20 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio,
 	wbdebug("rw:%d, found:%d, on_buffer:%d, fullsize:%d", rw, res->found, res->on_buffer, io_fullsize(bio));
 }
 
-struct write_pos {
-	struct metablock *mb;
-	sector_t plog_head;
-};
-
 /*
  * write bio data to RAM buffer and plog (if available).
  */
-static int write_on_devices(struct wb_device *wb, struct bio *bio,
-			    struct write_pos *pos)
+static int process_write_job(struct wb_device *wb, struct bio *bio,
+			     struct write_job *job)
 {
-	taint_mb(wb, wb->current_seg, pos->mb, bio);
+	/*
+	 * update the dirtiness of the metablock
+	 */
+	taint_mb(wb, wb->current_seg, job->mb, bio);
 
-	write_on_rambuffer(wb, wb->current_seg, pos->mb, bio);
+	write_on_rambuffer(wb, bio, job);
 
-	append_plog(wb, pos->mb, bio, pos->plog_head);
+	append_plog(wb, bio, job);
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
@@ -945,7 +948,7 @@ static int write_on_devices(struct wb_device *wb, struct bio *bio,
  */
 static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
 			    struct lookup_result *res,
-			    struct write_pos *pos)
+			    struct write_job *pos)
 {
 	pos->plog_head = advance_plog_head(wb, bio);
 	pos->mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
@@ -958,7 +961,7 @@ static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
  * decide where to write the data according to the result of cache lookup.
  */
 static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
-			      struct write_pos *pos)
+			      struct write_job *pos)
 {
 	struct lookup_result res;
 
@@ -1003,14 +1006,24 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
-	struct write_pos pos;
-	prepare_write_pos(wb, bio, &pos);
-	return write_on_devices(wb, bio, &pos);
+	struct write_job job;
+
+	/*
+	 * first decide where to write the bio data
+	 */
+	prepare_write_pos(wb, bio, &job);
+	/*
+	 * we use a shared buffer as the write buffer
+	 * each job must have their own if they process different contexts.
+	 */
+	job.plog_buf = wb->plog_buf;
+	return process_write_job(wb, bio, &job);
 }
 
 struct per_bio_data {
 	void *ptr;
 };
+
 static int process_read(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
@@ -1036,9 +1049,9 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	}
 
 	/*
-	 * We must wait for the (maybe) queued segment to be flushed
+	 * we must wait for the (maybe) queued segment to be flushed
 	 * to the cache device.
-	 * Without this, we read the wrong data from the cache device.
+	 * without this, we read the wrong data from the cache device.
 	 */
 	wait_for_flushing(wb, res.found_seg->id);
 
@@ -1318,7 +1331,7 @@ static int init_core_struct(struct dm_target *ti)
 }
 
 /*
- * Create a Writeboost device
+ * create a writeboost device
  *
  * <type>
  * <essential args>*
@@ -1326,7 +1339,7 @@ static int init_core_struct(struct dm_target *ti)
  * <#tunable args> <tunable args>*
  * optionals are tunables are unordered lists of k-v pair.
  *
- * See Documentation for detail.
+ * see doc for detail.
   */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
@@ -1407,7 +1420,7 @@ static void writeboost_dtr(struct dm_target *ti)
 
 /*
  * .postsuspend is called before .dtr.
- * We flush out all the transient data and make them persistent.
+ * we flush out all the transient data and make them persistent.
  */
 static void writeboost_postsuspend(struct dm_target *ti)
 {
@@ -1444,8 +1457,8 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 }
 
 /*
- * Since Writeboost is just a cache target and the cache block size is fixed
- * to 4KB. There is no reason to count the cache device in device iteration.
+ * since Writeboost is just a cache target and the cache block size is fixed
+ * to 4KB. there is no reason to count the cache device in device iteration.
  */
 static int
 writeboost_iterate_devices(struct dm_target *ti,
@@ -1544,7 +1557,7 @@ static struct target_type writeboost_target = {
 	.dtr = writeboost_dtr,
 	/*
 	 * .merge is not implemented
-	 * We split the passed I/O into 4KB cache block no matter
+	 * we split the passed I/O into 4KB cache block no matter
 	 * how big the I/O is.
 	 */
 	.postsuspend = writeboost_postsuspend,

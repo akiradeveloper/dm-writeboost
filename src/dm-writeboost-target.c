@@ -102,14 +102,9 @@ static u8 io_offset(struct bio *bio)
 	return do_io_offset(bio->bi_sector);
 }
 
-static sector_t io_count(struct bio *bio)
-{
-	return bio->bi_size >> SECTOR_SHIFT;
-}
-
 static bool io_fullsize(struct bio *bio)
 {
-	return io_count(bio) == (1 << 3);
+	return bio_sectors(bio) == (1 << 3);
 }
 
 static bool io_write(struct bio *bio)
@@ -147,7 +142,7 @@ do_append_plog_t1(struct wb_device *wb, struct bio *bio, sector_t plog_head)
 	struct dm_io_region region = {
 		.bdev = wb->plog_dev_t1->bdev,
 		.sector = wb->plog_start_sector + plog_head,
-		.count = 1 + io_count(bio),
+		.count = 1 + bio_sectors(bio),
 	};
 	IO(dm_safe_io(&io_req, 1, &region, NULL, true));
 }
@@ -162,7 +157,7 @@ do_append_plog(struct wb_device *wb, struct metablock *mb,
 		.sector = cpu_to_le64(bio->bi_sector),
 		.checksum = cpu_to_le32(cksum),
 		.idx = mb_idx_inseg(wb, mb->idx),
-		.len = io_count(bio),
+		.len = bio_sectors(bio),
 	};
 	memcpy(wb->plog_buf, &meta, 512);
 	memcpy(wb->plog_buf + 512, bio_data(bio), bio->bi_size);
@@ -189,7 +184,7 @@ append_plog(struct wb_device *wb, struct metablock *mb,
 			wb->cur_plog_head == plog_head);
 
 	do_append_plog(wb, mb, bio, plog_head);
-	wb->cur_plog_head += (1 + io_count(bio));
+	wb->cur_plog_head += (1 + bio_sectors(bio));
 
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
@@ -259,7 +254,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 {
 	sector_t old = wb->alloc_plog_head;
-	wb->alloc_plog_head += (1 + io_count(bio));
+	wb->alloc_plog_head += (1 + bio_sectors(bio));
 	return old;
 }
 
@@ -532,12 +527,12 @@ static void taint_mb(struct wb_device *wb, struct segment_header *seg,
 		u8 i;
 		u8 acc_bits = 0;
 		/* FIXME i = 0; ... */
-		for (i = io_offset(bio); i < (io_offset(bio) + io_count(bio)); i++)
+		for (i = io_offset(bio); i < (io_offset(bio) + bio_sectors(bio)); i++)
 			acc_bits += (1 << i);
 
 		mb->dirty_bits |= acc_bits;
 	}
-	BUG_ON(!io_count(bio));
+	BUG_ON(!bio_sectors(bio));
 	BUG_ON(!mb->dirty_bits);
 	spin_unlock_irqrestore(&wb->lock, flags);
 
@@ -801,7 +796,7 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 	 * it's time to request new plog.
 	 */
 	if (wb->type)
-		plog_no_space = (wb->alloc_plog_head + 1 + io_count(bio)) > wb->plog_size;
+		plog_no_space = (wb->alloc_plog_head + 1 + bio_sectors(bio)) > wb->plog_size;
 
 	/*
 	 * we request a new RAM buffer (hence segment)
@@ -946,6 +941,20 @@ static int write_on_devices(struct wb_device *wb, struct bio *bio,
 }
 
 /*
+ * prepare new write position because we don't have cache block to overwrite.
+ */
+static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
+			    struct lookup_result *res,
+			    struct write_pos *pos)
+{
+	pos->plog_head = advance_plog_head(wb, bio);
+	pos->mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
+	BUG_ON(pos->mb->dirty_bits);
+
+	ht_register(wb, res->head, pos->mb, &res->key);
+}
+
+/*
  * decide where to write the data according to the result of cache lookup.
  */
 static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
@@ -965,23 +974,28 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 	cache_lookup(wb, bio, &res);
 
 	if (res.found) {
-		pos->mb = res.found_mb;
 		if (unlikely(res.on_buffer)) {
+			/*
+			 * overwrite on the buffer
+			 */
 			pos->plog_head = advance_plog_head(wb, bio);
+			pos->mb = res.found_mb;
 			mutex_unlock(&wb->io_lock);
 			return;
 		} else {
+			/*
+			 * cache hit on the cache device.
+			 * since we will write new dirty data to the buffer
+			 * we need to invalidate the existing thus hit cache block
+			 * beforehand.
+			 */
 			invalidate_previous_cache(wb, res.found_seg, res.found_mb,
 						  io_fullsize(bio));
 			atomic_dec(&res.found_seg->nr_inflight_ios);
 		}
 	}
 
-	pos->plog_head = advance_plog_head(wb, bio);
-	pos->mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	BUG_ON(pos->mb->dirty_bits);
-
-	ht_register(wb, res.head, pos->mb, &res.key);
+	prepare_new_pos(wb, bio, &res, pos);
 
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);
@@ -1047,19 +1061,19 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 }
 
 /*
- * (Locking)
- * A cache data is placed either on RAM buffer or SSD if it was flushed.
- * To ease the locking, we establish a simple rule for the dirtiness
- * of a cache data.
+ * (locking)
+ * a cache data is placed either on RAM buffer or SSD if it was flushed.
+ * to ease the locking, we establish a simple rule for the dirtiness of a cache data.
  *
- * If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
- * only increases. The justification for this design is that the cache on the
- * RAM buffer is seldom migrated.
- * If the data is, on the other hand, on the SSD after flushed the dirtiness
- * only decreases.
+ * if the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
+ * only "increases".
+ * The justification for this design is that the cache on the RAM buffer is
+ * seldom migrated.
+ * if the data is, on the other hand, on the SSD after flushed the dirtiness
+ * only "decreases".
  *
- * This simple rule frees us from the dirtiness fluctuating thus simplies
- * locking design.
+ * this simple rule frees us from the dirtiness fluctuating
+ * and thus simplies locking design.
  */
 static int process_bio(struct wb_device *wb, struct bio *bio)
 {

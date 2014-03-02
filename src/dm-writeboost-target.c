@@ -1026,7 +1026,12 @@ static void write_job_proc(struct work_struct *work)
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
 	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
+	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
 	BUG_ON(!job);
+	BUG_ON(!job->plog_buf);
+	job->wb = wb;
+	job->bio = bio;
+	INIT_WORK(&job->work, write_job_proc);
 
 	/*
 	 * first decide where to write the bio data
@@ -1042,11 +1047,6 @@ static int process_write(struct wb_device *wb, struct bio *bio)
 	 * the shortpoint of this approach is the cost of queuing the work and
 	 * that the work is processed by other CPUs (cache-miss).
 	 */
-	job->wb = wb;
-	job->bio = bio;
-	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
-	BUG_ON(!job->plog_buf);
-	INIT_WORK(&job->work, write_job_proc);
 	WBINFO("QUEUE head head:%u", job->plog_head);
 	queue_work(wb->write_job_wq, &job->work);
 

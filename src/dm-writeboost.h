@@ -166,6 +166,24 @@ struct segment_header {
 
 /*----------------------------------------------------------------*/
 
+struct write_job {
+	struct work_struct work;
+
+	struct wb_device *wb;
+	struct bio *bio;
+
+	struct metablock *mb; /* pos */
+	sector_t plog_head; /* pos */
+
+	/*
+	 * we can't use zero-length array here
+	 * instead we must allocate the buffer by explicitly
+	 * calling kmalloc.
+	 * otherwise, the dm_io() function fails.
+	 */
+	void *plog_buf;
+};
+
 /*
  * RAM buffer is a buffer that any dirty data are first written to.
  * type member in wb_device indicates the buffer type.
@@ -296,6 +314,16 @@ struct wb_device {
 	u32 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 	mempool_t *flush_job_pool;
+
+	/*---------------------------------------------*/
+
+	/***********
+	 * write job
+	 ***********/
+
+	struct workqueue_struct *write_job_wq;
+	mempool_t *write_job_pool;
+	mempool_t *plog_buf_pool;
 
 	/*---------------------------------------------*/
 

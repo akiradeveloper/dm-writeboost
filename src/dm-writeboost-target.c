@@ -122,13 +122,6 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
 
 /*----------------------------------------------------------------*/
 
-struct write_job {
-	void *plog_buf; /* write buffer */
-
-	struct metablock *mb; /* pos */
-	sector_t plog_head; /* pos */
-};
-
 static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 			      struct write_job *job)
 {
@@ -151,7 +144,7 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 		.sector = wb->plog_start_sector + job->plog_head,
 		.count = 1 + bio_sectors(bio),
 	};
-	IO(dm_safe_io(&io_req, 1, &region, NULL, true));
+	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 }
 
 static void do_append_plog(struct wb_device *wb, struct bio *bio,
@@ -905,45 +898,6 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio,
 }
 
 /*
- * write bio data to RAM buffer and plog (if available).
- */
-static int process_write_job(struct wb_device *wb, struct bio *bio,
-			     struct write_job *job)
-{
-	/*
-	 * update the dirtiness of the metablock
-	 */
-	taint_mb(wb, wb->current_seg, job->mb, bio);
-
-	write_on_rambuffer(wb, bio, job);
-
-	append_plog(wb, bio, job);
-
-	atomic_dec(&wb->current_seg->nr_inflight_ios);
-
-	/*
-	 * deferred ACK for FUA request
-	 *
-	 * bio with REQ_FUA flag has data.
-	 * so, we must run through the path for usual bio.
-	 * And the data is now stored in the RAM buffer.
-	 */
-	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
-		wbdebug("FUA");
-		queue_barrier_io(wb, bio);
-		return DM_MAPIO_SUBMITTED;
-	}
-
-	LIVE_DEAD(
-		bio_endio(bio, 0);
-		,
-		bio_endio(bio, -EIO);
-	);
-
-	return DM_MAPIO_SUBMITTED;
-}
-
-/*
  * prepare new write position because we don't have cache block to overwrite.
  */
 static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
@@ -1004,20 +958,80 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 	mutex_unlock(&wb->io_lock);
 }
 
+/*
+ * write bio data to RAM buffer and plog (if available).
+ */
+static int process_write_job(struct wb_device *wb, struct bio *bio,
+			     struct write_job *job)
+{
+	/*
+	 * update the dirtiness of the metablock
+	 */
+	taint_mb(wb, wb->current_seg, job->mb, bio);
+
+	write_on_rambuffer(wb, bio, job);
+
+	append_plog(wb, bio, job);
+
+	atomic_dec(&wb->current_seg->nr_inflight_ios);
+
+	/*
+	 * deferred ACK for FUA request
+	 *
+	 * bio with REQ_FUA flag has data.
+	 * so, we must run through the path for usual bio.
+	 * And the data is now stored in the RAM buffer.
+	 */
+	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
+		wbdebug("FUA");
+		queue_barrier_io(wb, bio);
+		return DM_MAPIO_SUBMITTED;
+	}
+
+	LIVE_DEAD(
+		bio_endio(bio, 0);
+		,
+		bio_endio(bio, -EIO);
+	);
+
+	return DM_MAPIO_SUBMITTED;
+}
+
+static void write_job_proc(struct work_struct *work)
+{
+	struct write_job *job = container_of(work, struct write_job, work);
+	struct wb_device *wb = job->wb;
+
+	process_write_job(wb, job->bio, job);
+	mempool_free(job->plog_buf, wb->plog_buf_pool);
+	mempool_free(job, wb->write_job_pool);
+}
+
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
-	struct write_job job;
+	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
 
 	/*
 	 * first decide where to write the bio data
 	 */
-	prepare_write_pos(wb, bio, &job);
+	prepare_write_pos(wb, bio, job);
+
 	/*
-	 * we use a shared buffer as the write buffer
-	 * each job must have their own if they process different contexts.
+	 * queue the write job and quit immediately and
+	 * next bio split starts.
+	 * this improves the throughput because bio split and
+	 * process the cloned bio are processed concurrently.
+	 *
+	 * the shortpoint of this approach is the cost of queuing the work and
+	 * that the work is processed by other CPUs (cache-miss).
 	 */
-	job.plog_buf = wb->plog_buf;
-	return process_write_job(wb, bio, &job);
+	job->wb = wb;
+	job->bio = bio;
+	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
+	INIT_WORK(&job->work, write_job_proc);
+	queue_work(wb->write_job_wq, &job->work);
+
+	return DM_MAPIO_SUBMITTED;
 }
 
 struct per_bio_data {

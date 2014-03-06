@@ -167,18 +167,15 @@ struct segment_header {
 /*----------------------------------------------------------------*/
 
 struct write_job {
-	struct work_struct work;
-
 	struct wb_device *wb;
-	struct bio *bio;
 
 	struct metablock *mb; /* pos */
 	sector_t plog_head; /* pos */
 
 	/*
 	 * we can't use zero-length array here
-	 * instead we must allocate the buffer by explicitly
-	 * calling kmalloc.
+	 * instead we must allocate the buffer
+	 * by explicitly calling kmalloc.
 	 * otherwise, the dm_io() function fails.
 	 */
 	void *plog_buf;
@@ -321,7 +318,6 @@ struct wb_device {
 	 * write job
 	 ***********/
 
-	struct workqueue_struct *write_job_wq;
 	mempool_t *write_job_pool;
 	mempool_t *plog_buf_pool;
 
@@ -412,6 +408,7 @@ struct wb_device {
 
 	/* common */
 	char plog_dev_desc[16]; /* passed as essential argv to describe the persistent device */
+	atomic_t nr_inflight_plog_writes; /* number of async plog writes not acked yet */
 	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
 	sector_t plog_size; /* Const. the size of a plog in sector */
 	sector_t alloc_plog_head; /* next relative sector to allocate */

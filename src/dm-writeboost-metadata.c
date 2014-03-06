@@ -824,6 +824,7 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 		return 0;
 
 	wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
+	atomic_set(&wb->nr_inflight_plog_writes, 0);
 	init_waitqueue_head(&wb->plog_wait_queue);
 
 	wb->plog_buf = kmalloc((1 + 8) << SECTOR_SHIFT, GFP_KERNEL);
@@ -1530,14 +1531,6 @@ static int harmless_init(struct wb_device *wb)
 		goto bad_buf_8_pool;
 	}
 
-	wb->write_job_wq = alloc_workqueue(
-			"%s", WQ_MEM_RECLAIM | WQ_SYSFS, 1, "wbwjwq");
-	if (!wb->write_job_wq) {
-		r = -ENOMEM;
-		WBERR("failed to create wbwjwq");
-		goto bad_write_job_wq;
-	}
-
 	wb->write_job_pool = mempool_create_kmalloc_pool(16, sizeof(struct write_job));
 	if (!wb->write_job_pool) {
 		r = -ENOMEM;
@@ -1583,8 +1576,6 @@ bad_flush_job_pool:
 bad_plog_buf_pool:
 	mempool_destroy(wb->write_job_pool);
 bad_write_job_pool:
-	destroy_workqueue(wb->write_job_wq);
-bad_write_job_wq:
 	mempool_destroy(wb->buf_8_pool);
 bad_buf_8_pool:
 	mempool_destroy(wb->buf_1_pool);
@@ -1600,7 +1591,6 @@ static void harmless_free(struct wb_device *wb)
 	mempool_destroy(wb->flush_job_pool);
 	mempool_destroy(wb->plog_buf_pool);
 	mempool_destroy(wb->write_job_pool);
-	destroy_workqueue(wb->write_job_wq);
 	mempool_destroy(wb->buf_8_pool);
 	mempool_destroy(wb->buf_1_pool);
 }

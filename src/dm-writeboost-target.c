@@ -122,10 +122,30 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
 
 /*----------------------------------------------------------------*/
 
+static void wake_up_active_wq(wait_queue_head_t *wq)
+{
+	/* WBINFO("DEC->0"); */
+	if (waitqueue_active(wq))
+		wake_up(wq);
+}
+
+static void plog_write_endio(unsigned long error, void *context)
+{
+	struct write_job *job = context;
+	struct wb_device *wb = job->wb;
+	WBINFO("ENDIO");
+	if(atomic_dec_and_test(&wb->nr_inflight_plog_writes))
+		wake_up_active_wq(&wb->plog_wait_queue);
+
+	mempool_free(job->plog_buf, wb->plog_buf_pool);
+	mempool_free(job, wb->write_job_pool);
+}
+
 static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 			      struct write_job *job)
 {
 	int r = 0;
+	/* WBINFO("DO APPEND LOG"); */
 
 	/*
 	 * We must write the data with FUA flag to make sure that
@@ -134,8 +154,9 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 	 */
 	struct dm_io_request io_req = {
 		.client = wb_io_client,
-		.bi_rw = WRITE_FUA,
-		.notify.fn = NULL,
+		.bi_rw = WRITE,
+		.notify.fn = plog_write_endio,
+		.notify.context = job,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = job->plog_buf,
 	};
@@ -144,12 +165,25 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 		.sector = wb->plog_start_sector + job->plog_head,
 		.count = 1 + bio_sectors(bio),
 	};
-	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
+
+	/*
+	 * if the bio is FUA write
+	 * we need to submit this plog write in background
+	 * otherwise causes serious deadlock
+	 *
+	 * TODO really???
+	 * run all in background seems OK but
+	 * for halfly I am not all confident.
+	 */
+	bool thread = (bio->bi_rw & REQ_FUA) ? true : false;
+	IO(dm_safe_io(&io_req, 1, &region, NULL, thread));
+	/* WBINFO("END DO APPEND"); */
 }
 
 static void do_append_plog(struct wb_device *wb, struct bio *bio,
 			   struct write_job *job)
 {
+	/* WBINFO("APPEND LOG"); */
 	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
@@ -170,27 +204,43 @@ static void do_append_plog(struct wb_device *wb, struct bio *bio,
 	}
 }
 
+/*
+ * wait for all the plog writes are done and
+ * make all the previous writes persistent.
+ */
+static void barrier_plog_writes(struct wb_device *wb)
+{
+	int r = 0;
+	WBINFO("WE %u", atomic_read(&wb->nr_inflight_plog_writes));
+	wait_event(wb->plog_wait_queue,
+		   !atomic_read(&wb->nr_inflight_plog_writes));
+	WBINFO("UP");
+	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+	switch (wb->type) {
+	case 1:
+		IO(blkdev_issue_flush(wb->plog_dev_t1->bdev, GFP_NOIO, NULL));
+		break;
+	default:
+		BUG();
+	}
+}
+
+/*
+ * submit a serialized plog write.
+ */
 static void append_plog(struct wb_device *wb, struct bio *bio,
 			struct write_job *job)
 {
-	int r = 0;
-
 	if (!wb->type)
 		return;
 
-	WBINFO("BEFORE WAIT cur:%u, head:%u", wb->cur_plog_head, job->plog_head);
-	wait_event_interruptible(wb->plog_wait_queue,
-				 wb->cur_plog_head == job->plog_head);
+	wait_event(wb->plog_wait_queue, wb->cur_plog_head == job->plog_head);
 
-	/* WBINFO("IO"); */
+	atomic_inc(&wb->nr_inflight_plog_writes);
 	do_append_plog(wb, bio, job);
 	wb->cur_plog_head += (1 + bio_sectors(bio));
 
-	/* WBINFO("FLUSH"); */
-	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-
-	wake_up_interruptible(&wb->plog_wait_queue);
-	/* WBINFO("AFTER WAKEUP"); */
+	wake_up_active_wq(&wb->plog_wait_queue);
 }
 
 /*
@@ -269,9 +319,18 @@ static void acquire_new_plog(struct wb_device *wb, u64 id)
 
 	wait_for_flushing(wb, SUB_ID(id, wb->nr_plogs));
 
+	/*
+	 * if some plog writes are inflight
+	 * but we acquire new plog
+	 * the former writes will be possibly
+	 * overwrite the later writes
+	 * because there is no guarantees on
+	 * the ordering of async writes.
+	 */
+	barrier_plog_writes(wb);
+
 	div_u64_rem(id - 1, wb->nr_plogs, &tmp32);
 	wb->plog_start_sector = wb->plog_size * tmp32;
-	WBINFO("CLEAR PLOG HEAD");
 	wb->alloc_plog_head = 0;
 	wb->cur_plog_head = 0;
 }
@@ -372,7 +431,6 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 static void prepare_new_seg(struct wb_device *wb)
 {
-	WBINFO("PREPARE NEW SEG");
 	u64 next_id = wb->current_seg->id + 1;
 	acquire_new_seg(wb, next_id);
 
@@ -404,8 +462,6 @@ static void queue_flush_job(struct wb_device *wb)
 	struct flush_job *job;
 	size_t rep = 0;
 
-	WBINFO("QUEUE FLUSH JOB");
-	flush_workqueue(wb->write_job_wq);
 	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
 		rep++;
 		if (rep == 1000)
@@ -422,11 +478,8 @@ static void queue_flush_job(struct wb_device *wb)
 
 static void queue_current_buffer(struct wb_device *wb)
 {
-	WBINFO("START QUEUE CURRENT BUFFER");
 	queue_flush_job(wb);
-	/* smp_mb(); */
 	prepare_new_seg(wb);
-	WBINFO("DONE QUEUE CURRENT BUFFER");
 }
 
 /*
@@ -858,8 +911,8 @@ static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 	if (!wb->type) {
 		queue_barrier_io(wb, bio);
 	} else {
-		int r = 0;
-		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+		WBINFO("WA");
+		barrier_plog_writes(wb);
 		LIVE_DEAD(
 			bio_endio(bio, 0);
 			,
@@ -975,19 +1028,25 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 static int process_write_job(struct wb_device *wb, struct bio *bio,
 			     struct write_job *job)
 {
-	WBINFO("process");
 	/*
 	 * update the dirtiness of the metablock
 	 */
 	taint_mb(wb, wb->current_seg, job->mb, bio);
 
-	/* WBINFO("RAM buf"); */
 	write_on_rambuffer(wb, bio, job);
 
-	WBINFO("PLOG");
 	append_plog(wb, bio, job);
 
-	/* WBINFO("DEC"); */
+	/*
+	 * in case of FUA write
+	 * we need to make all the plog writes
+	 * submitted before persistent.
+	 */
+	if (wb->type && (bio->bi_rw & REQ_FUA)) {
+		WBINFO("WA");
+		barrier_plog_writes(wb);
+	}
+
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 
 	/*
@@ -998,12 +1057,10 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 	 * And the data is now stored in the RAM buffer.
 	 */
 	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
-		wbdebug("FUA");
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	/* WBINFO("ACK"); */
 	LIVE_DEAD(
 		bio_endio(bio, 0);
 		,
@@ -1013,44 +1070,18 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 	return DM_MAPIO_SUBMITTED;
 }
 
-static void write_job_proc(struct work_struct *work)
-{
-	struct write_job *job = container_of(work, struct write_job, work);
-	struct wb_device *wb = job->wb;
-
-	process_write_job(wb, job->bio, job);
-	mempool_free(job->plog_buf, wb->plog_buf_pool);
-	mempool_free(job, wb->write_job_pool);
-}
-
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
 	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
 	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
-	BUG_ON(!job);
-	BUG_ON(!job->plog_buf);
 	job->wb = wb;
-	job->bio = bio;
-	INIT_WORK(&job->work, write_job_proc);
 
 	/*
 	 * first decide where to write the bio data
 	 */
 	prepare_write_pos(wb, bio, job);
 
-	/*
-	 * queue the write job and quit immediately and
-	 * next bio split starts.
-	 * this improves the throughput because bio split and
-	 * process the cloned bio are processed concurrently.
-	 *
-	 * the shortpoint of this approach is the cost of queuing the work and
-	 * that the work is processed by other CPUs (cache-miss).
-	 */
-	WBINFO("QUEUE head head:%u", job->plog_head);
-	queue_work(wb->write_job_wq, &job->work);
-
-	return DM_MAPIO_SUBMITTED;
+	return process_write_job(wb, bio, job);
 }
 
 struct per_bio_data {

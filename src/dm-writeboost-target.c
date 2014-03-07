@@ -113,7 +113,7 @@ static bool io_write(struct bio *bio)
 }
 
 /*
- * We use 4KB alignment address of original request the for the lookup key.
+ * we use 4KB alignment address of original request the as the lookup key.
  */
 static sector_t calc_cache_alignment(sector_t bio_sector)
 {
@@ -122,9 +122,12 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
 
 /*----------------------------------------------------------------*/
 
+/*
+ * wake up the processes on the wq if the wq is active.
+ * (at least a process is waiting on it)
+ */
 static void wake_up_active_wq(wait_queue_head_t *wq)
 {
-	/* WBINFO("DEC->0"); */
 	if (waitqueue_active(wq))
 		wake_up(wq);
 }
@@ -133,7 +136,6 @@ static void plog_write_endio(unsigned long error, void *context)
 {
 	struct write_job *job = context;
 	struct wb_device *wb = job->wb;
-	WBINFO("ENDIO");
 	if(atomic_dec_and_test(&wb->nr_inflight_plog_writes))
 		wake_up_active_wq(&wb->plog_wait_queue);
 
@@ -145,13 +147,7 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 			      struct write_job *job)
 {
 	int r = 0;
-	/* WBINFO("DO APPEND LOG"); */
 
-	/*
-	 * We must write the data with FUA flag to make sure that
-	 * the log is persistent when it's acked. Hoping that block device
-	 * with NVRAM equipped or battery-backed up DRAM ignores FUA flag.
-	 */
 	struct dm_io_request io_req = {
 		.client = wb_io_client,
 		.bi_rw = WRITE,
@@ -167,23 +163,17 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 	};
 
 	/*
-	 * if the bio is FUA write
-	 * we need to submit this plog write in background
-	 * otherwise causes serious deadlock
-	 *
-	 * TODO really???
-	 * run all in background seems OK but
-	 * for halfly I am not all confident.
+	 * we need to submit this plog write in background otherwise
+	 * causes serious deadlock. although this is not a sync write
+	 * the process is waiting for all async plog writes complete.
+	 * thus, essentially sync.
 	 */
-	bool thread = (bio->bi_rw & REQ_FUA) ? true : false;
-	IO(dm_safe_io(&io_req, 1, &region, NULL, thread));
-	/* WBINFO("END DO APPEND"); */
+	IO(dm_safe_io(&io_req, 1, &region, NULL, true));
 }
 
 static void do_append_plog(struct wb_device *wb, struct bio *bio,
 			   struct write_job *job)
 {
-	/* WBINFO("APPEND LOG"); */
 	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
@@ -205,16 +195,20 @@ static void do_append_plog(struct wb_device *wb, struct bio *bio,
 }
 
 /*
- * wait for all the plog writes are done and
- * make all the previous writes persistent.
+ * wait for all the plog writes complete
+ * and then make all the predecessor writes persistent.
  */
 static void barrier_plog_writes(struct wb_device *wb)
 {
 	int r = 0;
-	WBINFO("WE %u", atomic_read(&wb->nr_inflight_plog_writes));
 	wait_event(wb->plog_wait_queue,
 		   !atomic_read(&wb->nr_inflight_plog_writes));
-	WBINFO("UP");
+
+	/*
+	 * blkdev_issue_flush calls submit_bio and waits for the
+	 * bio complete. thus, sync.
+	 * however, doesn't cause deadlock as sync dm_io.
+	 */
 	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 	switch (wb->type) {
 	case 1:
@@ -227,6 +221,8 @@ static void barrier_plog_writes(struct wb_device *wb)
 
 /*
  * submit a serialized plog write.
+ * if the bio is REQ_FUA all the predeessor writes are all persistent
+ * after returning this function.
  */
 static void append_plog(struct wb_device *wb, struct bio *bio,
 			struct write_job *job)
@@ -241,6 +237,9 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
 	wb->cur_plog_head += (1 + bio_sectors(bio));
 
 	wake_up_active_wq(&wb->plog_wait_queue);
+
+	if (wb->type && (bio->bi_rw & REQ_FUA))
+		barrier_plog_writes(wb);
 }
 
 /*
@@ -407,9 +406,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 		schedule_timeout_interruptible(msecs_to_jiffies(1));
 	}
 
-	wbdebug("BEFORE WAIT MIG");
 	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
-	wbdebug("AFTER WAIT MIG");
 	if (count_dirty_caches_remained(new_seg)) {
 		WBERR("%u dirty caches remained. id:%u", count_dirty_caches_remained(new_seg), id);
 		BUG();
@@ -425,8 +422,6 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 	acquire_new_rambuffer(wb, id);
 	acquire_new_plog(wb, id);
-
-	wbdebug("ACQUIRED RESOURCES");
 }
 
 static void prepare_new_seg(struct wb_device *wb)
@@ -911,7 +906,6 @@ static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 	if (!wb->type) {
 		queue_barrier_io(wb, bio);
 	} else {
-		WBINFO("WA");
 		barrier_plog_writes(wb);
 		LIVE_DEAD(
 			bio_endio(bio, 0);
@@ -1036,16 +1030,6 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 	write_on_rambuffer(wb, bio, job);
 
 	append_plog(wb, bio, job);
-
-	/*
-	 * in case of FUA write
-	 * we need to make all the plog writes
-	 * submitted before persistent.
-	 */
-	if (wb->type && (bio->bi_rw & REQ_FUA)) {
-		WBINFO("WA");
-		barrier_plog_writes(wb);
-	}
 
 	atomic_dec(&wb->current_seg->nr_inflight_ios);
 

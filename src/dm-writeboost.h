@@ -251,20 +251,27 @@ struct wb_device {
 
 	struct dm_target *ti;
 
-	struct dm_dev *origin_dev; /* Slow device (HDD) */
-	struct dm_dev *cache_dev; /* Fast device (SSD) */
+	struct dm_dev *origin_dev; /* slow device (HDD) */
+	struct dm_dev *cache_dev; /* fast device (SSD) */
 
 	mempool_t *buf_1_pool; /* 1 sector buffer pool */
 	mempool_t *buf_8_pool; /* 8 sector buffer pool */
 
 	/*
-	 * Mutex is very light-weight.
-	 * To mitigate the overhead of the locking we chose to
-	 * use mutex.
-	 * To optimize the read path, rw_semaphore is an option
-	 * but it means to sacrifice write path.
+	 * mutex is really light-weighted.
+	 * to mitigate the overhead of the locking we chose to use mutex.
+	 * to optimize the read path, rw_semaphore is an option
+	 * but it means to sacrifice writes.
 	 */
 	struct mutex io_lock;
+
+	/*
+	 * wq to wait for nr_inflight_ios to be zero.
+	 * nr_inflight_ios of segment header increments inside io_lock.
+	 * while the refcount > 0, the segment can not be overwritten
+	 * since there is at least one bio to direct it.
+	 */
+	wait_queue_head_t inflight_ios_wq;
 
 	spinlock_t lock;
 

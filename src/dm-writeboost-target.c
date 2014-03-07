@@ -202,7 +202,7 @@ static void barrier_plog_writes(struct wb_device *wb)
 {
 	int r = 0;
 	wait_event(wb->plog_wait_queue,
-		   !atomic_read(&wb->nr_inflight_plog_writes));
+		!atomic_read(&wb->nr_inflight_plog_writes));
 
 	/*
 	 * blkdev_issue_flush calls submit_bio and waits for the
@@ -395,26 +395,22 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	struct segment_header *new_seg = get_segment_header_by_id(wb, id);
 
 	/*
-	 * We wait for all requests to the new segment is consumed.
-	 * Mutex taken gurantees that no new I/O to this segment is coming in.
+	 * we wait for all requests to the new segment is consumed.
+	 * mutex taken gurantees that no new I/O to this segment is coming in.
 	 */
-	size_t rep = 0;
-	while (atomic_read(&new_seg->nr_inflight_ios)) {
-		rep++;
-		if (rep == 1000)
-			WBWARN("too long to process all requests");
-		schedule_timeout_interruptible(msecs_to_jiffies(1));
-	}
+	wait_event(wb->inflight_ios_wq,
+		!atomic_read(&new_seg->nr_inflight_ios));
 
 	wait_for_migration(wb, SUB_ID(id, wb->nr_segments));
 	if (count_dirty_caches_remained(new_seg)) {
-		WBERR("%u dirty caches remained. id:%u", count_dirty_caches_remained(new_seg), id);
+		WBERR("%u dirty caches remained. id:%u",
+		      count_dirty_caches_remained(new_seg), id);
 		BUG();
 	}
 	discard_caches_inseg(wb, new_seg);
 
 	/*
-	 * We must not set new id to the new segment before
+	 * we must not set new id to the new segment before
 	 * all wait_* events are done since they uses those id for waiting.
 	 */
 	new_seg->id = id;
@@ -455,14 +451,10 @@ static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 static void queue_flush_job(struct wb_device *wb)
 {
 	struct flush_job *job;
-	size_t rep = 0;
 
-	while (atomic_read(&wb->current_seg->nr_inflight_ios)) {
-		rep++;
-		if (rep == 1000)
-			WBWARN("too long to process all requests");
-		schedule_timeout_interruptible(msecs_to_jiffies(1));
-	}
+	wait_event(wb->inflight_ios_wq,
+		!atomic_read(&wb->current_seg->nr_inflight_ios));
+
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
 	job = mempool_alloc(wb->flush_job_pool, GFP_NOIO);
@@ -969,6 +961,12 @@ static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
 	ht_register(wb, res->head, pos->mb, &res->key);
 }
 
+static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
+{
+	if (atomic_dec_and_test(&seg->nr_inflight_ios))
+		wake_up_active_wq(&wb->inflight_ios_wq);
+}
+
 /*
  * decide where to write the data according to the result of cache lookup.
  */
@@ -1006,7 +1004,7 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 			 */
 			invalidate_previous_cache(wb, res.found_seg, res.found_mb,
 						  io_fullsize(bio));
-			atomic_dec(&res.found_seg->nr_inflight_ios);
+			dec_inflight_ios(wb, res.found_seg);
 		}
 	}
 
@@ -1031,7 +1029,7 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 
 	append_plog(wb, bio, job);
 
-	atomic_dec(&wb->current_seg->nr_inflight_ios);
+	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
 	 * deferred ACK for FUA request
@@ -1091,7 +1089,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 		if (dirty_bits)
 			migrate_buffered_mb(wb, res.found_mb, dirty_bits);
 
-		atomic_dec(&res.found_seg->nr_inflight_ios);
+		dec_inflight_ios(wb, res.found_seg);
 		bio_remap(bio, wb->origin_dev, bio->bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
@@ -1115,7 +1113,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 		migrate_mb(wb, res.found_seg, res.found_mb, dirty_bits, true);
 		cleanup_mb_if_dirty(wb, res.found_seg, res.found_mb);
 
-		atomic_dec(&res.found_seg->nr_inflight_ios);
+		dec_inflight_ios(wb, res.found_seg);
 		bio_remap(bio, wb->origin_dev, bio->bi_sector);
 	}
 	return DM_MAPIO_REMAPPED;
@@ -1165,16 +1163,16 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 {
-	struct segment_header *seg;
+	struct wb_device *wb = ti->private;
 	struct per_bio_data *map_context =
 		dm_per_bio_data(bio, ti->per_bio_data_size);
+	struct segment_header *seg;
 
 	if (!map_context->ptr)
 		return 0;
 
 	seg = map_context->ptr;
-	atomic_dec(&seg->nr_inflight_ios);
-
+	dec_inflight_ios(wb, seg);
 	return 0;
 }
 
@@ -1370,6 +1368,7 @@ static int init_core_struct(struct dm_target *ti)
 	wb->ti = ti;
 
 	mutex_init(&wb->io_lock);
+	init_waitqueue_head(&wb->inflight_ios_wq);
 	spin_lock_init(&wb->lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
 	clear_bit(WB_DEAD, &wb->flags);

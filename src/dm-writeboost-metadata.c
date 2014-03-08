@@ -1630,8 +1630,27 @@ bad_migrate_daemon:
 static int init_flusher(struct wb_device *wb)
 {
 	int r = 0;
+
+	/*
+	 * flusher's max_active is set to 1
+	 * we did not see notable performance improvement
+	 * when more than one worker is activated.
+	 * to avoid unexpected failure when more than
+	 * one workers are working (e.g. deadlock)
+	 * we fix max_active to 1.
+	 *
+	 * tuning the max_active of this wq online
+	 * can be implemented by adding WQ_SYSFS flag
+	 * but for the reason explained above
+	 * this workqueue should not be tunable.
+	 *
+	 * if you want to do so
+	 * must place this in module-level.
+	 * otherwise name conflict occurs when more than
+	 * one devices are created.
+	 */
 	wb->flusher_wq = alloc_workqueue(
-		"%s", WQ_MEM_RECLAIM | WQ_SYSFS, 1, "wbflusher");
+		"wbflusher", WQ_MEM_RECLAIM, 1);
 	if (!wb->flusher_wq) {
 		WBERR("failed to allocate wbflusher");
 		return -ENOMEM;

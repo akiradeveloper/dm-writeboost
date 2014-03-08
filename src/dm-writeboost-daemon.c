@@ -55,13 +55,13 @@ process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 	wbdebug("has_barrier:%d", has_barrier);
 
 	/*
-	 * Make all the data until now persistent.
+	 * make all the data until now persistent.
 	 */
 	if (has_barrier)
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
 	/*
-	 * Ack the chained barrier requests.
+	 * ack the chained barrier requests.
 	 */
 	if (has_barrier) {
 		struct bio *bio;
@@ -101,14 +101,14 @@ void flush_proc(struct work_struct *work)
 	};
 
 	/*
-	 * The actual write requests to the cache device are not serialized.
-	 * They may perform in parallel.
+	 * the actual write requests to the cache device are not serialized.
+	 * they may perform in parallel.
 	 */
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 	/*
-	 * Deferred ACK for barrier requests
-	 * To serialize barrier ACK in logging we wait for the previous
+	 * deferred ACK for barrier requests
+	 * to serialize barrier ACK in logging we wait for the previous
 	 * segment to be persistently written (if needed).
 	 */
 	wbdebug("WAIT BEFORE:%u", seg->id);
@@ -118,8 +118,8 @@ void flush_proc(struct work_struct *work)
 	process_deferred_barriers(wb, job);
 
 	/*
-	 * We can count up the last_flushed_segment_id only after segment
-	 * is written persistently. Counting up the id is serialized.
+	 * we can count up the last_flushed_segment_id only after segment
+	 * is written persistently. counting up the id is serialized.
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up_interruptible(&wb->flush_wait_queue);
@@ -148,10 +148,10 @@ static void migrate_endio(unsigned long error, void *context)
 }
 
 /*
- * Asynchronously submit the segment data at position k in the migrate buffer.
- * Batched migration first collects all the segments to migrate into a migrate buffer.
- * So, there are a number of segment data in the migrate buffer.
- * This function submits the one in position k.
+ * asynchronously submit the segment data at position k in the migrate buffer.
+ * batched migration first collects all the segments to migrate into a migrate buffer.
+ * so, there are a number of segment data in the migrate buffer.
+ * this function submits the one in position k.
  */
 static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 			      size_t k)
@@ -239,10 +239,10 @@ static void memorize_data_to_migrate(struct wb_device *wb,
 }
 
 /*
- * We first memorize the snapshot of the dirtiness in the segments.
- * The snapshot dirtiness is dirtier than that of any future moment
+ * we first memorize the snapshot of the dirtiness in the segments.
+ * the snapshot dirtiness is dirtier than that of any future moment
  * because it is only monotonously decreasing after flushed.
- * Therefore, we will migrate the possible dirtiest state of the
+ * therefore, we will migrate the possible dirtiest state of the
  * segments which won't lose any dirty data.
  */
 static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_header *seg,
@@ -254,8 +254,8 @@ static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_he
 	size_t a = wb->nr_caches_inseg * k;
 
 	/*
-	 * We first memorize the dirtiness of the metablocks.
-	 * Dirtiness may decrease while we run through the migration code
+	 * we first memorize the dirtiness of the metablocks.
+	 * dirtiness may decrease while we run through the migration code
 	 * and it may cause corruption.
 	 */
 	for (i = 0; i < seg->length; i++) {
@@ -334,7 +334,7 @@ migrate_write:
 	BUG_ON(atomic_read(&wb->migrate_io_count));
 
 	/*
-	 * We clean up the metablocks because there is no reason
+	 * we clean up the metablocks because there is no reason
 	 * to leave the them dirty.
 	 */
 	for (k = 0; k < wb->num_emigrates; k++) {
@@ -343,11 +343,11 @@ migrate_write:
 	}
 
 	/*
-	 * We must write back a segments if it was written persistently.
-	 * Nevertheless, we betray the upper layer.
-	 * Remembering which segment is persistent is too expensive
+	 * we must write back a segments if it was written persistently.
+	 * nevertheless, we betray the upper layer.
+	 * remembering which segment is persistent is too expensive
 	 * and furthermore meaningless.
-	 * So we consider all segments are persistent and write them back
+	 * so we consider all segments are persistent and write them back
 	 * persistently.
 	 */
 	IO(blkdev_issue_flush(wb->origin_dev->bdev, GFP_NOIO, NULL));
@@ -391,7 +391,7 @@ static void do_migrate_proc(struct wb_device *wb)
 	}
 
 	/*
-	 * Store emigrates
+	 * store emigrates
 	 */
 	for (i = 0; i < nr_mig; i++) {
 		struct segment_header *seg = get_segment_header_by_id(wb,
@@ -415,8 +415,8 @@ int migrate_proc(void *data)
 }
 
 /*
- * Wait for a segment to be migrated.
- * After migrated the metablocks in the segment are clean.
+ * wait for a segment to be migrated.
+ * after migrated the metablocks in the segment are clean.
  */
 void wait_for_migration(struct wb_device *wb, u64 id)
 {

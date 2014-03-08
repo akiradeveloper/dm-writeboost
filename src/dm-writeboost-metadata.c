@@ -97,7 +97,7 @@ static void *large_array_at(struct large_array *arr, u64 i)
 /*----------------------------------------------------------------*/
 
 /*
- * Get the in-core metablock of the given index.
+ * get the in-core metablock of the given index.
  */
 static struct metablock *mb_at(struct wb_device *wb, u32 idx)
 {
@@ -121,7 +121,7 @@ static void mb_array_empty_init(struct wb_device *wb)
 }
 
 /*
- * Calc the starting sector of the k-th segment
+ * calc the starting sector of the k-th segment
  */
 static sector_t calc_segment_header_start(struct wb_device *wb, u32 k)
 {
@@ -135,7 +135,7 @@ static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 }
 
 /*
- * Get the relative index in a segment of the mb_idx-th metablock
+ * get the relative index in a segment of the mb_idx-th metablock
  */
 u32 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
 {
@@ -145,7 +145,7 @@ u32 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
 }
 
 /*
- * Calc the starting sector of the mb_idx-th cache block
+ * calc the starting sector of the mb_idx-th cache block
  */
 sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg, u32 mb_idx)
 {
@@ -153,7 +153,7 @@ sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg, 
 }
 
 /*
- * Get the segment that contains the passed mb
+ * get the segment that contains the passed mb
  */
 struct segment_header *mb_to_seg(struct wb_device *wb, struct metablock *mb)
 {
@@ -189,8 +189,8 @@ static struct segment_header *segment_at(struct wb_device *wb, u32 k)
 }
 
 /*
- * Get the segment from the segment id.
- * The Index of the segment is calculated from the segment id.
+ * get the segment from the segment id.
+ * the Index of the segment is calculated from the segment id.
  */
 struct segment_header *
 get_segment_header_by_id(struct wb_device *wb, u64 id)
@@ -221,7 +221,7 @@ static int __must_check init_segment_header_array(struct wb_device *wb)
 		atomic_set(&seg->nr_inflight_ios, 0);
 
 		/*
-		 * Const values
+		 * const values
 		 */
 		seg->start_idx = wb->nr_caches_inseg * segment_idx;
 		seg->start_sector = calc_segment_header_start(wb, segment_idx);
@@ -244,7 +244,7 @@ struct ht_head {
 };
 
 /*
- * Initialize the Hash Table.
+ * initialize the hash table.
  */
 static int __must_check ht_empty_init(struct wb_device *wb)
 {
@@ -267,10 +267,6 @@ static int __must_check ht_empty_init(struct wb_device *wb)
 		INIT_HLIST_HEAD(&hd->ht_list);
 	}
 
-	/*
-	 * Our hashtable has one special bucket called null head.
-	 * Orphan metablocks are linked to the null head.
-	 */
 	wb->null_head = large_array_at(wb->htable, wb->htsize);
 
 	for (idx = 0; idx < wb->nr_caches; idx++) {
@@ -299,7 +295,7 @@ static bool mb_hit(struct metablock *mb, struct lookup_key *key)
 }
 
 /*
- * Remove the metablock from the hashtable
+ * remove the metablock from the hashtable
  * and link the orphan to the null head.
  */
 void ht_del(struct wb_device *wb, struct metablock *mb)
@@ -335,7 +331,7 @@ struct metablock *ht_lookup(struct wb_device *wb, struct ht_head *head,
 }
 
 /*
- * Remove all the metablock in the segment from the lookup table.
+ * remove all the metablock in the segment from the lookup table.
  */
 void discard_caches_inseg(struct wb_device *wb, struct segment_header *seg)
 {
@@ -680,7 +676,7 @@ static void free_rambuf_pool(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
-static int clear_plog_dev_t1(struct wb_device *wb, u32 idx)
+static int do_clear_plog_dev_t1(struct wb_device *wb, u32 idx)
 {
 	int r = 0;
 	struct dm_io_request io_req;
@@ -720,7 +716,7 @@ static int do_clear_plog_dev(struct wb_device *wb, u32 idx)
 
 	switch (wb->type) {
 	case 1:
-		r = clear_plog_dev_t1(wb, idx);
+		r = do_clear_plog_dev_t1(wb, idx);
 		break;
 	default:
 		BUG();
@@ -729,6 +725,9 @@ static int do_clear_plog_dev(struct wb_device *wb, u32 idx)
 	return r;
 }
 
+/*
+ * zero out the reserved region of log device
+ */
 static int clear_plog_dev(struct wb_device *wb)
 {
 	int r = 0;
@@ -765,7 +764,7 @@ static int do_alloc_plog_dev_t1(struct wb_device *wb)
 	}
 
 	/*
-	 * The number of plogs is at most the number ram buffers
+	 * the number of plogs is at most the number ram buffers
 	 * i.e. more plogs are meaningless.
 	 */
 	if (nr_max > wb->nr_rambuf_pool)
@@ -777,8 +776,8 @@ static int do_alloc_plog_dev_t1(struct wb_device *wb)
 }
 
 /*
- * Allocate the persistent device.
- * After this funtion called members related to plog
+ * allocate the persistent device.
+ * after this funtion called all the members related to plog
  * is complete (e.g. nr_plogs is set).
  */
 static int do_alloc_plog_dev(struct wb_device *wb)
@@ -808,8 +807,10 @@ static void do_free_plog_dev(struct wb_device *wb)
 }
 
 /*
- * Allocate plog device and the data structures related.
- * Clear the device if required.
+ * allocate plog device and the data structures related.
+ *
+ * clear the device if required.
+ * (we clear the device iff the cache device is formatted)
  */
 static int alloc_plog_dev(struct wb_device *wb, bool clear)
 {
@@ -820,8 +821,8 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 
 	wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
 
-	atomic_set(&wb->nr_inflight_plog_writes, 0);
 	init_waitqueue_head(&wb->plog_wait_queue);
+	atomic_set(&wb->nr_inflight_plog_writes, 0);
 
 	wb->write_job_pool = mempool_create_kmalloc_pool(16, sizeof(struct write_job));
 	if (!wb->write_job_pool) {
@@ -876,9 +877,9 @@ static void free_plog_dev(struct wb_device *wb)
 /*----------------------------------------------------------------*/
 
 /*
- * Initialize core devices
+ * initialize core devices
  * - cache device (SSD)
- * - persistent log device (PRAM or SSD)
+ * - persistent log device (SSD or PRAM)
  * - RAM buffers (DRAM)
  */
 static int init_devices(struct wb_device *wb)
@@ -1145,7 +1146,7 @@ bad_io:
 }
 
 /*
- * Read whole segment on the cache device to a pre-allocated buffer.
+ * read whole segment on the cache device to a pre-allocated buffer.
  */
 static int __must_check
 read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
@@ -1166,7 +1167,7 @@ read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
 }
 
 /*
- * We make a checksum of a segment from the valid data
+ * we make a checksum of a segment from the valid data
  * in a segment except the first 1 sector.
  */
 u32 calc_checksum(void *rambuffer, u8 length)
@@ -1176,7 +1177,7 @@ u32 calc_checksum(void *rambuffer, u8 length)
 }
 
 /*
- * Complete metadata in a segment buffer.
+ * complete metadata in a segment buffer.
  */
 void prepare_segment_header_device(void *rambuffer,
 				   struct wb_device *wb,
@@ -1521,6 +1522,11 @@ static void free_migration_buffer(struct wb_device *wb)
 
 /*
  * alloc and then setup the initial state of the metadata
+ *
+ * metadata:
+ * - segment header array
+ * - metablocks
+ * - hash table
  */
 static int init_metadata(struct wb_device *wb)
 {
@@ -1561,8 +1567,8 @@ static int init_migrate_daemon(struct wb_device *wb)
 	atomic_set(&wb->migrate_io_count, 0);
 
 	/*
-	 * Default number of batched migration is 1MB / segment size.
-	 * An ordinary HDD can afford at least 1MB/sec.
+	 * default number of batched migration is 1MB / segment size.
+	 * an ordinary HDD can afford at least 1MB/sec.
 	 */
 	nr_batch = 1 << (11 - wb->segment_size_order);
 	wb->nr_max_batched_migration = nr_batch;
@@ -1745,7 +1751,7 @@ void free_cache(struct wb_device *wb)
 {
 	/*
 	 * kthread_stop() wakes up the thread.
-	 * We don't need to wake them up in our code.
+	 * we don't need to wake them up in our code.
 	 */
 	kthread_stop(wb->sync_daemon);
 	kthread_stop(wb->recorder_daemon);

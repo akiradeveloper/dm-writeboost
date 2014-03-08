@@ -349,7 +349,7 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 }
 
 /*
- * Prepare the kmalloc-ed RAM buffer for segment write.
+ * prepare the kmalloc-ed RAM buffer for segment write.
  *
  * dm_io routine requires RAM buffer for its I/O buffer.
  * Even if we uses non-volatile RAM we have to copy the
@@ -368,7 +368,7 @@ static void init_rambuffer(struct wb_device *wb)
 }
 
 /*
- * Acquire new RAM buffer for the new segment.
+ * acquire new RAM buffer for the new segment.
  */
 static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {
@@ -386,8 +386,8 @@ static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 }
 
 /*
- * Acquire the new segment and RAM buffer for the following writes.
- * Gurantees all dirty caches in the segments are migrated and all metablocks
+ * acquire the new segment and RAM buffer for the following writes.
+ * gurantees all dirty caches in the segments are migrated and all metablocks
  * in it are invalidated (linked to null head).
  */
 void acquire_new_seg(struct wb_device *wb, u64 id)
@@ -487,8 +487,8 @@ void cursor_init(struct wb_device *wb)
 }
 
 /*
- * Flush out all the transient data at a moment but _NOT_ persistently.
- * Clean up the writes before termination is an example of the usecase.
+ * flush out all the transient data at a moment but _NOT_ persistently.
+ * clean up the writes before termination is an example of the usecase.
  */
 void flush_current_buffer(struct wb_device *wb)
 {
@@ -609,13 +609,13 @@ void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
 }
 
 /*
- * Read the dirtiness of a metablock at the moment.
+ * read the dirtiness of a metablock at the moment.
  *
- * In fact, I don't know if we should have the read statement surrounded
- * by spinlock. Why I do this is that I worry about reading the
+ * in fact, I don't know if we should have the read statement surrounded
+ * by spinlock. why I do this is that I worry about reading the
  * intermediate value (neither the value of before-write nor after-write).
  * Intel CPU guarantees it but other CPU may not.
- * If any other CPU guarantees it we can remove the spinlock held.
+ * if any other CPU guarantees it we can remove the spinlock held.
  */
 u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
 		     struct metablock *mb)
@@ -633,8 +633,8 @@ u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
 /*----------------------------------------------------------------*/
 
 /*
- * Migrate the caches in a metablock on the SSD (after flushed).
- * The caches on the SSD are considered to be persistent so we need to
+ * migrate the caches in a metablock on the SSD (after flushed).
+ * the caches on the SSD are considered to be persistent so we need to
  * write them back with WRITE_FUA flag.
  */
 static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
@@ -723,10 +723,10 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 }
 
 /*
- * Migrate the caches on the RAM buffer.
- * Calling this function is really rare so the code is not optimal.
+ * migrate the caches on the RAM buffer.
+ * calling this function is really rare so the code is not optimal.
  *
- * Since the caches are of either one of these two status
+ * since the caches are of either one of these two status
  * - not flushed and thus not persistent (volatile buffer)
  * - acked to barrier request before but it is also on the
  *   non-volatile buffer (non-volatile buffer)
@@ -781,14 +781,14 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 	u8 dirty_bits = read_mb_dirtiness(wb, seg, old_mb);
 
 	/*
-	 * First clean up the previous cache and migrate the cache if needed.
+	 * first clean up the previous cache and migrate the cache if needed.
 	 */
 	bool needs_cleanup_prev_cache =
 		!overwrite_fullsize || !(dirty_bits == 255);
 
 	/*
-	 * Migration works in background and may have cleaned up the metablock.
-	 * If the metablock is clean we need not to migrate.
+	 * migration works in background and may have cleaned up the metablock.
+	 * if the metablock is clean we need not to migrate.
 	 */
 	if (!dirty_bits)
 		needs_cleanup_prev_cache = false;
@@ -817,7 +817,7 @@ static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
 	void *data = bio_data(bio);
 
 	/*
-	 * Write data block to the volatile RAM buffer.
+	 * write data block to the volatile RAM buffer.
 	 */
 	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_size);
 }

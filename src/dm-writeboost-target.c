@@ -1078,25 +1078,27 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
  * 1) increment the refcount with lock for serialization
  * 2) wait for the decrement outside the lock
  *
- * mutex_lock (to serialize buffer write)
- *   inc in_flight_ios # refcount on the dst segment
- * mutex_unlock
+ * process_write:
+ *   prepare_write_pos:
+ *     mutex_lock (to serialize buffer write)
+ *       inc in_flight_ios # refcount on the dst segment
+ *     mutex_unlock
  *
- * wait_event (to serialize plog write)
- *   inc in_flight_plog_writes  
+ *   process_write_job:
+ *     wait_event (to serialize plog write)
+ *       inc in_flight_plog_writes
  *
- *   # submit async plog write
- *   # dec in_flight_plog_writes in endio
- *   append_plog()
- * wake_up
+ *       # submit async plog write
+ *       # dec in_flight_plog_writes in endio
+ *       append_plog()
+ *     wake_up
  * 
- * # wait for all async plog writes complete
- * # not always. only if we need to make precedents persistent.
- * barrier_plog_writes()
+ *     # wait for all async plog writes complete
+ *     # not always. only if we need to make precedents persistent.
+ *     barrier_plog_writes()
  *
- * dec in_flight_ios
- *
- * bio_endio(bio)
+ *     dec in_flight_ios
+ *     bio_endio(bio)
  */
 static int process_write(struct wb_device *wb, struct bio *bio)
 {

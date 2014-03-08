@@ -1,7 +1,6 @@
 #!/bin/sh
 
-# Description
-# -----------
+# desc:
 # 1. write many files with cache device
 # 2. detach cache without migrated
 # 3. mount the filesystem without cache device
@@ -13,6 +12,7 @@ T=$1
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 sz=`blockdev --getsize ${BACKING}`
 
+echo making a wb device
 if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 2 segment_size_order 10 2 allow_migrate 1"
 elif [ $T -eq 1 ]; then
@@ -56,6 +56,8 @@ fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
+# checking if the backing device can be mounted
+# without the later dirty data on the cache device
 echo mount backing device only
 mount $BACKING /mnt/writeboost-vol
 if  [ $? -ne 0 ]; then

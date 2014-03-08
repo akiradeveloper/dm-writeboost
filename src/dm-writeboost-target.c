@@ -234,8 +234,8 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
 
 	atomic_inc(&wb->nr_inflight_plog_writes);
 	do_append_plog(wb, bio, job);
-	wb->cur_plog_head += (1 + bio_sectors(bio));
 
+	wb->cur_plog_head += (1 + bio_sectors(bio));
 	wake_up_active_wq(&wb->plog_wait_queue);
 
 	if (wb->type && (bio->bi_rw & REQ_FUA))
@@ -1052,15 +1052,58 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 	return DM_MAPIO_SUBMITTED;
 }
 
+/*
+ * (locking) dirtiness
+ * a cache data is placed either on RAM buffer or SSD if it was flushed.
+ * to make locking easy,
+ * simplify the rule for the dirtiness of a cache data.
+ *
+ * 1) if the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
+ *    only "increases".
+ *    the justification for this design is that
+ *    the cache on the RAM buffer is seldom migrated.
+ * 2) if the data is, on the other hand, on the SSD after flushed the dirtiness
+ *    only "decreases".
+ *
+ * this simple rule can remove the possibility of dirtiness fluctuating
+ * while on the RAM buffer.
+ * thus, simplies locking design.
+ *
+ * --------------------------------------------------------------------
+ * (locking) refcount
+ * writeboost two refcount locking mechanism
+ * (only one if not using plog)
+ *
+ * the basic common idea is
+ * 1) increment the refcount with lock for serialization
+ * 2) wait for the decrement outside the lock
+ *
+ * mutex_lock (to serialize buffer write)
+ *   inc in_flight_ios # refcount on the dst segment
+ * mutex_unlock
+ *
+ * wait_event (to serialize plog write)
+ *   inc in_flight_plog_writes  
+ *
+ *   # submit async plog write
+ *   # dec in_flight_plog_writes in endio
+ *   append_plog()
+ * wake_up
+ * 
+ * # wait for all async plog writes complete
+ * # not always. only if we need to make precedents persistent.
+ * barrier_plog_writes()
+ *
+ * dec in_flight_ios
+ *
+ * bio_endio(bio)
+ */
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
 	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
 	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
 	job->wb = wb;
 
-	/*
-	 * first decide where to write the bio data
-	 */
 	prepare_write_pos(wb, bio, job);
 
 	return process_write_job(wb, bio, job);
@@ -1119,21 +1162,6 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	return DM_MAPIO_REMAPPED;
 }
 
-/*
- * (locking)
- * a cache data is placed either on RAM buffer or SSD if it was flushed.
- * to ease the locking, we establish a simple rule for the dirtiness of a cache data.
- *
- * if the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
- * only "increases".
- * The justification for this design is that the cache on the RAM buffer is
- * seldom migrated.
- * if the data is, on the other hand, on the SSD after flushed the dirtiness
- * only "decreases".
- *
- * this simple rule frees us from the dirtiness fluctuating
- * and thus simplies locking design.
- */
 static int process_bio(struct wb_device *wb, struct bio *bio)
 {
 	return io_write(bio) ? process_write(wb, bio) : process_read(wb, bio);

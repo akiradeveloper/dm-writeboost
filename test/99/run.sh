@@ -1,8 +1,7 @@
 #!/bin/sh
 
-# Description
-# -----------
-# what if disk fails?
+# desc:
+# what if disk fails during operation?
 
 T=$1
 
@@ -26,11 +25,17 @@ elif [ $T -eq 1 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 2 segment_size_order 10 8 enable_migration_modulator 1 sync_interval 0 update_record_interval 600 barrier_deadline_ms 3"
 fi
 
+# since the device is dead
+# any IO to the device should fail
 dd if=/dev/urandom of=/dev/mapper/writeboost-vol
 if [ $? -eq 0 ]; then
     echo BUG: dd should fail
 fi
 
+# dead device is just a device whose underlying devices
+# are null (all I/Os are ignored)
+# the logic outside the I/O itself should work fine
+# including removing the device.
 dmsetup remove writeboost-vol
 if [ $? -ne 0 ]; then
     echo BUG: remove failed

@@ -1,13 +1,8 @@
 # DM-WRITEBOOST
-**L**og-structured **C**aching for Linux
+Log-structured Caching for Linux
 
-## Notice
+## What's new
 I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
-
-What's new
-
-* Persistent Logging (plog) is implemented
-* Fully refactored (e.g. writeboost_map())
 
 ## Overview
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  
@@ -15,20 +10,27 @@ DCD, originally implemented in Solaris, is an extra logical block layer that gat
 into a big sequential write which then performs high throughput and low latency.
 See also the DCD paper [1] and its recent application [2].
 
+Persistent Logging (plog) is implemented to mitigate the penalty in handling
+write barriers (REQ_FUA or REQ_FLUSH). The medium to write plog is
+either block device or persistent RAM.
+
 ## Features
 * Capable of performing 375kiops (1.5GB/sec) random writes with a fast enough cache.  
-* Maximizes the lifetime of SSD device.
-* Log-structured property ensures perfect metadata durability.
-* (Future Work) Applies persistent memory to process write barriers more efficiently.
+  Outperforms other cache drivers in write (bcache, dm-cache)
+* Maximizes the lifetime of SSD cache device by writing in log-structured manner.
+* Log-structured nature properly ensures perfect metadata durability in any failure
+  (except the case data is gone)
+* Applies persistent memory to process write barriers more efficiently. Futurework.
 
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
 * [2] G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)
 
 ## Quick Start
-You are ready for nice scripts for quick starting.  
+we provice your with nice scripts for quick starting.  
 
 (1) Configure the path for the devices
+    (orig_dev, cache_dev)
 
 	$ cd /home/akira/dm-writeboost  
 	$ vi config
@@ -37,25 +39,35 @@ You are ready for nice scripts for quick starting.
 
 	$ sh build.sh
 
-(3) Run prepare script (Edit if you want)
+(3) Run prepare script to make a device
 
 	# sh prepare.sh
 
 and you are now ready for `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
-Try testing and performance and see what's happening.  
+
+## Test
+runtest.sh is provided to run tests.
+see the script
 
 ## Contributing to dm-writeboost
-Any type of contribution is all welcome.  
-Not even by code, by documents or by issue reporting is granted as a form of contribution.   
+Any type of contribution is welcome.  
+Not even by code, by documents or by issue reporting are also welcome.
 
-To contribute by code or documents, pull-requests style seems to be a nice idea.  
+To contribute by code or documents,
+pull-requests style sounds good.
+
 To make pull-requests,  
+follow these procedures
 
 1. Fork it.   
 2. Create your feature branch (`git checkout -b my-new-feature`).  
-3. Commit your changes (`git commit -am 'Added some features'`).  
-4. Push to the forked repository (`git push origin my-new-feature`).  
-5. Create a new Pull Request.
+3. Code your idea
+4. Run regressiong test (see runtest.sh)
+5. Commit your changes (`git commit -am 'Added some features'`).  
+6. Push to the forked repository (`git push origin my-new-feature`).  
+7. Create a new pull-request.
+
+git-flow style is recommended but not forced.
 
 ## Developer Info
 Akira Hayakawa (@akiradeveloper)  

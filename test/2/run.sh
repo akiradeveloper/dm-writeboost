@@ -1,7 +1,6 @@
 #!/sin/sh
 
-# Description
-# -----------
+# desc:
 # can compile after cache resume?
 
 T=$1
@@ -11,7 +10,7 @@ T=$1
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 sz=`blockdev --getsize ${BACKING}`
 
-echo Create device \(migration OFF\)
+echo create a wb device \(migration OFF\)
 if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 elif [ $T -eq 1 ]; then

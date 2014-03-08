@@ -1,16 +1,17 @@
 #!/bin/sh
 
-# Description
-# -----------
+# desc:
 # can compile?
 
 T=$1
 
 . ../../config
 
+echo clear the cache
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 sz=`blockdev --getsize ${BACKING}`
 
+echo making a wb device
 if [ $T -eq 0 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 5 rambuf_pool_amount 4096 8 enable_migration_modulator 1 sync_interval 1 update_record_interval 1 barrier_deadline_ms 3"
 elif [ $T -eq 1 ]; then

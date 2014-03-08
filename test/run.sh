@@ -17,5 +17,6 @@ do
 
     cd $TR/$i
     sh ./run.sh $T
+    sleep 10
 done
 cd $TR

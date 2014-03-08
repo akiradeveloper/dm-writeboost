@@ -1273,7 +1273,7 @@ static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 	static struct dm_arg _args[] = {
 		{0, 4, "invalid optional argc"},
 		{4, 10, "invalid segment_size_order"},
-		{512, UINT_MAX, "invalid rambuf_pool_amount"},
+		{1, UINT_MAX, "invalid nr_rambuf_pool"},
 	};
 	unsigned tmp, argc = 0;
 
@@ -1292,7 +1292,7 @@ static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 		r = -EINVAL;
 
 		consume_kv(segment_size_order, 1);
-		consume_kv(rambuf_pool_amount, 2);
+		consume_kv(nr_rambuf_pool, 2);
 
 		if (!r) {
 			argc--;
@@ -1441,10 +1441,14 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_essential_argv;
 	}
 
+	/*
+	 * default values
+	 */
 	wb->segment_size_order = 7;
-	wb->rambuf_pool_amount = 2048;
+	wb->nr_rambuf_pool = 1;
 	if (wb->type)
 		wb->nr_plogs = 1;
+
 	r = consume_optional_argv(wb, &as);
 	if (r) {
 		ti->error = "failed to consume optional argv";
@@ -1616,9 +1620,9 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		DMEMIT(" %s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev),
 		DMEMIT(" %s", buf);
-		DMEMIT(" 4 segment_size_order %u rambuf_pool_amount %u",
+		DMEMIT(" 4 segment_size_order %u nr_rambuf_pool %u",
 		       wb->segment_size_order,
-		       wb->rambuf_pool_amount);
+		       wb->nr_rambuf_pool);
 		if (wb->should_emit_tunables)
 			emit_tunables(wb, result + sz, maxlen - sz);
 		break;

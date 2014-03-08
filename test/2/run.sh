@@ -12,9 +12,9 @@ sz=`blockdev --getsize ${BACKING}`
 
 echo create a wb device \(migration OFF\)
 if [ $T -eq 0 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 nr_rambuf_pool 8 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 elif [ $T -eq 1 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 nr_rambuf_pool 8 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
 fi
 
 echo mk.xfs ...
@@ -40,25 +40,25 @@ fuser -muv /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
 dmsetup remove writeboost-vol
 
-echo Create device \(migration OFF\)
+echo create wb device \(migration OFF\)
 if [ $T -eq 0 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 segment_size_order 10 nr_rambuf_pool 1 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 1 update_record_interval 1"
 elif [ $T -eq 1 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 rambuf_pool_amount 512 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 nr_rambuf_pool 1 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
 fi
 
-echo "Drop writeboost caches (forcefully)"
+echo "drop writeboost caches (forcefully)"
 dmsetup message writeboost-vol 0 drop_caches
 
 echo "enable migration modulartor"
 dmsetup message writeboost-vol 0 enable_migration_modulator 1
 
-echo "Drop RAM caches"
+echo "drop RAM caches"
 echo 3 > /proc/sys/vm/drop_caches
 
 sleep 3
 
-echo "Mounting the device"
+echo "mounting the device"
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 cd /mnt/writeboost-vol
 

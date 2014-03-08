@@ -312,7 +312,6 @@ struct wb_device {
 	 * RAM buffer pool
 	 *****************/
 
-	u32 rambuf_pool_amount; /* kB */
 	u32 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
 

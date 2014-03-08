@@ -22,9 +22,9 @@ dd if=/dev/zero of=${CACHE} bs=512 count=8 oflag=direct
 echo making a wb device
 sz=`blockdev --getsize ${BACKING}`
 if [ $T -eq 0 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 rambuf_pool_amount 8192 segment_size_order 7 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 0 ${BACKING} ${CACHE} 4 nr_rambuf_pool 32 segment_size_order 7 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
 elif [ $T -eq 1 ]; then
-    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 rambuf_pool_amount 8192 segment_size_order 7 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
+    dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 nr_rambuf_pool 32 segment_size_order 7 6 enable_migration_modulator 0 allow_migrate 0 sync_interval 0"
 fi
 
 echo 1\) write 4k

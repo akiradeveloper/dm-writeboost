@@ -1525,11 +1525,9 @@ static void free_migration_buffer(struct wb_device *wb)
 	} while (0)
 
 /*
- * Harmless init
- * - allocate memory
- * - setup the initial state of the objects
+ * alloc and then setup the initial state of the metadata
  */
-static int harmless_init(struct wb_device *wb)
+static int init_metadata(struct wb_device *wb)
 {
 	int r = 0;
 
@@ -1571,7 +1569,7 @@ bad_buf_1_pool:
 	return r;
 }
 
-static void harmless_free(struct wb_device *wb)
+static void free_metadata(struct wb_device *wb)
 {
 	free_ht(wb);
 	free_segment_header_array(wb);
@@ -1710,9 +1708,9 @@ int __must_check resume_cache(struct wb_device *wb)
 	r = init_devices(wb);
 	if (r)
 		goto bad_devices;
-	r = harmless_init(wb);
+	r = init_metadata(wb);
 	if (r)
-		goto bad_harmless_init;
+		goto bad_metadata;
 	r = init_migrate_daemon(wb);
 	if (r) {
 		WBERR("failed to init migrate daemon");
@@ -1761,11 +1759,10 @@ bad_recover:
 	kthread_stop(wb->migrate_daemon);
 	free_migration_buffer(wb);
 bad_migrate_daemon:
-	harmless_free(wb);
-bad_harmless_init:
+	free_metadata(wb);
+bad_metadata:
 	free_devices(wb);
 bad_devices:
-
 	return r;
 }
 
@@ -1787,7 +1784,7 @@ void free_cache(struct wb_device *wb)
 	kthread_stop(wb->migrate_daemon);
 	free_migration_buffer(wb);
 
-	harmless_free(wb);
+	free_metadata(wb);
 
 	free_devices(wb);
 }

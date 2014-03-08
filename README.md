@@ -27,7 +27,7 @@ either block device or persistent RAM.
 * [2] G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)
 
 ## Quick Start
-we provice your with nice scripts for quick starting.  
+I provice you with nice scripts for quick starting.  
 
 (1) Configure the path for the devices
     (orig_dev, cache_dev)
@@ -43,26 +43,31 @@ we provice your with nice scripts for quick starting.
 
 	# sh prepare.sh
 
-and you are now ready for `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
+now you got `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
 
-## Test
-runtest.sh is provided to run tests.
-see the script
+## Running Test
+runtest.sh is provided to run tests. See the script
+
+Example:
+
+```
+$ sh build.sh
+# sh runtest.sh 0 # run all tests for type=0
+```
 
 ## Contributing to dm-writeboost
-Any type of contribution is welcome.  
+Any kind of contribution is welcome.  
 Not even by code, by documents or by issue reporting are also welcome.
 
 To contribute by code or documents,
 pull-requests style sounds good.
 
-To make pull-requests,  
-follow these procedures
+To make pull-requests, follow these procedures
 
 1. Fork it.   
 2. Create your feature branch (`git checkout -b my-new-feature`).  
 3. Code your idea
-4. Run regressiong test (see runtest.sh)
+4. Run regressiong test (see above)
 5. Commit your changes (`git commit -am 'Added some features'`).  
 6. Push to the forked repository (`git push origin my-new-feature`).  
 7. Create a new pull-request.

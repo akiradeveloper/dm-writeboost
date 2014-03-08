@@ -969,6 +969,7 @@ static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
 
 /*
  * decide where to write the data according to the result of cache lookup.
+ * after returned, the refcount (in_flight_ios) is incremented.
  */
 static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 			      struct write_job *pos)

@@ -22,6 +22,6 @@ echo 8 > /sys/bus/workqueue/devices/wbflusher/max_active
 
 echo processing stress test ...
 # even -n 1, -r 1 doesn't finish in short time...
-./dm-stress-test.sh -n 100 -r 10 -d /dev/mapper/writeboost-vol -t p
+./dm-stress-test.sh -n 1 -r 1 -d /dev/mapper/writeboost-vol -t p
 
 dmsetup remove writeboost-vol

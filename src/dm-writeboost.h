@@ -421,7 +421,6 @@ struct wb_device {
 	sector_t alloc_plog_head; /* next relative sector to allocate */
 	sector_t cur_plog_head; /* current relative sector to append */
 	sector_t plog_start_sector; /* the absolute start sector of the current plog */
-	void *plog_buf; /* 9 sector pre-allocated buffer for the plog write */
 	u32 nr_plogs; /* Const. number of plogs */
 
 	/* type 1 */

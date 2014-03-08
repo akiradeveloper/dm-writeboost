@@ -824,12 +824,23 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 		return 0;
 
 	wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
+
 	atomic_set(&wb->nr_inflight_plog_writes, 0);
 	init_waitqueue_head(&wb->plog_wait_queue);
 
-	wb->plog_buf = kmalloc((1 + 8) << SECTOR_SHIFT, GFP_KERNEL);
-	if (!wb->plog_buf)
-		return -ENOMEM;
+	wb->write_job_pool = mempool_create_kmalloc_pool(16, sizeof(struct write_job));
+	if (!wb->write_job_pool) {
+		r = -ENOMEM;
+		WBERR("failed to alloc write job pool");
+		goto bad_write_job_pool;
+	}
+
+	wb->plog_buf_pool = mempool_create_kmalloc_pool(16, ((1 + 8) << SECTOR_SHIFT));
+	if (!wb->plog_buf_pool) {
+		r = -ENOMEM;
+		WBERR("failed to alloc plog buf pool");
+		goto bad_plog_buf_pool;
+	}
 
 	r = do_alloc_plog_dev(wb);
 	if (r) {
@@ -850,7 +861,10 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 bad_clear_plog_dev:
 	do_free_plog_dev(wb);
 bad_alloc_plog_dev:
-	kfree(wb->plog_buf);
+	mempool_destroy(wb->plog_buf_pool);
+bad_plog_buf_pool:
+	mempool_destroy(wb->write_job_pool);
+bad_write_job_pool:
 	return r;
 }
 
@@ -860,7 +874,8 @@ static void free_plog_dev(struct wb_device *wb)
 		return;
 
 	do_free_plog_dev(wb);
-	kfree(wb->plog_buf);
+	mempool_destroy(wb->plog_buf_pool);
+	mempool_destroy(wb->write_job_pool);
 }
 
 /*----------------------------------------------------------------*/
@@ -1531,20 +1546,6 @@ static int harmless_init(struct wb_device *wb)
 		goto bad_buf_8_pool;
 	}
 
-	wb->write_job_pool = mempool_create_kmalloc_pool(16, sizeof(struct write_job));
-	if (!wb->write_job_pool) {
-		r = -ENOMEM;
-		WBERR("failed to alloc write job pool");
-		goto bad_write_job_pool;
-	}
-
-	wb->plog_buf_pool = mempool_create_kmalloc_pool(16, ((1 + 8) << SECTOR_SHIFT));
-	if (!wb->plog_buf_pool) {
-		r = -ENOMEM;
-		WBERR("failed to alloc plog buf pool");
-		goto bad_plog_buf_pool;
-	}
-
 	r = init_segment_header_array(wb);
 	if (r) {
 		WBERR("failed to allocate segment header array");
@@ -1562,10 +1563,6 @@ static int harmless_init(struct wb_device *wb)
 bad_alloc_ht:
 	free_segment_header_array(wb);
 bad_alloc_segment_header_array:
-	mempool_destroy(wb->plog_buf_pool);
-bad_plog_buf_pool:
-	mempool_destroy(wb->write_job_pool);
-bad_write_job_pool:
 	mempool_destroy(wb->buf_8_pool);
 bad_buf_8_pool:
 	mempool_destroy(wb->buf_1_pool);
@@ -1578,9 +1575,6 @@ static void harmless_free(struct wb_device *wb)
 {
 	free_ht(wb);
 	free_segment_header_array(wb);
-	mempool_destroy(wb->flush_job_pool);
-	mempool_destroy(wb->plog_buf_pool);
-	mempool_destroy(wb->write_job_pool);
 	mempool_destroy(wb->buf_8_pool);
 	mempool_destroy(wb->buf_1_pool);
 }

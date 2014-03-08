@@ -317,7 +317,6 @@ struct wb_device {
 	u32 rambuf_pool_amount; /* kB */
 	u32 nr_rambuf_pool; /* Const */
 	struct rambuffer *rambuf_pool;
-	mempool_t *flush_job_pool;
 
 	/*---------------------------------------------*/
 
@@ -334,6 +333,7 @@ struct wb_device {
 	 * wbflusher
 	 ***********/
 
+	mempool_t *flush_job_pool;
 	struct workqueue_struct *flusher_wq;
 	wait_queue_head_t flush_wait_queue; /* wait for a segment to be flushed */
 	atomic64_t last_flushed_segment_id;

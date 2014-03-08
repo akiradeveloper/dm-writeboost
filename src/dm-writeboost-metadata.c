@@ -1545,14 +1545,6 @@ static int harmless_init(struct wb_device *wb)
 		goto bad_plog_buf_pool;
 	}
 
-	wb->flush_job_pool = mempool_create_kmalloc_pool(
-				wb->nr_rambuf_pool, sizeof(struct flush_job));
-	if (!wb->flush_job_pool) {
-		r = -ENOMEM;
-		WBERR("failed to allocate flush job pool");
-		goto bad_flush_job_pool;
-	}
-
 	r = init_segment_header_array(wb);
 	if (r) {
 		WBERR("failed to allocate segment header array");
@@ -1570,8 +1562,6 @@ static int harmless_init(struct wb_device *wb)
 bad_alloc_ht:
 	free_segment_header_array(wb);
 bad_alloc_segment_header_array:
-	mempool_destroy(wb->flush_job_pool);
-bad_flush_job_pool:
 	mempool_destroy(wb->plog_buf_pool);
 bad_plog_buf_pool:
 	mempool_destroy(wb->write_job_pool);
@@ -1655,7 +1645,20 @@ static int init_flusher(struct wb_device *wb)
 		WBERR("failed to allocate wbflusher");
 		return -ENOMEM;
 	}
+
+	wb->flush_job_pool = mempool_create_kmalloc_pool(
+		wb->nr_rambuf_pool, sizeof(struct flush_job));
+	if (!wb->flush_job_pool) {
+		r = -ENOMEM;
+		WBERR("failed to allocate flush job pool");
+		goto bad_flush_job_pool;
+	}
+
 	init_waitqueue_head(&wb->flush_wait_queue);
+	return r;
+
+bad_flush_job_pool:
+	destroy_workqueue(wb->flusher_wq);
 	return r;
 }
 
@@ -1756,6 +1759,8 @@ bad_recorder_daemon:
 	kthread_stop(wb->modulator_daemon);
 bad_migrate_modulator:
 	cancel_work_sync(&wb->barrier_deadline_work);
+
+	mempool_destroy(wb->flush_job_pool);
 	destroy_workqueue(wb->flusher_wq);
 bad_flusher:
 bad_recover:
@@ -1782,6 +1787,7 @@ void free_cache(struct wb_device *wb)
 
 	cancel_work_sync(&wb->barrier_deadline_work);
 
+	mempool_destroy(wb->flush_job_pool);
 	destroy_workqueue(wb->flusher_wq);
 
 	kthread_stop(wb->migrate_daemon);

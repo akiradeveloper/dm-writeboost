@@ -1531,19 +1531,6 @@ static int init_metadata(struct wb_device *wb)
 {
 	int r = 0;
 
-	wb->buf_1_pool = mempool_create_kmalloc_pool(16, 1 << SECTOR_SHIFT);
-	if (!wb->buf_1_pool) {
-		r = -ENOMEM;
-		WBERR("failed to allocate 1 sector pool");
-		goto bad_buf_1_pool;
-	}
-	wb->buf_8_pool = mempool_create_kmalloc_pool(16, 8 << SECTOR_SHIFT);
-	if (!wb->buf_8_pool) {
-		r = -ENOMEM;
-		WBERR("failed to allocate 8 sector pool");
-		goto bad_buf_8_pool;
-	}
-
 	r = init_segment_header_array(wb);
 	if (r) {
 		WBERR("failed to allocate segment header array");
@@ -1561,11 +1548,6 @@ static int init_metadata(struct wb_device *wb)
 bad_alloc_ht:
 	free_segment_header_array(wb);
 bad_alloc_segment_header_array:
-	mempool_destroy(wb->buf_8_pool);
-bad_buf_8_pool:
-	mempool_destroy(wb->buf_1_pool);
-bad_buf_1_pool:
-
 	return r;
 }
 
@@ -1573,8 +1555,6 @@ static void free_metadata(struct wb_device *wb)
 {
 	free_ht(wb);
 	free_segment_header_array(wb);
-	mempool_destroy(wb->buf_8_pool);
-	mempool_destroy(wb->buf_1_pool);
 }
 
 static int init_migrate_daemon(struct wb_device *wb)

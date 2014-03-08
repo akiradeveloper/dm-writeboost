@@ -254,8 +254,6 @@ struct wb_device {
 	struct dm_dev *origin_dev; /* slow device (HDD) */
 	struct dm_dev *cache_dev; /* fast device (SSD) */
 
-	mempool_t *buf_1_pool; /* 1 sector buffer pool */
-	mempool_t *buf_8_pool; /* 8 sector buffer pool */
 
 	/*
 	 * mutex is really light-weighted.
@@ -460,6 +458,8 @@ void rebuild_rambuf(void *rambuf, void *plog_buf, u64 log_id);
 
 /*----------------------------------------------------------------*/
 
+extern mempool_t *buf_1_pool; /* 1 sector buffer pool */
+extern mempool_t *buf_8_pool; /* 8 sector buffer pool */
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
 

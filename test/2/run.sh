@@ -17,8 +17,6 @@ elif [ $T -eq 1 ]; then
     dmsetup create writeboost-vol --table "0 ${sz} writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 rambuf_pool_amount 4096 8 enable_migration_modulator 0 allow_migrate 0 sync_interval 0 update_record_interval 1"
 fi
 
-echo 8 > /sys/bus/workqueue/devices/wbflusher/max_active
-
 echo mk.xfs ...
 # mkfs.xfs -f -q /dev/mapper/writeboost-vol
 mkfs.ext4 -q /dev/mapper/writeboost-vol

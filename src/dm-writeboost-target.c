@@ -224,14 +224,24 @@ static void barrier_plog_writes(struct wb_device *wb)
 /*
  * submit a serialized plog write.
  * if the bio is REQ_FUA all the predeessor writes are all persistent
- * after returning this function.
+ *
+ * @job and the held resources should be freed under this function.
  */
 static void append_plog(struct wb_device *wb, struct bio *bio,
 			struct write_job *job)
 {
-	if (!wb->type)
+	if (!wb->type) {
+		/*
+		 * without plog no endio frees the job
+		 * so we need to free it.
+		 */
+		mempool_free(job, wb->write_job_pool);
 		return;
+	}
 
+	/*
+	 * for type=1, resources are freed in endio.
+	 */
 	do_append_plog(wb, bio, job);
 
 	if (wb->type && (bio->bi_rw & REQ_FUA))
@@ -1029,7 +1039,6 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 
 	append_plog(wb, bio, job);
 
-
 	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
@@ -1101,8 +1110,13 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
 	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
-	job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
 	job->wb = wb;
+
+	/*
+	 * without plog, plog_buf need not to be allocated.
+	 */
+	if (wb->type)
+		job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
 
 	prepare_write_pos(wb, bio, job);
 

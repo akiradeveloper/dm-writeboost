@@ -230,13 +230,7 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
 	if (!wb->type)
 		return;
 
-	wait_event(wb->plog_wait_queue, wb->cur_plog_head == job->plog_head);
-
-	atomic_inc(&wb->nr_inflight_plog_writes);
 	do_append_plog(wb, bio, job);
-
-	wb->cur_plog_head += (1 + bio_sectors(bio));
-	wake_up_active_wq(&wb->plog_wait_queue);
 
 	if (wb->type && (bio->bi_rw & REQ_FUA))
 		barrier_plog_writes(wb);
@@ -299,13 +293,18 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 }
 
 /*
- * Advance the current head for newer logs.
- * Returns the "current" head as the address for current appending.
+ * advance the current head for newer logs.
+ * returns the "current" head as the address for current appending.
+ * after returning, nr_inflight_plog_writes increments.
  */
 static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 {
+	if (!wb->type)
+		return 0;
+
 	sector_t old = wb->alloc_plog_head;
 	wb->alloc_plog_head += (1 + bio_sectors(bio));
+	atomic_inc(&wb->nr_inflight_plog_writes);
 	return old;
 }
 
@@ -331,7 +330,6 @@ static void acquire_new_plog(struct wb_device *wb, u64 id)
 	div_u64_rem(id - 1, wb->nr_plogs, &tmp32);
 	wb->plog_start_sector = wb->plog_size * tmp32;
 	wb->alloc_plog_head = 0;
-	wb->cur_plog_head = 0;
 }
 
 /*----------------------------------------------------------------*/
@@ -822,6 +820,11 @@ static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
 	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_size);
 }
 
+/*
+ * advance the cursor and return the old cursor.
+ * after returning, nr_inflight_ios is incremented
+ * to wait for this write to complete.
+ */
 static u32 advance_cursor(struct wb_device *wb)
 {
 	u32 old;
@@ -833,6 +836,7 @@ static u32 advance_cursor(struct wb_device *wb)
 		wb->cursor = 0;
 	old = wb->cursor;
 	wb->cursor++;
+	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	return old;
 }
 
@@ -921,7 +925,8 @@ struct lookup_result {
 
 /*
  * lookup a bio relevant cache data.
- * in hit case # inflight ios is incremented.
+ * in cache hit case nr_inflight_ios is incremented
+ * to protect the found segment by the refcount.
  */
 static void cache_lookup(struct wb_device *wb, struct bio *bio,
 			 struct lookup_result *res)
@@ -1011,7 +1016,6 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 
 	prepare_new_pos(wb, bio, &res, pos);
 
-	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	mutex_unlock(&wb->io_lock);
 }
 
@@ -1081,18 +1085,15 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
  *
  * process_write:
  *   prepare_write_pos:
- *     mutex_lock (to serialize buffer write)
+ *     mutex_lock (to serialize write)
  *       inc in_flight_ios # refcount on the dst segment
+ *       inc in_flight_plog_writes
  *     mutex_unlock
  *
  *   process_write_job:
- *     wait_event (to serialize plog write)
- *       inc in_flight_plog_writes
- *
- *       # submit async plog write
- *       # dec in_flight_plog_writes in endio
- *       append_plog()
- *     wake_up
+ *     # submit async plog write
+ *     # dec in_flight_plog_writes in endio
+ *     append_plog()
  * 
  *     # wait for all async plog writes complete
  *     # not always. only if we need to make precedents persistent.

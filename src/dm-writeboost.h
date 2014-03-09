@@ -414,12 +414,12 @@ struct wb_device {
 
 	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
 	atomic_t nr_inflight_plog_writes; /* number of async plog writes not acked yet */
+
 	mempool_t *write_job_pool;
 	mempool_t *plog_buf_pool;
 
 	sector_t plog_size; /* const. the size of a plog in sector */
 	sector_t alloc_plog_head; /* next relative sector to allocate */
-	sector_t cur_plog_head; /* current relative sector to append */
 	sector_t plog_start_sector; /* the absolute start sector of the current plog */
 	u32 nr_plogs; /* const. number of plogs */
 

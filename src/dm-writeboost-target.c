@@ -311,10 +311,11 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
  */
 static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 {
+	sector_t old;
 	if (!wb->type)
 		return 0;
 
-	sector_t old = wb->alloc_plog_head;
+	old = wb->alloc_plog_head;
 	wb->alloc_plog_head += (1 + bio_sectors(bio));
 	atomic_inc(&wb->nr_inflight_plog_writes);
 	return old;
@@ -378,7 +379,7 @@ static void init_rambuffer(struct wb_device *wb)
 }
 
 /*
- * acquire new RAM buffer for the new segment.
+ * acquire a new RAM buffer for the new segment.
  */
 static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {

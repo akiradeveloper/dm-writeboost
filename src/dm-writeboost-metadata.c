@@ -1449,7 +1449,7 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 
 	struct segment_header **emigrates;
 	void *buf;
-	void *snapshot;
+	void *memorized_dirtiness;
 
 	emigrates = kmalloc(nr_batch * sizeof(struct segment_header *), GFP_KERNEL);
 	if (!emigrates) {
@@ -1465,11 +1465,11 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 		goto bad_alloc_buffer;
 	}
 
-	snapshot = kmalloc(nr_batch * wb->nr_caches_inseg, GFP_KERNEL);
-	if (!snapshot) {
-		WBERR("failed to allocate dirty snapshot");
+	memorized_dirtiness = kmalloc(nr_batch * wb->nr_caches_inseg, GFP_KERNEL);
+	if (!memorized_dirtiness) {
+		WBERR("failed to allocate memorized dirtiness");
 		r = -ENOMEM;
-		goto bad_alloc_snapshot;
+		goto bad_alloc_memorized_dirtiness;
 	}
 
 	/*
@@ -1478,21 +1478,21 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 	kfree(wb->emigrates); /* kfree(NULL) is safe */
 	if (wb->migrate_buffer)
 		vfree(wb->migrate_buffer);
-	kfree(wb->dirtiness_snapshot);
+	kfree(wb->memorized_dirtiness);
 
 	/*
 	 * Swap by new values
 	 */
 	wb->emigrates = emigrates;
 	wb->migrate_buffer = buf;
-	wb->dirtiness_snapshot = snapshot;
+	wb->memorized_dirtiness = memorized_dirtiness;
 	wb->nr_cur_batched_migration = nr_batch;
 
 	return r;
 
 bad_alloc_buffer:
 	kfree(wb->emigrates);
-bad_alloc_snapshot:
+bad_alloc_memorized_dirtiness:
 	vfree(wb->migrate_buffer);
 
 	return r;
@@ -1502,7 +1502,7 @@ static void free_migration_buffer(struct wb_device *wb)
 {
 	kfree(wb->emigrates);
 	vfree(wb->migrate_buffer);
-	kfree(wb->dirtiness_snapshot);
+	kfree(wb->memorized_dirtiness);
 }
 
 /*----------------------------------------------------------------*/

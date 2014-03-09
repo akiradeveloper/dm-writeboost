@@ -167,7 +167,7 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 		void *base = p + offset;
 
 		struct metablock *mb = seg->mb_array + i;
-		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
+		u8 dirty_bits = *(wb->memorized_dirtiness + (a + i));
 		if (!dirty_bits)
 			continue;
 
@@ -239,8 +239,8 @@ static void memorize_data_to_migrate(struct wb_device *wb,
 }
 
 /*
- * we first memorize the snapshot of the dirtiness in the segments.
- * the snapshot dirtiness is dirtier than that of any future moment
+ * we first memorize the dirtiness in the segments.
+ * the memorized dirtiness is dirtier than that of any future moment
  * because it is only monotonously decreasing after flushed.
  * therefore, we will migrate the possible dirtiest state of the
  * segments which won't lose any dirty data.
@@ -260,11 +260,11 @@ static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_he
 	 */
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
-		*(wb->dirtiness_snapshot + (a + i)) = read_mb_dirtiness(wb, seg, mb);
+		*(wb->memorized_dirtiness + (a + i)) = read_mb_dirtiness(wb, seg, mb);
 	}
 
 	for (i = 0; i < seg->length; i++) {
-		u8 dirty_bits = *(wb->dirtiness_snapshot + (a + i));
+		u8 dirty_bits = *(wb->memorized_dirtiness + (a + i));
 
 		if (!dirty_bits)
 			continue;
@@ -281,7 +281,7 @@ static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_he
 }
 
 /*
- * Memorize the dirtiness snapshot and count up the number of io to migrate.
+ * memorize the dirtiness and count up the number of io to migrate.
  */
 static void memorize_dirty_state(struct wb_device *wb, struct segment_header *seg,
 				 size_t k, size_t *migrate_io_count)

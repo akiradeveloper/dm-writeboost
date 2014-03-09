@@ -390,7 +390,7 @@ struct wb_device {
 	u32 num_emigrates; /* number of emigrates */
 	struct segment_header **emigrates; /* Segments to be migrated */
 	void *migrate_buffer; /* memorizes the data blocks of the emigrates */
-	u8 *dirtiness_snapshot; /* memorizes the dirtiness of the metablocks to be migrated */
+	u8 *memorized_dirtiness; /* memorize the dirtiness of the metablocks to be migrated */
 
 	/*---------------------------------------------*/
 

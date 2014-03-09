@@ -128,7 +128,7 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
  */
 static void wake_up_active_wq(wait_queue_head_t *wq)
 {
-	if (waitqueue_active(wq))
+	if (unlikely(waitqueue_active(wq)))
 		wake_up(wq);
 }
 

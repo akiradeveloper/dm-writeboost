@@ -331,7 +331,14 @@ struct wb_device {
 
 	mempool_t *flush_job_pool;
 	struct workqueue_struct *flusher_wq;
-	wait_queue_head_t flush_wait_queue; /* wait for a segment to be flushed */
+
+	/*
+	 * wait for a specified segment to be flushed
+	 * non-interruptible
+	 * c.f. wait_for_flushing()
+	 */
+	wait_queue_head_t flush_wait_queue;
+
 	atomic64_t last_flushed_segment_id;
 
 	/*---------------------------------------------*/
@@ -358,12 +365,22 @@ struct wb_device {
 	atomic64_t last_migrated_segment_id;
 
 	/*
-	 * data structures used by migrate daemon
+	 * wait for a specified segment to be migrated
+	 * non-interruptible
+	 * c.f. wait_for_migration()
 	 */
-	wait_queue_head_t migrate_wait_queue; /* wait for a segment to be migrated */
-	wait_queue_head_t wait_drop_caches; /* wait for drop_caches */
+	wait_queue_head_t migrate_wait_queue;
 
-	wait_queue_head_t migrate_io_wait_queue; /* wait for migrate ios */
+	/*
+	 * wait for migrating all the dirty caches (or dropping caches)
+	 * interruptible
+	 */
+	wait_queue_head_t wait_drop_caches;
+
+	/*
+	 * wait for a backgraound migration complete
+	 */
+	wait_queue_head_t migrate_io_wait_queue;
 	atomic_t migrate_io_count;
 	atomic_t migrate_fail_count;
 

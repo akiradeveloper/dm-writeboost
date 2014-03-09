@@ -125,6 +125,8 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
 /*
  * wake up the processes on the wq if the wq is active.
  * (at least a process is waiting on it)
+ * this function should only used for wq that is rarely active.
+ * otherwise ordinary wake_up() should be used instead.
  */
 static void wake_up_active_wq(wait_queue_head_t *wq)
 {
@@ -295,7 +297,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 /*
  * advance the current head for newer logs.
  * returns the "current" head as the address for current appending.
- * after returning, nr_inflight_plog_writes increments.
+ * after returned, nr_inflight_plog_writes increments.
  */
 static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 {
@@ -429,8 +431,7 @@ static void prepare_new_seg(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
-static void
-copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
+static void copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
 {
 	bio_list_init(&job->barrier_ios);
 	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
@@ -552,12 +553,8 @@ static void dec_nr_dirty_caches(struct wb_device *wb)
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
-/*
- * increase the dirtiness of a metablock.
- * @seg the segment_header that includes @mb
- */
-static void taint_mb(struct wb_device *wb, struct segment_header *seg,
-		     struct metablock *mb, struct bio *bio)
+static void increase_dirtiness(struct wb_device *wb, struct segment_header *seg,
+			       struct metablock *mb, struct bio *bio)
 {
 	unsigned long flags;
 
@@ -822,7 +819,7 @@ static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
 
 /*
  * advance the cursor and return the old cursor.
- * after returning, nr_inflight_ios is incremented
+ * after returned, nr_inflight_ios is incremented
  * to wait for this write to complete.
  */
 static u32 advance_cursor(struct wb_device *wb)
@@ -974,7 +971,8 @@ static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
 
 /*
  * decide where to write the data according to the result of cache lookup.
- * after returned, the refcount (in_flight_ios) is incremented.
+ * after returned, refcounts (in_flight_ios and in_flight_plog_writes)
+ * are incremented.
  */
 static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 			      struct write_job *pos)
@@ -1025,14 +1023,12 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 static int process_write_job(struct wb_device *wb, struct bio *bio,
 			     struct write_job *job)
 {
-	/*
-	 * update the dirtiness of the metablock
-	 */
-	taint_mb(wb, wb->current_seg, job->mb, bio);
+	increase_dirtiness(wb, wb->current_seg, job->mb, bio);
 
 	write_on_rambuffer(wb, bio, job);
 
 	append_plog(wb, bio, job);
+
 
 	dec_inflight_ios(wb, wb->current_seg);
 
@@ -1076,12 +1072,12 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
  *
  * --------------------------------------------------------------------
  * (locking) refcount
- * writeboost two refcount locking mechanism
+ * writeboost two refcount
  * (only one if not using plog)
  *
  * the basic common idea is
- * 1) increment the refcount with lock for serialization
- * 2) wait for the decrement outside the lock
+ * 1) increment the refcount inside lock
+ * 2) wait for decrement outside the lock
  *
  * process_write:
  *   prepare_write_pos:

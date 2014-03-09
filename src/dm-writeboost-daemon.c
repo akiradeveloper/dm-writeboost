@@ -122,7 +122,7 @@ void flush_proc(struct work_struct *work)
 	 * is written persistently. counting up the id is serialized.
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
-	wake_up_interruptible(&wb->flush_wait_queue);
+	wake_up(&wb->flush_wait_queue);
 	wbdebug("WAKE UP:%u", seg->id);
 
 	mempool_free(job, wb->flush_job_pool);
@@ -130,7 +130,7 @@ void flush_proc(struct work_struct *work)
 
 void wait_for_flushing(struct wb_device *wb, u64 id)
 {
-	wait_event_interruptible(wb->flush_wait_queue,
+	wait_event(wb->flush_wait_queue,
 		atomic64_read(&wb->last_flushed_segment_id) >= id);
 }
 
@@ -144,7 +144,7 @@ static void migrate_endio(unsigned long error, void *context)
 		atomic_inc(&wb->migrate_fail_count);
 
 	if (atomic_dec_and_test(&wb->migrate_io_count))
-		wake_up_interruptible(&wb->migrate_io_wait_queue);
+		wake_up(&wb->migrate_io_wait_queue);
 }
 
 /*
@@ -320,12 +320,15 @@ migrate_write:
 	}
 
 	LIVE_DEAD(
-		wait_event_interruptible(wb->migrate_io_wait_queue,
+		wait_event(wb->migrate_io_wait_queue,
 			!atomic_read(&wb->migrate_io_count))
 		,
 		atomic_set(&wb->migrate_io_count, 0)
 	);
 
+	/*
+	 * if one or more migrates are failed, retry
+	 */
 	if (atomic_read(&wb->migrate_fail_count)) {
 		WBWARN("%u writebacks failed. retry",
 		       atomic_read(&wb->migrate_fail_count));
@@ -402,7 +405,7 @@ static void do_migrate_proc(struct wb_device *wb)
 	transport_emigrates(wb);
 
 	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
-	wake_up_interruptible(&wb->migrate_wait_queue);
+	wake_up(&wb->migrate_wait_queue);
 	wbdebug("done migrate last id:%u", atomic64_read(&wb->last_migrated_segment_id));
 }
 
@@ -422,7 +425,7 @@ void wait_for_migration(struct wb_device *wb, u64 id)
 {
 	wb->urge_migrate = true;
 	wake_up_process(wb->migrate_daemon);
-	wait_event_interruptible(wb->migrate_wait_queue,
+	wait_event(wb->migrate_wait_queue,
 		atomic64_read(&wb->last_migrated_segment_id) >= id);
 	wb->urge_migrate = false;
 }

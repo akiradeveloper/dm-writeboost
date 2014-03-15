@@ -67,7 +67,7 @@ echo configure
 ./configure > /dev/null 2>&1
 
 echo make
-make -j 5 > /dev/null 2>&1
+make -j > /dev/null 2>&1
 
 echo 3 > /proc/sys/vm/drop_caches
 

@@ -30,18 +30,14 @@
 /*----------------------------------------------------------------*/
 
 /*
- * nice printk macros
- *
- * production code should not include lineno
- * but name of the caller seems to be OK.
+ * powerful printk macros
  */
 
 /*
  * only for debugging.
  * don't include this macro in the production code.
  */
-// #define DEBUG
-#ifdef DEBUG
+#ifdef WBDEBUG
 #define wbdebug(f, args...) \
 	DMINFO("debug@%s() L.%d " f, __func__, __LINE__, ## args)
 #else

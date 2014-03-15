@@ -138,7 +138,7 @@ static void plog_write_endio(unsigned long error, void *context)
 {
 	struct write_job *job = context;
 	struct wb_device *wb = job->wb;
-	if(atomic_dec_and_test(&wb->nr_inflight_plog_writes))
+	if (atomic_dec_and_test(&wb->nr_inflight_plog_writes))
 		wake_up_active_wq(&wb->plog_wait_queue);
 
 	mempool_free(job->plog_buf, wb->plog_buf_pool);
@@ -1100,7 +1100,7 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
  *     # submit async plog write
  *     # dec in_flight_plog_writes in endio
  *     append_plog()
- * 
+ *
  *     # wait for all async plog writes complete
  *     # not always. only if we need to make precedents persistent.
  *     barrier_plog_writes()

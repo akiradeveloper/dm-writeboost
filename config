@@ -5,25 +5,21 @@ export WB_ROOT=`pwd`
 # Setup this file
 # so as to fit your environment.
 
-BACKING=/dev/vg2/back18g
-# BACKING=/dev/vdd
-# BACKING=/dev/vdd1
-# BACKING=/dev/vg2/back40g
-# BACKING=/dev/sdc2
-# BACKING=/dev/sda2
+# backing device (orig_dev) - essential
+BACKING=/dev/hvg2/back18g
+# BACKING=/dev/vg2/back40g # benchmark
 export BACKING
 
-# CACHE=/dev/vg1/cache3m
-CACHE=/dev/vg1/cache2g
-# CACHE=/dev/vdd2
-# CACHE=/dev/sdd2
-# CACHE=/dev/loop0
-# CACHE=/dev/sda1
+# cache device (cache_dev) - essential
+CACHE=/dev/hvg1/cache2g
+# CACHE=/dev/hvg1/cache3m
+# CACHE=/dev/sdd2 # benchmark
 export CACHE
 
-# PLOG=/dev/vg1/cache2g
-PLOG=/dev/vg1/cache3m
-# PLOG=/dev/vdd2
+# plog device (plog_dev_desc) - only if type > 0
+PLOG=/dev/hvg1/cache3m
+# PLOG=/dev/hvg1/cache2g
+# PLOG=/dev/sdd3 # benchmark
 export PLOG
 
 echo BACKING: ${BACKING}

@@ -5,6 +5,7 @@ PWD := $(shell pwd)
 
 # EXTRA_CFLAGS += -O0 -DCONFIG_DM_DEBUG -fno-inline -Wall
 # EXTRA_CFLAGS += -O2 -UCONFIG_DM_DEBUG
+EXTRA_CFLAGS += -DWBDEBUG
 
 obj-m := dm-writeboost.o
 dm-writeboost-objs := \

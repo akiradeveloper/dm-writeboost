@@ -87,7 +87,7 @@ sector_t dm_devsize(struct dm_dev *dev)
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
 	bio->bi_bdev = dev->bdev;
-	bio->bi_sector = sector;
+	bio->bi_iter.bi_sector = sector;
 }
 
 static u8 do_io_offset(sector_t sector)
@@ -99,7 +99,7 @@ static u8 do_io_offset(sector_t sector)
 
 static u8 io_offset(struct bio *bio)
 {
-	return do_io_offset(bio->bi_sector);
+	return do_io_offset(bio->bi_iter.bi_sector);
 }
 
 static bool io_fullsize(struct bio *bio)
@@ -176,16 +176,16 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 static void do_append_plog(struct wb_device *wb, struct bio *bio,
 			   struct write_job *job)
 {
-	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_size);
+	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_iter.bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
-		.sector = cpu_to_le64(bio->bi_sector),
+		.sector = cpu_to_le64(bio->bi_iter.bi_sector),
 		.checksum = cpu_to_le32(cksum),
 		.idx = mb_idx_inseg(wb, job->mb->idx),
 		.len = bio_sectors(bio),
 	};
 	memcpy(job->plog_buf, &meta, 512);
-	memcpy(job->plog_buf + 512, bio_data(bio), bio->bi_size);
+	memcpy(job->plog_buf + 512, bio_data(bio), bio->bi_iter.bi_size);
 
 	switch (wb->type) {
 	case 1:
@@ -825,7 +825,7 @@ static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
 	/*
 	 * write data block to the volatile RAM buffer.
 	 */
-	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_size);
+	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_iter.bi_size);
 }
 
 /*
@@ -893,7 +893,7 @@ static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 static int process_discard_bio(struct wb_device *wb, struct bio *bio)
 {
 	wbdebug("DISCARD");
-	bio_remap(bio, wb->origin_dev, bio->bi_sector);
+	bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
 	return DM_MAPIO_REMAPPED;
 }
 
@@ -905,7 +905,7 @@ static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 	/*
 	 * in device-mapper bio with REQ_FLUSH is for sure to have not data.
 	 */
-	BUG_ON(bio->bi_size);
+	BUG_ON(bio->bi_iter.bi_size);
 
 	if (!wb->type) {
 		queue_barrier_io(wb, bio);
@@ -940,7 +940,7 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio,
 			 struct lookup_result *res)
 {
 	res->key = (struct lookup_key) {
-		.sector = calc_cache_alignment(bio->bi_sector),
+		.sector = calc_cache_alignment(bio->bi_iter.bi_sector),
 	};
 	res->head = ht_get_head(wb, &res->key);
 
@@ -957,7 +957,7 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio,
 		res->on_buffer = is_on_buffer(wb, res->found_mb->idx);
 
 	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
-	wbdebug("rw:%d, found:%d, on_buffer:%d, fullsize:%d", rw, res->found, res->on_buffer, io_fullsize(bio));
+	wbdebug("rw:%d, found:%d, on_buffer:%d, fullsize:%d", io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
 }
 
 /*
@@ -1138,7 +1138,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	mutex_unlock(&wb->io_lock);
 
 	if (!res.found) {
-		bio_remap(bio, wb->origin_dev, bio->bi_sector);
+		bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
 
@@ -1148,7 +1148,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 			migrate_buffered_mb(wb, res.found_mb, dirty_bits);
 
 		dec_inflight_ios(wb, res.found_seg);
-		bio_remap(bio, wb->origin_dev, bio->bi_sector);
+		bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
 
@@ -1172,7 +1172,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 		cleanup_mb_if_dirty(wb, res.found_seg, res.found_mb);
 
 		dec_inflight_ios(wb, res.found_seg);
-		bio_remap(bio, wb->origin_dev, bio->bi_sector);
+		bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
 	}
 	return DM_MAPIO_REMAPPED;
 }

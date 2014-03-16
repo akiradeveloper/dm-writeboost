@@ -1,4 +1,4 @@
-NAME=writeboost_1_32_ram # _numjobs_iodepth
+NAME=writeboost_4_32_t1 # _numjobs_iodepth
 mkdir -p result/$NAME
 fio randw4k.fio > result/$NAME/fio &
 sar -A 1 5 -o result/$NAME/sar &

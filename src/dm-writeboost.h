@@ -423,7 +423,7 @@ struct wb_device {
 	 ********************/
 
 	/* common */
-	char plog_dev_desc[16]; /* passed as essential argv to describe the persistent device */
+	char plog_dev_desc[BDEVNAME_SIZE]; /* passed as essential argv to describe the persistent device */
 
 	wait_queue_head_t plog_wait_queue; /* wait queue to serialize writers */
 	atomic_t nr_inflight_plog_writes; /* number of async plog writes not acked yet */

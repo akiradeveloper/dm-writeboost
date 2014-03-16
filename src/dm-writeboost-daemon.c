@@ -186,7 +186,7 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 				.sector = mb->sector,
 				.count = 1 << 3,
 			};
-			IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
+			dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
 		} else {
 			u8 j;
 			for (j = 0; j < 8; j++) {
@@ -211,7 +211,7 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 					.sector = mb->sector + j,
 					.count = 1,
 				};
-				IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
+				dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
 			}
 		}
 	}

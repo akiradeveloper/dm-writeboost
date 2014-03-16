@@ -170,7 +170,7 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 	 * the process is waiting for all async plog writes complete.
 	 * thus, essentially sync.
 	 */
-	IO(dm_safe_io(&io_req, 1, &region, NULL, true));
+	dm_safe_io(&io_req, 1, &region, NULL, true);
 }
 
 static void do_append_plog(struct wb_device *wb, struct bio *bio,

@@ -2,7 +2,8 @@
 Log-structured Caching for Linux
 
 ## What's new
-I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
+* dm-writeboost is now able to run on > v3.14 
+* I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
 
 ## Overview
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  

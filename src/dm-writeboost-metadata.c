@@ -865,11 +865,10 @@ bad_write_job_pool:
 
 static void free_plog_dev(struct wb_device *wb)
 {
-	if (!wb->type)
-		return;
-
-	do_free_plog_dev(wb);
-	mempool_destroy(wb->plog_buf_pool);
+	if (wb->type) {
+		do_free_plog_dev(wb);
+		mempool_destroy(wb->plog_buf_pool);
+	}
 	mempool_destroy(wb->write_job_pool);
 }
 

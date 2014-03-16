@@ -17,6 +17,10 @@ do
 
     cd $TR/$i
     sh ./run.sh $T
+
+    # sleeping here 10 sec to wait for background cleanup
+    # but this is too heuristic.
+    # better to do more appropriate operation
     sleep 10
 done
 cd $TR

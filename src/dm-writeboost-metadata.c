@@ -816,14 +816,6 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 {
 	int r = 0;
 
-	if (!wb->type)
-		return 0;
-
-	wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
-
-	init_waitqueue_head(&wb->plog_wait_queue);
-	atomic_set(&wb->nr_inflight_plog_writes, 0);
-
 	wb->write_job_pool = mempool_create_kmalloc_pool(16, sizeof(struct write_job));
 	if (!wb->write_job_pool) {
 		r = -ENOMEM;
@@ -831,6 +823,13 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 		goto bad_write_job_pool;
 	}
 
+	if (!wb->type)
+		return 0;
+
+	init_waitqueue_head(&wb->plog_wait_queue);
+	atomic_set(&wb->nr_inflight_plog_writes, 0);
+
+	wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
 	wb->plog_buf_pool = mempool_create_kmalloc_pool(16, ((1 + 8) << SECTOR_SHIFT));
 	if (!wb->plog_buf_pool) {
 		r = -ENOMEM;

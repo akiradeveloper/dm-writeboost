@@ -456,6 +456,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	wb->current_seg = new_seg;
 
 	acquire_new_rambuffer(wb, id);
+	wbdebug("acquired new rambuf & start to acquire new plog");
 	acquire_new_plog(wb, id);
 }
 
@@ -503,8 +504,10 @@ static void queue_flush_job(struct wb_device *wb)
 
 static void queue_current_buffer(struct wb_device *wb)
 {
+	wbdebug("START");
 	queue_flush_job(wb);
 	prepare_new_seg(wb);
+	wbdebug("END");
 }
 
 /*
@@ -532,19 +535,19 @@ void flush_current_buffer(struct wb_device *wb)
 {
 	struct segment_header *old_seg;
 
-	wbdebug();
+	wbdebug("START");
 
 	mutex_lock(&wb->io_lock);
-	wbdebug("lock");
 	old_seg = wb->current_seg;
 
 	queue_current_buffer(wb);
 
 	cursor_init(wb);
 	mutex_unlock(&wb->io_lock);
-	wbdebug("unlock");
 
 	wait_for_flushing(wb, old_seg->id);
+
+	wbdebug("END");
 }
 
 /*----------------------------------------------------------------*/

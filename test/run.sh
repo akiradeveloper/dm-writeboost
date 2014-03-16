@@ -9,7 +9,8 @@
 T=$1
 TR=`pwd`
 #for i in 1 2 3 4 5 6 99
-for i in 2 3 4 5 99
+# for i in 2 3 4 5 99
+for i in 3 4 5 99
 do
     echo -----------------------------
     echo ------ testing no.$i -------

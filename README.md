@@ -2,6 +2,7 @@
 Log-structured Caching for Linux
 
 ## What's new
+* bumped up the version to 0.9. it's close to release
 * dm-writeboost is now able to run on > v3.14 
 * I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
 

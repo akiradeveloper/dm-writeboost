@@ -25,3 +25,10 @@ export PLOG
 echo BACKING: ${BACKING}
 echo CACHE  : ${CACHE}
 echo PLOG   : ${PLOG}
+
+# common routines
+remove_dev() {
+    dmsetup suspend writeboost-vol
+    dmsetup resume writeboost-vol
+    dmsetup remove writeboost-vol
+}

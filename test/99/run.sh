@@ -36,7 +36,7 @@ fi
 # are null (all I/Os are ignored)
 # the logic outside the I/O itself should work fine
 # including removing the device.
-dmsetup remove writeboost-vol
+remove_dev
 if [ $? -ne 0 ]; then
     echo BUG: remove failed
 fi

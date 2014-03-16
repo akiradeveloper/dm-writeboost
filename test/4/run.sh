@@ -51,9 +51,10 @@ dmsetup status writeboost-vol
 #dmsetup message writeboost-vol 0 drop_caches
 
 echo unmount
-fuser -muv /mnt/writeboost-vol
-umount -l /mnt/writeboost-vol
-dmsetup remove writeboost-vol
+fuser -km /mnt/writeboost-vol
+umount /mnt/writeboost-vol
+
+remove_dev
 
 # checking if the backing device can be mounted
 # without the later dirty data on the cache device
@@ -64,5 +65,5 @@ if  [ $? -ne 0 ]; then
 fi
 echo \# files \(wo cache\)
 ls /mnt/writeboost-vol | wc -l
-fuser -muv /mnt/writeboost-vol
-umount -l /mnt/writeboost-vol
+fuser -km /mnt/writeboost-vol
+umount /mnt/writeboost-vol

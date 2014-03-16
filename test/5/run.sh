@@ -35,16 +35,15 @@ echo 2\) write 1 sector
 dd if=./data-1 of=/dev/mapper/writeboost-vol bs=512 count=1 seek=1 oflag=direct
 
 echo 3\) wait for flushing the buffer. buffer is now clean then
-dmsetup message writeboost-vol 0 sync_interval 1
-sleep 5
-dmsetup message writeboost-vol 0 sync_interval 0
+dmsetup suspend writeboost-vol
+dmsetup resume writeboost-vol
 
 echo 4\) write 1-sector on the buffer. 1-sector on the buffer
 dd if=./data-1 of=/dev/mapper/writeboost-vol bs=512 count=1 seek=1 oflag=direct
 
 echo 5\) on-buffer read hit
 echo 3 > /proc/sys/vm/drop_caches
-dd if=/dev/mapper/writeboost-vol of=./actual.dump bs=512 count=8
+dd if=/dev/mapper/writeboost-vol of=./actual.dump bs=512 count=8 iflag=direct
 
 echo checking ...
 diff ./actual.dump ./expect.dump
@@ -54,4 +53,4 @@ else
     echo BUG: dump NOT expected!!!
 fi
 
-dmsetup remove writeboost-vol
+remove_dev

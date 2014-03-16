@@ -36,9 +36,9 @@ dmsetup resume writeboost-vol
 
 cd
 
-fuser -muv /mnt/writeboost-vol
+fuser -km /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
-dmsetup remove writeboost-vol
+remove_dev
 
 echo create wb device \(migration OFF\)
 if [ $T -eq 0 ]; then
@@ -76,6 +76,6 @@ make test > /dev/null
 
 cd
 
-fuser -muv /mnt/writeboost-vol
+fuser -km /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
-dmsetup remove writeboost-vol
+remove_dev

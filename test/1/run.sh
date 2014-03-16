@@ -43,6 +43,6 @@ make test > /dev/null
 
 cd # cd - ?
 
-fuser -muv /mnt/writeboost-vol
+fuser -km /mnt/writeboost-vol
 umount -l /mnt/writeboost-vol
-dmsetup remove writeboost-vol
+remove_dev

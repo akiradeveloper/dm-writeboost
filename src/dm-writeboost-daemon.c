@@ -40,7 +40,6 @@ void flush_barrier_ios(struct work_struct *work)
 	if (bio_list_empty(&wb->barrier_ios))
 		return;
 
-	wbdebug();
 	atomic64_inc(&wb->count_non_full_flushed);
 	flush_current_buffer(wb);
 }
@@ -156,8 +155,6 @@ static void migrate_endio(unsigned long error, void *context)
 static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 			      size_t k)
 {
-	int r = 0;
-
 	size_t a = wb->nr_caches_inseg * k;
 	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 

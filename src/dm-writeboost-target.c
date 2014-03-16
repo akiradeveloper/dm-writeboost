@@ -138,6 +138,7 @@ static void plog_write_endio(unsigned long error, void *context)
 {
 	struct write_job *job = context;
 	struct wb_device *wb = job->wb;
+
 	if (atomic_dec_and_test(&wb->nr_inflight_plog_writes))
 		wake_up_active_wq(&wb->plog_wait_queue);
 
@@ -197,28 +198,55 @@ static void do_append_plog(struct wb_device *wb, struct bio *bio,
 }
 
 /*
+ * submit sync flush request to @dev
+ */
+static void submit_flush_request(struct wb_device *wb, struct dm_dev *dev, bool thread)
+{
+	int r = 0;
+	struct dm_io_request io_req = {
+		.bi_rw = WRITE_FLUSH,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = NULL,
+		.client = wb_io_client,
+	};
+	struct dm_io_region io_region = {
+		.bdev = dev->bdev,
+		.sector = 0,
+		.count = 0,
+	};
+	IO(dm_safe_io(&io_req, 1, &io_region, NULL, thread));
+}
+
+/*
  * wait for all the plog writes complete
  * and then make all the predecessor writes persistent.
  */
 static void barrier_plog_writes(struct wb_device *wb)
 {
 	int r = 0;
+
+	wbdebug("START refcount:%u", atomic_read(&wb->nr_inflight_plog_writes));
 	wait_event(wb->plog_wait_queue,
 		!atomic_read(&wb->nr_inflight_plog_writes));
 
 	/*
-	 * blkdev_issue_flush calls submit_bio and waits for the
-	 * bio complete. thus, sync.
-	 * however, doesn't cause deadlock as sync dm_io.
+	 * TODO
+	 * can be optimized by avoid unnecessary flush requests.
+	 * if we have flushed before while holding the current segment
+	 * (i.e. we flushed the segments before the current segment)
+	 * we need not to flush them any more.
+	 * adding some flag to segment_header can be thought however,
+	 * immature optimiazation is always harmful. so, did not.
 	 */
-	IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+	submit_flush_request(wb, wb->cache_dev, true);
 	switch (wb->type) {
 	case 1:
-		IO(blkdev_issue_flush(wb->plog_dev_t1->bdev, GFP_NOIO, NULL));
+		submit_flush_request(wb, wb->plog_dev_t1, true);
 		break;
 	default:
 		BUG();
 	}
+	wbdebug("END");
 }
 
 /*

@@ -3,7 +3,10 @@ filename=/dev/mapper/writeboost-vol
 # filename=/dev/bcache0
 # filename=/dev/sdd2
 # filename=/dev/loop0
-numjobs=4
+
+numjobs=4 # param
+iodepth=32 # param
+
 randrepeat=1
 ioengine=libaio
 bs=4k
@@ -13,7 +16,6 @@ runtime=5
 direct=1
 gtod_reduce=1
 norandommap
-iodepth=32
 stonewall
 
 [perf]

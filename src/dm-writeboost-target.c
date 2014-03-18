@@ -217,6 +217,13 @@ static void submit_flush_request(struct wb_device *wb, struct dm_dev *dev, bool 
 	IO(dm_safe_io(&io_req, 1, &io_region, NULL, thread));
 }
 
+static void wait_plog_writes_complete(struct wb_device *wb)
+{
+	wbdebug("START refcount:%u", atomic_read(&wb->nr_inflight_plog_writes));
+	wait_event(wb->plog_wait_queue,
+		!atomic_read(&wb->nr_inflight_plog_writes));
+}
+
 /*
  * wait for all the plog writes complete
  * and then make all the predecessor writes persistent.
@@ -225,9 +232,7 @@ static void barrier_plog_writes(struct wb_device *wb)
 {
 	int r = 0;
 
-	wbdebug("START refcount:%u", atomic_read(&wb->nr_inflight_plog_writes));
-	wait_event(wb->plog_wait_queue,
-		!atomic_read(&wb->nr_inflight_plog_writes));
+	wait_plog_writes_complete(wb);
 
 	/*
 	 * TODO
@@ -358,15 +363,7 @@ static void acquire_new_plog(struct wb_device *wb, u64 id)
 
 	wait_for_flushing(wb, SUB_ID(id, wb->nr_plogs));
 
-	/*
-	 * if some plog writes are inflight
-	 * but we acquire new plog
-	 * the former writes will be possibly
-	 * overwrite the later writes
-	 * because there is no guarantees on
-	 * the ordering of async writes.
-	 */
-	barrier_plog_writes(wb);
+	wait_plog_writes_complete(wb);
 
 	div_u64_rem(id - 1, wb->nr_plogs, &tmp32);
 	wb->plog_start_sector = wb->plog_size * tmp32;

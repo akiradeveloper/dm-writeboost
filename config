@@ -5,6 +5,19 @@ export WB_ROOT=`pwd`
 # Setup this file
 # so as to fit your environment.
 
+
+# Desc (read this first):
+#
+# (for type >= 0)
+# The writeboost device to create
+# will cache writes to $BACKING device on $CACHE device.
+#
+# (for type > 0 only)
+# $PLOG is not essential,
+# Persistent Logging (plog) is a supplimental structure
+# that stablizes writeboost' response.
+
+
 # backing device (orig_dev) - essential
 # BACKING=/dev/hvg2/back18g
 BACKING=/dev/vg2/back40g # benchmark

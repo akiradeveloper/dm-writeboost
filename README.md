@@ -36,7 +36,7 @@ I provice you with nice scripts for quick starting.
 * The kernel version must be >= 3.14
 * Configs required
   * CONFIG\_BLK\_DEV\_DM (device-mapper)
-  * CONFIG\_LIBCRC32 (libcrc32)
+  * CONFIG\_LIBCRC32C (libcrc32c)
 
 (2) Configure the path for the devices
     (orig_dev, cache_dev)

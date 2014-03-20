@@ -41,7 +41,7 @@ I provice you with nice scripts for quick starting.
 
 	$ sh build.sh
 
-(3) Run prepare script to make a device
+(3) Run prepare script to make a device (su needed)
 
 	# sh prepare.sh
 

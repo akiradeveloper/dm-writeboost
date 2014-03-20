@@ -3,7 +3,7 @@ Log-structured Caching for Linux
 
 ## What's new
 * bumped up the version to 0.9. it's close to release
-* dm-writeboost is now able to run on > v3.14 
+* dm-writeboost is now able to run on >= v3.14
 * I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
 
 ## Overview
@@ -31,17 +31,24 @@ either block device or persistent RAM.
 ## Quick Start
 I provice you with nice scripts for quick starting.  
 
-(1) Configure the path for the devices
+(1) Build and install the Linux kernel
+
+* The kernel version must be >= 3.14
+* Configs required
+  * CONFIG\_BLK\_DEV\_DM (device-mapper)
+  * CONFIG\_LIBCRC32 (libcrc32)
+
+(2) Configure the path for the devices
     (orig_dev, cache_dev)
 
 	$ cd /home/akira/dm-writeboost  
 	$ vi config
 
-(2) Compile
+(3) Compile
 
 	$ sh build.sh
 
-(3) Run prepare script to make a device (su needed)
+(4) Run prepare script to make a device (su needed)
 
 	# sh prepare.sh
 

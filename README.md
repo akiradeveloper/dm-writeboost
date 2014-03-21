@@ -13,7 +13,7 @@ into a big sequential write which then performs high throughput and low latency.
 See also the DCD paper [1] and its recent application [2].
 
 Persistent Logging (plog) is implemented to mitigate the penalty in handling
-write barriers (REQ_FUA or REQ_FLUSH). The medium to write plog is
+write barriers (REQ\_FUA or REQ\_FLUSH). The medium to write plog is
 either block device or persistent RAM.
 
 ## Features
@@ -40,9 +40,7 @@ I provice you with nice scripts for quick starting.
   * (optional)  CONFIG\_DM\_FLAKEY (dm-flakey). It's necessary if you run runtest.sh.
 
 (2) Configure the path for the devices
-    (orig_dev, cache_dev)
 
-	$ cd /home/akira/dm-writeboost  
 	$ vi config
 
 (3) Compile

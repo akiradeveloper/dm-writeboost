@@ -161,7 +161,7 @@ static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 	};
 	struct dm_io_region region = {
 		.bdev = wb->plog_dev_t1->bdev,
-		.sector = wb->plog_start_sector + job->plog_head,
+		.sector = wb->plog_seg_start_sector + job->plog_head,
 		.count = 1 + bio_sectors(bio),
 	};
 
@@ -354,19 +354,19 @@ static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
 	return old;
 }
 
-static void acquire_new_plog(struct wb_device *wb, u64 id)
+static void acquire_new_plog_seg(struct wb_device *wb, u64 id)
 {
 	u32 tmp32;
 
 	if (!wb->type)
 		return;
 
-	wait_for_flushing(wb, SUB_ID(id, wb->nr_plogs));
+	wait_for_flushing(wb, SUB_ID(id, wb->nr_plog_segs));
 
 	wait_plog_writes_complete(wb);
 
-	div_u64_rem(id - 1, wb->nr_plogs, &tmp32);
-	wb->plog_start_sector = wb->plog_size * tmp32;
+	div_u64_rem(id - 1, wb->nr_plog_segs, &tmp32);
+	wb->plog_seg_start_sector = wb->plog_seg_size * tmp32;
 	wb->alloc_plog_head = 0;
 }
 
@@ -454,7 +454,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 	acquire_new_rambuffer(wb, id);
 	wbdebug("acquired new rambuf & start to acquire new plog");
-	acquire_new_plog(wb, id);
+	acquire_new_plog_seg(wb, id);
 }
 
 static void prepare_new_seg(struct wb_device *wb)
@@ -878,14 +878,14 @@ static u32 advance_cursor(struct wb_device *wb)
 
 static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 {
-	bool plog_no_space = false, rambuf_no_space = false;
+	bool plog_seg_no_space = false, rambuf_no_space = false;
 
 	/*
 	 * if there is no more space for appending new log
 	 * it's time to request new plog.
 	 */
 	if (wb->type)
-		plog_no_space = (wb->alloc_plog_head + 1 + bio_sectors(bio)) > wb->plog_size;
+		plog_seg_no_space = (wb->alloc_plog_head + 1 + bio_sectors(bio)) > wb->plog_seg_size;
 
 	/*
 	 * we request a new RAM buffer (hence segment)
@@ -893,7 +893,7 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 	 */
 	rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
 
-	return plog_no_space || rambuf_no_space;
+	return plog_seg_no_space || rambuf_no_space;
 }
 
 /*
@@ -1492,7 +1492,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	wb->segment_size_order = 7;
 	wb->nr_rambuf_pool = 1;
 	if (wb->type)
-		wb->nr_plogs = 1;
+		wb->nr_plog_segs = 1;
 
 	r = consume_optional_argv(wb, &as);
 	if (r) {

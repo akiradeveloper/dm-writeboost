@@ -682,7 +682,7 @@ static int do_clear_plog_dev_t1(struct wb_device *wb, u32 idx)
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 
-	void *buf = kzalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	void *buf = kzalloc(wb->plog_seg_size << SECTOR_SHIFT, GFP_KERNEL);
 	if (!buf) {
 		WBERR("failed to allocate buffer");
 		return -ENOMEM;
@@ -698,8 +698,8 @@ static int do_clear_plog_dev_t1(struct wb_device *wb, u32 idx)
 
 	region = (struct dm_io_region) {
 		.bdev = wb->plog_dev_t1->bdev,
-		.sector = wb->plog_size * idx,
-		.count = wb->plog_size,
+		.sector = wb->plog_seg_size * idx,
+		.count = wb->plog_seg_size,
 	};
 
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
@@ -733,7 +733,7 @@ static int clear_plog_dev(struct wb_device *wb)
 	int r = 0;
 	u32 i;
 
-	for (i = 0; i < wb->nr_plogs; i++) {
+	for (i = 0; i < wb->nr_plog_segs; i++) {
 		r = do_clear_plog_dev(wb, i);
 		if (r)
 			return r;
@@ -756,7 +756,7 @@ static int do_alloc_plog_dev_t1(struct wb_device *wb)
 		return -EINVAL;
 	}
 
-	nr_max = div_u64(dm_devsize(wb->plog_dev_t1), wb->plog_size);
+	nr_max = div_u64(dm_devsize(wb->plog_dev_t1), wb->plog_seg_size);
 	if (nr_max < 1) {
 		dm_put_device(wb->ti, wb->plog_dev_t1);
 		WBERR("plog device too small");
@@ -768,9 +768,9 @@ static int do_alloc_plog_dev_t1(struct wb_device *wb)
 	 * i.e. more plogs are meaningless.
 	 */
 	if (nr_max > wb->nr_rambuf_pool)
-		wb->nr_plogs = wb->nr_rambuf_pool;
+		wb->nr_plog_segs = wb->nr_rambuf_pool;
 	else
-		wb->nr_plogs = min(wb->nr_plogs, nr_max);
+		wb->nr_plog_segs = min(wb->nr_plog_segs, nr_max);
 
 	return r;
 }
@@ -778,7 +778,7 @@ static int do_alloc_plog_dev_t1(struct wb_device *wb)
 /*
  * allocate the persistent device.
  * after this funtion called all the members related to plog
- * is complete (e.g. nr_plogs is set).
+ * is complete (e.g. nr_plog_segs is set).
  */
 static int do_alloc_plog_dev(struct wb_device *wb)
 {
@@ -829,7 +829,7 @@ static int alloc_plog_dev(struct wb_device *wb, bool clear)
 	init_waitqueue_head(&wb->plog_wait_queue);
 	atomic_set(&wb->nr_inflight_plog_writes, 0);
 
-	wb->plog_size = (1 + 8) * wb->nr_caches_inseg;
+	wb->plog_seg_size = (1 + 8) * wb->nr_caches_inseg;
 	wb->plog_buf_pool = mempool_create_kmalloc_pool(16, ((1 + 8) << SECTOR_SHIFT));
 	if (!wb->plog_buf_pool) {
 		r = -ENOMEM;
@@ -928,8 +928,8 @@ static int read_plog_t1(void *buf, struct wb_device *wb, u32 idx)
 	};
 	struct dm_io_region region = {
 		.bdev = wb->plog_dev_t1->bdev,
-		.sector = wb->plog_size * idx,
-		.count = wb->plog_size,
+		.sector = wb->plog_seg_size * idx,
+		.count = wb->plog_seg_size,
 	};
 	r = dm_safe_io(&io_req, 1, &region, NULL, false);
 	if (r)
@@ -964,12 +964,12 @@ static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 	u32 i;
 	u64 min_id = SZ_MAX, id_cpu;
 
-	void *plog_buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	void *plog_buf = kmalloc(wb->plog_seg_size << SECTOR_SHIFT, GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
 
 	*id = 0; *idx = 0;
-	for (i = 0; i < wb->nr_plogs; i++) {
+	for (i = 0; i < wb->nr_plog_segs; i++) {
 		struct plog_meta_device meta;
 		read_plog(plog_buf, wb, i);
 		memcpy(&meta, plog_buf, 512);
@@ -1051,7 +1051,7 @@ static int flush_plogs(struct wb_device *wb)
 	if (!wb->type)
 		return 0;
 
-	plog_buf = kmalloc(wb->plog_size << SECTOR_SHIFT, GFP_KERNEL);
+	plog_buf = kmalloc(wb->plog_seg_size << SECTOR_SHIFT, GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
 
@@ -1072,11 +1072,11 @@ static int flush_plogs(struct wb_device *wb)
 	}
 	wbdebug();
 
-	for (i = 0; i < wb->nr_plogs; i++) {
+	for (i = 0; i < wb->nr_plog_segs; i++) {
 		u32 j;
 		u64 log_id;
 
-		div_u64_rem(orig_idx + i, wb->nr_plogs, &j);
+		div_u64_rem(orig_idx + i, wb->nr_plog_segs, &j);
 
 		read_plog(plog_buf, wb, j);
 		/*

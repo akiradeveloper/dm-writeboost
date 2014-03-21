@@ -204,8 +204,20 @@ struct flush_job {
 /*----------------------------------------------------------------*/
 
 /*
- * plog = metadata (512B) + data (512B-4096B)
+ * the data structures in persistent logging
+ * -----------------------------------------
+ *
+ * plog:
+ * plog_meta_device (512B) + data (512B-4096B)
  * a plog contains a self-contained information of a accepted write.
+ * plog is an atomic unit in persistent logging.
+ *
+ * plog_dev:
+ * the persistent device where plogs are written.
+ *
+ * plog_seg:
+ * like cache_dev is split into segment_headers
+ * plog_dev is split into plog_segs.
  */
 
 struct plog_meta_device {
@@ -431,10 +443,10 @@ struct wb_device {
 	mempool_t *write_job_pool;
 	mempool_t *plog_buf_pool;
 
-	sector_t plog_size; /* const. the size of a plog in sector */
+	sector_t plog_seg_size; /* const. the size of a plog in sector */
 	sector_t alloc_plog_head; /* next relative sector to allocate */
-	sector_t plog_start_sector; /* the absolute start sector of the current plog */
-	u32 nr_plogs; /* const. number of plogs */
+	sector_t plog_seg_start_sector; /* the absolute start sector of the current plog */
+	u32 nr_plog_segs; /* const. number of plogs */
 
 	/* type 1 */
 	struct dm_dev *plog_dev_t1;

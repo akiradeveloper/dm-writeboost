@@ -18,7 +18,7 @@ export WB_ROOT=`pwd`
 # that stablizes writeboost' response.
 
 
-# backing device (orig_dev) - essential
+# backing device (backing_dev) - essential
 BACKING=/dev/hvg2/back18g
 # BACKING=/dev/vg2/back40g # benchmark
 export BACKING

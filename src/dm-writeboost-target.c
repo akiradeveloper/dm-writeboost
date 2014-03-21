@@ -706,7 +706,7 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 			.mem.ptr.addr = buf,
 		};
 		region_w = (struct dm_io_region) {
-			.bdev = wb->origin_dev->bdev,
+			.bdev = wb->backing_dev->bdev,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
@@ -746,7 +746,7 @@ static void migrate_mb(struct wb_device *wb, struct segment_header *seg,
 				.mem.ptr.addr = buf,
 			};
 			region_w = (struct dm_io_region) {
-				.bdev = wb->origin_dev->bdev,
+				.bdev = wb->backing_dev->bdev,
 				.sector = mb->sector + i,
 				.count = 1,
 			};
@@ -799,7 +799,7 @@ static void migrate_buffered_mb(struct wb_device *wb,
 
 		dest = mb->sector + i;
 		region = (struct dm_io_region) {
-			.bdev = wb->origin_dev->bdev,
+			.bdev = wb->backing_dev->bdev,
 			.sector = dest,
 			.count = 1,
 		};
@@ -921,7 +921,7 @@ static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 static int process_discard_bio(struct wb_device *wb, struct bio *bio)
 {
 	wbdebug("DISCARD");
-	bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
+	bio_remap(bio, wb->backing_dev, bio->bi_iter.bi_sector);
 	return DM_MAPIO_REMAPPED;
 }
 
@@ -1171,7 +1171,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	mutex_unlock(&wb->io_lock);
 
 	if (!res.found) {
-		bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
+		bio_remap(bio, wb->backing_dev, bio->bi_iter.bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
 
@@ -1181,7 +1181,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 			migrate_buffered_mb(wb, res.found_mb, dirty_bits);
 
 		dec_inflight_ios(wb, res.found_seg);
-		bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
+		bio_remap(bio, wb->backing_dev, bio->bi_iter.bi_sector);
 		return DM_MAPIO_REMAPPED;
 	}
 
@@ -1205,7 +1205,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 		cleanup_mb_if_dirty(wb, res.found_seg, res.found_mb);
 
 		dec_inflight_ios(wb, res.found_seg);
-		bio_remap(bio, wb->origin_dev, bio->bi_iter.bi_sector);
+		bio_remap(bio, wb->backing_dev, bio->bi_iter.bi_sector);
 	}
 	return DM_MAPIO_REMAPPED;
 }
@@ -1272,9 +1272,9 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 	wb->type = tmp;
 
 	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
-			  &wb->origin_dev);
+			  &wb->backing_dev);
 	if (r) {
-		WBERR("failed to get origin dev");
+		WBERR("failed to get backing dev");
 		return r;
 	}
 
@@ -1294,7 +1294,7 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 	return r;
 
 bad_get_cache:
-	dm_put_device(ti, wb->origin_dev);
+	dm_put_device(ti, wb->backing_dev);
 	return r;
 }
 
@@ -1522,7 +1522,7 @@ bad_tunable_argv:
 bad_resume_cache:
 bad_optional_argv:
 	dm_put_device(ti, wb->cache_dev);
-	dm_put_device(ti, wb->origin_dev);
+	dm_put_device(ti, wb->backing_dev);
 bad_essential_argv:
 	kfree(wb);
 
@@ -1536,7 +1536,7 @@ static void writeboost_dtr(struct dm_target *ti)
 	free_cache(wb);
 
 	dm_put_device(ti, wb->cache_dev);
-	dm_put_device(ti, wb->origin_dev);
+	dm_put_device(ti, wb->backing_dev);
 
 	kfree(wb);
 
@@ -1592,10 +1592,10 @@ writeboost_iterate_devices(struct dm_target *ti,
 			   iterate_devices_callout_fn fn, void *data)
 {
 	struct wb_device *wb = ti->private;
-	struct dm_dev *orig = wb->origin_dev;
+	struct dm_dev *backing = wb->backing_dev;
 	sector_t start = 0;
-	sector_t len = dm_devsize(orig);
-	return fn(ti, orig, start, len, data);
+	sector_t len = dm_devsize(backing);
+	return fn(ti, backing, start, len, data);
 }
 
 static void
@@ -1661,7 +1661,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 	case STATUSTYPE_TABLE:
 		DMEMIT("%u", wb->type);
-		format_dev_t(buf, wb->origin_dev->bdev->bd_dev),
+		format_dev_t(buf, wb->backing_dev->bdev->bd_dev),
 		DMEMIT(" %s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev),
 		DMEMIT(" %s", buf);

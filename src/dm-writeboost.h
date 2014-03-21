@@ -262,7 +262,7 @@ struct wb_device {
 
 	struct dm_target *ti;
 
-	struct dm_dev *origin_dev; /* slow device (HDD) */
+	struct dm_dev *backing_dev; /* slow device (HDD) */
 	struct dm_dev *cache_dev; /* fast device (SSD) */
 
 

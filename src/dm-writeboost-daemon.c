@@ -179,7 +179,7 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 				.mem.ptr.vma = addr,
 			};
 			struct dm_io_region region_w = {
-				.bdev = wb->origin_dev->bdev,
+				.bdev = wb->backing_dev->bdev,
 				.sector = mb->sector,
 				.count = 1 << 3,
 			};
@@ -204,7 +204,7 @@ static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
 					.mem.ptr.vma = addr,
 				};
 				region_w = (struct dm_io_region) {
-					.bdev = wb->origin_dev->bdev,
+					.bdev = wb->backing_dev->bdev,
 					.sector = mb->sector + j,
 					.count = 1,
 				};
@@ -350,7 +350,7 @@ migrate_write:
 	 * so we consider all segments are persistent and write them back
 	 * persistently.
 	 */
-	IO(blkdev_issue_flush(wb->origin_dev->bdev, GFP_NOIO, NULL));
+	IO(blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL));
 }
 
 static u32 calc_nr_mig(struct wb_device *wb)
@@ -433,7 +433,7 @@ int modulator_proc(void *data)
 {
 	struct wb_device *wb = data;
 
-	struct hd_struct *hd = wb->origin_dev->bdev->bd_part;
+	struct hd_struct *hd = wb->backing_dev->bdev->bd_part;
 	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 

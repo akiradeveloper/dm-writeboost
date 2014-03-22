@@ -217,7 +217,14 @@ struct flush_job {
  *
  * plog_seg:
  * like cache_dev is split into segment_headers
- * plog_dev is split into plog_segs.
+ * plog_dev is split into plog_segs of the same size.
+ *
+ * example: a plog_dev is split into two plog_seg
+ *
+ * |<------------------------ plog_dev ------------------------>|
+ * |<-------- plog_seg ---------->|<-------- plog_seg --------->|
+ * |(meta, data), (meta, data), ..|...                          |
+ *  <-- plog -->
  */
 
 struct plog_meta_device {
@@ -249,14 +256,13 @@ enum WB_FLAG {
 };
 
 /*
- * the context of the cache driver.
+ * the context of the cache target instance.
  */
 struct wb_device {
 	/*
-	 * type
-	 * 0: only RAM buffers
-	 * 1: with persistent block device
-	 * 2: with persistent RAM device
+	 * 0: no persistent logging (plog) but only RAM buffers
+	 * 1: with plog (block device)
+	 * 2..: with plog (others) TODO
 	 */
 	int type;
 
@@ -343,7 +349,7 @@ struct wb_device {
 	/*
 	 * wait for a specified segment to be flushed
 	 * non-interruptible
-	 * c.f. wait_for_flushing()
+	 * cf. wait_for_flushing()
 	 */
 	wait_queue_head_t flush_wait_queue;
 
@@ -375,7 +381,7 @@ struct wb_device {
 	/*
 	 * wait for a specified segment to be migrated
 	 * non-interruptible
-	 * c.f. wait_for_migration()
+	 * cf. wait_for_migration()
 	 */
 	wait_queue_head_t migrate_wait_queue;
 

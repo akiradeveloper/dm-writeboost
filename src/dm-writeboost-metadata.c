@@ -190,17 +190,16 @@ static struct segment_header *segment_at(struct wb_device *wb, u32 k)
 
 /*
  * get the segment from the segment id.
- * the Index of the segment is calculated from the segment id.
+ * the index of the segment is calculated from the segment id.
  */
-struct segment_header *
-get_segment_header_by_id(struct wb_device *wb, u64 id)
+struct segment_header *get_segment_header_by_id(struct wb_device *wb, u64 id)
 {
 	return segment_at(wb, segment_id_to_idx(wb, id));
 }
 
 /*----------------------------------------------------------------*/
 
-static int __must_check init_segment_header_array(struct wb_device *wb)
+static int init_segment_header_array(struct wb_device *wb)
 {
 	u32 segment_idx;
 
@@ -246,7 +245,7 @@ struct ht_head {
 /*
  * initialize the hash table.
  */
-static int __must_check ht_empty_init(struct wb_device *wb)
+static int ht_empty_init(struct wb_device *wb)
 {
 	u32 idx;
 	size_t i, nr_heads;
@@ -381,11 +380,15 @@ bad_io:
 }
 
 /*
- * Check if the cache device is already formatted.
- * Returns 0 iff this routine runs without failure.
+ * check if the cache device is already formatted.
+ *
+ * @need_format (out): bad segment_size_order specified?
+ * @allow_format (out): is the superblock was zeroed by the user?
+ *
+ * returns 0 iff this routine runs without failure.
  */
-static int __must_check
-audit_cache_device(struct wb_device *wb, bool *need_format, bool *allow_format)
+static int audit_cache_device(struct wb_device *wb,
+			      bool *need_format, bool *allow_format)
 {
 	int r = 0;
 	struct superblock_header_device sup;
@@ -519,7 +522,7 @@ static int format_all_segment_headers(struct wb_device *wb)
 	context.err = 0;
 
 	/*
-	 * Submit all the writes asynchronously.
+	 * submit all the writes asynchronously.
 	 */
 	for (i = 0; i < nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
@@ -547,7 +550,7 @@ static int format_all_segment_headers(struct wb_device *wb)
 		return r;
 
 	/*
-	 * Wait for all the writes complete.
+	 * wait for all the writes complete.
 	 */
 	while (atomic64_read(&context.count))
 		schedule_timeout_interruptible(msecs_to_jiffies(100));
@@ -561,10 +564,10 @@ static int format_all_segment_headers(struct wb_device *wb)
 }
 
 /*
- * Format superblock header and
+ * format superblock header and
  * all the segment headers in a cache device
  */
-static int __must_check format_cache_device(struct wb_device *wb)
+static int format_cache_device(struct wb_device *wb)
 {
 	int r = 0;
 	struct dm_dev *dev = wb->cache_dev;
@@ -584,7 +587,8 @@ static int __must_check format_cache_device(struct wb_device *wb)
 }
 
 /*
- * Setup the core info relavant to the cache format or geometry.
+ * setup the core info relavant to the cache geometry.
+ * segment_size_order is the core factor in the cache geometry.
  */
 static void setup_geom_info(struct wb_device *wb)
 {
@@ -594,12 +598,14 @@ static void setup_geom_info(struct wb_device *wb)
 }
 
 /*
- * First check if the superblock and the passed arguments
+ * first check if the superblock and the passed arguments
  * are consistent and re-format the cache structure if they are not.
- * If you want to re-format the cache device you must zeroed out
+ * if you want to re-format the cache device you must zeroed out
  * the first one sector of the device.
  *
- * After this, the segment_size_order is fixed.
+ * after this, the segment_size_order is fixed.
+ *
+ * @formatted (out): was the cache device re-formatted?
  */
 static int might_format_cache_device(struct wb_device *wb, bool *formatted)
 {
@@ -622,12 +628,24 @@ static int might_format_cache_device(struct wb_device *wb, bool *formatted)
 				return r;
 			}
 		} else {
+			/*
+			 * if it is needed to re-format but not allowed
+			 * the user may input bad .ctr argument although
+			 * the cache device has data to recover.
+			 * to re-format the cache device user MUST
+			 * zero out the first 1 sector of the device
+			 * INTENTIONALLY.
+			 */
 			r = -EINVAL;
 			WBERR("cache device not allowed to format");
 			return r;
 		}
 	}
 
+	/*
+	 * segment_size_order is fixed and we can compute all the
+	 * geometry info that depends on the value.
+	 */
 	setup_geom_info(wb);
 
 	return r;
@@ -635,7 +653,7 @@ static int might_format_cache_device(struct wb_device *wb, bool *formatted)
 
 /*----------------------------------------------------------------*/
 
-static int __must_check init_rambuf_pool(struct wb_device *wb)
+static int init_rambuf_pool(struct wb_device *wb)
 {
 	size_t i;
 
@@ -1063,7 +1081,7 @@ static int flush_plogs(struct wb_device *wb)
 	wbdebug();
 
 	/*
-	 * If there is no valid plog on the plog device we quit.
+	 * if there is no valid plog on the plog device we quit.
 	 */
 	if (!next_id) {
 		r = 0;
@@ -1104,9 +1122,8 @@ bad:
 
 /*----------------------------------------------------------------*/
 
-static int __must_check
-read_superblock_record(struct superblock_record_device *record,
-		       struct wb_device *wb)
+static int read_superblock_record(struct superblock_record_device *record,
+				  struct wb_device *wb)
 {
 	int r = 0;
 	struct dm_io_request io_req;
@@ -1144,10 +1161,10 @@ bad_io:
 }
 
 /*
- * read whole segment on the cache device to a pre-allocated buffer.
+ * read out whole segment of @seg to a pre-allocated @buf
  */
-static int __must_check
-read_whole_segment(void *buf, struct wb_device *wb, struct segment_header *seg)
+static int read_whole_segment(void *buf, struct wb_device *wb,
+			      struct segment_header *seg)
 {
 	struct dm_io_request io_req = {
 		.client = wb_io_client,
@@ -1202,9 +1219,11 @@ void prepare_segment_header_device(void *rambuffer,
 
 /*----------------------------------------------------------------*/
 
-static void
-apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
-		       struct segment_header_device *src, u8 i)
+/*
+ * apply @i-th metablock in @src to @seg
+ */
+static void apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
+				   struct segment_header_device *src, u8 i)
 {
 	struct lookup_key key;
 	struct ht_head *head;
@@ -1215,9 +1234,9 @@ apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
 	mb->dirty_bits = mbdev->dirty_bits;
 
 	/*
-	 * A metablock is usually dirty but the exception is that
+	 * a metablock is usually dirty but the exception is that
 	 * the one inserted by force flush.
-	 * In that case, the first metablock in a segment is clean.
+	 * in that case, the first metablock in a segment is clean.
 	 */
 	if (!mb->dirty_bits)
 		return;
@@ -1238,12 +1257,11 @@ apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
 }
 
 /*
- * Read the on-disk metadata of the segment and
- * update the in-core cache metadata structure.
+ * read the on-disk metadata of the segment @src and
+ * update the in-core cache metadata structure of @seg
  */
-static void
-apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
-			    struct segment_header_device *src)
+static void apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
+					struct segment_header_device *src)
 {
 	u8 i;
 
@@ -1253,19 +1271,43 @@ apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
 		apply_metablock_device(wb, seg, src, i);
 }
 
+/*
+ * read out only segment header (4KB) of @seg to @buf
+ */
+static int read_segment_header(void *buf, struct wb_device *wb,
+			       struct segment_header *seg)
+{
+	struct dm_io_request io_req = {
+		.client = wb_io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf,
+	};
+	struct dm_io_region region = {
+		.bdev = wb->cache_dev->bdev,
+		.sector = seg->start_sector,
+		.count = 8,
+	};
+	return dm_safe_io(&io_req, 1, &region, NULL, false);
+}
+
+/*
+ * find the max id from all the segment headers
+ * @max_id (out): the max id found
+ */
 static int find_max_id(struct wb_device *wb, u64 *max_id)
 {
 	int r = 0;
 
-	void *rambuf = kmalloc(1 << (wb->segment_size_order + SECTOR_SHIFT),
-			       GFP_KERNEL);
+	void *rambuf = kmalloc(8 << SECTOR_SHIFT, GFP_KERNEL);
 	u32 k;
 
 	*max_id = 0;
 	for (k = 0; k < wb->nr_segments; k++) {
 		struct segment_header *seg = segment_at(wb, k);
 		struct segment_header_device *header;
-		r = read_whole_segment(rambuf, wb, seg);
+		r = read_segment_header(rambuf, wb, seg);
 		if (r) {
 			kfree(rambuf);
 			return r;
@@ -1279,6 +1321,18 @@ static int find_max_id(struct wb_device *wb, u64 *max_id)
 	return r;
 }
 
+/*
+ * traverse the log on the cache device and
+ * apply (recover the cache metadata)
+ * valid (checksum is correct) segments.
+ * a segment is valid means that the segment was "flushed"
+ * without failure. we need to ignore segments that weren't flushed
+ * in complete manner. those segments are dangerous to recover.
+ *
+ * @max_id (in/out)
+ *   - in : the max id found in find_max_id()
+ *   - out: the last id applied in this function
+ */
 static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 {
 	int r = 0;
@@ -1313,12 +1367,15 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		checksum2 = calc_checksum(rambuf, header->length);
 		wbdebug("id:%u, len:%u", header->id, header->length);
 		if (checksum1 != checksum2) {
-			WBWARN("checksum inconsistent id:%llu checksum: %u != %u",
+			WBWARN("checksum incorrect id:%llu checksum: %u != %u",
 			       (long long unsigned int) le64_to_cpu(header->id),
 			       checksum1, checksum2);
 			continue;
 		}
 
+		/*
+		 * this segment is correct and we apply
+		 */
 		apply_segment_header_device(wb, seg, header);
 		*max_id = le64_to_cpu(header->id);
 	}
@@ -1340,6 +1397,11 @@ static int infer_last_migrated_id(struct wb_device *wb)
 		atomic64_read(&wb->last_flushed_segment_id) > wb->nr_segments ?
 		atomic64_read(&wb->last_flushed_segment_id) - wb->nr_segments : 0);
 
+	/*
+	 * if last_migrated_id is recorded on the super block
+	 * we can eliminate unnecessary migration for the segments that
+	 * were migrated before.
+	 */
 	record_id = le64_to_cpu(record.last_migrated_segment_id);
 	if (record_id > atomic64_read(&wb->last_migrated_segment_id))
 		atomic64_set(&wb->last_migrated_segment_id, record_id);
@@ -1348,19 +1410,19 @@ static int infer_last_migrated_id(struct wb_device *wb)
 }
 
 /*
- * Replay all the log on the cache device to reconstruct
+ * replay all the log on the cache device to reconstruct
  * the in-memory metadata.
  *
- * Algorithm:
+ * algorithm:
  * 1. find the maxium id
  * 2. start from the right. iterate all the log.
- * 2. skip if id=0 or checkum invalid
+ * 2. skip if id=0 or checkum incorrect
  * 2. apply otherwise.
  *
- * This algorithm is robust for floppy SSD that may write
+ * this algorithm is robust for floppy SSD that may write
  * a segment partially or lose data on its buffer on power fault.
  *
- * Even if number of threads flush segments in parallel and
+ * even if number of threads flush segments in parallel and
  * some of them loses atomicity because of power fault
  * this robust algorithm works.
  */
@@ -1384,12 +1446,12 @@ static int replay_log_on_cache(struct wb_device *wb)
 
 	wbdebug("max_id:%u", max_id);
 	/*
-	 * Setup last_flushed_segment_id
+	 * setup last_flushed_segment_id
 	 */
 	atomic64_set(&wb->last_flushed_segment_id, max_id);
 
 	/*
-	 * Setup last_migrated_segment_id
+	 * setup last_migrated_segment_id
 	 */
 	infer_last_migrated_id(wb);
 
@@ -1397,7 +1459,7 @@ static int replay_log_on_cache(struct wb_device *wb)
 }
 
 /*
- * Acquire and initialize the first segment header for our caching.
+ * acquire and initialize the first segment header for our caching.
  */
 static void prepare_first_seg(struct wb_device *wb)
 {
@@ -1408,10 +1470,10 @@ static void prepare_first_seg(struct wb_device *wb)
 }
 
 /*
- * Recover all the cache state from the
+ * recover all the cache state from the
  * persistent devices (non-volatile RAM and SSD).
  */
-static int __must_check recover_cache(struct wb_device *wb)
+static int recover_cache(struct wb_device *wb)
 {
 	int r = 0;
 
@@ -1435,10 +1497,10 @@ static int __must_check recover_cache(struct wb_device *wb)
 /*----------------------------------------------------------------*/
 
 /*
- * Try to allocate new migration buffer by the nr_batch size.
- * On success, it frees the old buffer.
+ * try to allocate new migration buffer by the @nr_batch size.
+ * on success, it frees the old buffer.
  *
- * Bad User may set # of batches that can hardly allocate.
+ * bad User may set # of batches that can hardly allocate.
  * This function is robust in that case.
  */
 int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
@@ -1471,7 +1533,7 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 	}
 
 	/*
-	 * Free old buffers
+	 * free old buffers
 	 */
 	kfree(wb->emigrates); /* kfree(NULL) is safe */
 	if (wb->migrate_buffer)
@@ -1479,7 +1541,7 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 	kfree(wb->memorized_dirtiness);
 
 	/*
-	 * Swap by new values
+	 * swap by new values
 	 */
 	wb->emigrates = emigrates;
 	wb->migrate_buffer = buf;
@@ -1680,7 +1742,7 @@ bad_sync_daemon:
 	return r;
 }
 
-int __must_check resume_cache(struct wb_device *wb)
+int resume_cache(struct wb_device *wb)
 {
 	int r = 0;
 

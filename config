@@ -19,22 +19,22 @@ export WB_ROOT=`pwd`
 
 
 # backing device (backing_dev) - essential
-# BACKING=/dev/hvg2/back18g
-BACKING=/dev/mapper/pdc_fgaahfadb # server
+BACKING=/dev/hvg2/back18g # VM
+# BACKING=/dev/mapper/pdc_fgaahfadb # server
 # BACKING=/dev/vg2/back40g # benchmark
 export BACKING
 
 # cache device (cache_dev) - essential
-# CACHE=/dev/hvg1/cache2g
-# CACHE=/dev/hvg1/cache3m
-CACHE=/dev/sdb1 # server
+CACHE=/dev/hvg1/cache2g # VM
+# CACHE=/dev/hvg1/cache3m # VM
+# CACHE=/dev/sdb1 # server
 # CACHE=/dev/sdd2 # benchmark
 export CACHE
 
 # plog device (plog_dev_desc) - only if type > 0
-# PLOG=/dev/hvg1/cache3m
-# PLOG=/dev/hvg1/cache2g
-PLOG=/dev/sdb2 # server
+PLOG=/dev/hvg1/cache3m # VM
+# PLOG=/dev/hvg1/cache2g # VM
+# PLOG=/dev/sdb2 # server
 # PLOG=/dev/loop0 # benchmark
 # PLOG=/dev/sdd3 # benchmark
 export PLOG

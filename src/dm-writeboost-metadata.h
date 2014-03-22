@@ -44,7 +44,7 @@ int try_alloc_migration_buffer(struct wb_device *, size_t nr_batch);
 
 /*----------------------------------------------------------------*/
 
-int __must_check resume_cache(struct wb_device *);
+int resume_cache(struct wb_device *);
 void free_cache(struct wb_device *);
 
 /*----------------------------------------------------------------*/

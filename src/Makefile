@@ -1,5 +1,4 @@
-KERNEL_TREE := /lib/modules/$(shell uname -r)/build
-# KERNEL_TREE := $(HOME)/linux-$(KERN_VERSION)
+KERNEL_TREE := /lib/modules/$(shell uname -r)
 
 PWD := $(shell pwd)
 
@@ -14,7 +13,10 @@ dm-writeboost-objs := \
 	dm-writeboost-daemon.o
 
 all:
-	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) modules
+	$(MAKE) -C $(KERNEL_TREE)/build M=$(PWD) modules
 
 clean:
-	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) clean
+	$(MAKE) -C $(KERNEL_TREE)/build M=$(PWD) clean
+
+install:
+	cp dm-writeboost.ko $(KERNEL_TREE)/kernel/drivers/md

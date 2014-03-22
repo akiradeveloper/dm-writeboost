@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # usage:
-# #sh prepare.sh
+# #sh create.sh
 
 modprobe libcrc32c
 insmod src/dm-writeboost.ko

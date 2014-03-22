@@ -47,9 +47,9 @@ I provice you with nice scripts for quick starting.
 
 	$ sh build.sh
 
-(4) Run prepare script to make a device (su needed)
+(4) Run create script to make a device (su needed)
 
-	# sh prepare.sh
+	# sh create.sh
 
 now you got `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
 

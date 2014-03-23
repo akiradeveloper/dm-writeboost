@@ -13,9 +13,12 @@ load_kmods
 
 echo 7 > /proc/sys/kernel/printk
 
-# discard the whole cache device before formatting blkdiscard command is included in upstream util-linux.
-# but don't worry, without discarding, dm-writeboost works correctly.
-blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
+# discard the whole cache device before formatting blkdiscard command is include
+# in upstream util-linux. But don't worry, without discarding, dm-writeboost works
+# correctly.
+if which blkdiscard >/dev/null 2>&1 ; then
+    blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
+fi
 
 # zeroing the first sector in the cache device triggers formatting the cache device
 echo destroy ...

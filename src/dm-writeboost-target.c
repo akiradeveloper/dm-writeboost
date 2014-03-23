@@ -1661,10 +1661,12 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 	case STATUSTYPE_TABLE:
 		DMEMIT("%u", wb->type);
-		format_dev_t(buf, wb->backing_dev->bdev->bd_dev),
+		format_dev_t(buf, wb->backing_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
-		format_dev_t(buf, wb->cache_dev->bdev->bd_dev),
+		format_dev_t(buf, wb->cache_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
+		if (wb->type)
+			DMEMIT(" %s", wb->plog_dev_desc);
 		DMEMIT(" 4 segment_size_order %u nr_rambuf_pool %u",
 		       wb->segment_size_order,
 		       wb->nr_rambuf_pool);

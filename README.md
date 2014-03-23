@@ -65,14 +65,11 @@ $ sh build.sh
 ### (c) Setup init scripts (for admin)
 If you are an admin and wants to install writeboost
 easiest way is to install the init scripts.
-Run with the commands below and
-you will see /etc/init.d/writeboost and /etc/rc[0-6].d/S99writeboost
-are installed.
 
 ```
 $ sh build.sh
 $ vi writeboost
-# sh rc-installer.sh install
+# insserv -d writeboost
 ```
 
 ## Contributing to dm-writeboost

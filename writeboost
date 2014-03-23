@@ -1,7 +1,13 @@
 #!/bin/sh
 
-# desc:
-# this is sample rc script
+### BEGIN INIT INFO
+# Provides:          writeboost
+# Required-Start:    $local_fs
+# Required-Stop:     $local_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: create and remove a writeboost device
+### END INIT INFO
 
 VOLNAME=writeboost-vol
 

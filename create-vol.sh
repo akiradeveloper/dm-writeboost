@@ -14,7 +14,6 @@ echo 7 > /proc/sys/kernel/printk
 # but don't worry, without discarding, dm-writeboost works correctly.
 blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
 
-# zeroing the first sector in the cache device triggers formatting the cache device
 echo destroy ...
 dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
 

@@ -31,36 +31,48 @@ either block device or persistent RAM.
 ## Quick Start
 I provice you with nice scripts for quick starting.  
 
-(1) Build and install the Linux kernel
-
+### Before anything else, you need to build and install the Linux kernel
 * The kernel version must be >= 3.14
 * Configs required
   * (mandatory) CONFIG\_BLK\_DEV\_DM (device-mapper)
   * (mandatory) CONFIG\_LIBCRC32C (libcrc32c)
   * (optional)  CONFIG\_DM\_FLAKEY (dm-flakey). It's necessary if you run runtest.sh.
 
-(2) Configure the path for the devices
+### (a) Create your device to do some test I/O
+(1) Configure the path for the devices
 
 	$ vi config
 
-(3) Compile
+(2) Compile
 
 	$ sh build.sh
 
-(4) Run create script to make a device (su needed)
+(3) Run create script to make a device (su needed)
 
-	# sh create.sh
+	# sh create-vol.sh
 
 now you got `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
 
-## Running Test
+### (b) Run regression tests
 runtest.sh is provided to run tests. See the script
 
-Example:
+```
+$ vi config
+$ sh build.sh
+# sh runtest.sh 0 # run all tests for type=0
+```
+
+## (c) Setup init scripts (for admin)
+If you are an admin and wants to install writeboost
+easiest way is to install the init scripts.
+Run with the commands below and
+you will see /etc/init.d/writeboost and /etc/rc[0-6].d/S99writeboost
+are installed.
 
 ```
 $ sh build.sh
-# sh runtest.sh 0 # run all tests for type=0
+$ vi writeboost
+# sh rc-installer.sh install
 ```
 
 ## Contributing to dm-writeboost

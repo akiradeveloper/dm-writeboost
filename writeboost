@@ -1,0 +1,54 @@
+#!/bin/sh
+
+# desc:
+# this is sample rc script
+
+VOLNAME=writeboost-vol
+
+MODPATH=/lib/modules/`uname -r`/kernel/drivers/md
+
+BACKING=/dev/hvg2/back18g # VM
+# BACKING=/dev/mapper/pdc_fgaahfadb # server
+
+CACHE=/dev/hvg1/cache2g # VM
+# CACHE=/dev/sdb1 # server
+
+PLOG=/dev/hvg1/cache3m # VM
+# PLOG=/dev/sdb2 # server
+
+start_wb() {
+    # load the required modules
+    modprobe libcrc32c
+    insmod ${MODPATH}/dm-writeboost.ko
+
+    # create the device
+    dmsetup create ${VOLNAME} --table "0 `blockdev --getsize ${BACKING}` writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 nr_rambuf_pool 8 6 enable_migration_modulator 1 sync_interval 0 update_record_interval 0"
+}
+
+stop_wb() {
+    # better to record the last migrated id to shorten the reboot time
+    dmsetup message ${VOLNAME} 0 update_record_interval 1
+
+    # explicitly suspend/resume for stable shutdown
+    dmsetup suspend ${VOLNAME}
+    dmsetup resume ${VOLNAME}
+
+    dmsetup remove ${VOLNAME}
+}
+
+case "$1" in
+    start)
+        start_wb
+        ;;
+    stop)
+        stop_wb
+        ;;
+    status)
+        dmsetup status ${VOLNAME}
+        ;;
+    restart|reload|force-reload)
+        ;;
+    *)
+        echo start or stop or status
+        ;;
+esac

@@ -45,11 +45,11 @@ I provice you with nice scripts for quick starting.
 
 (2) Compile
 
-	$ sh build.sh
+	$ ./build.sh
 
 (3) Run create script to make a device (su needed)
 
-	# sh create-vol.sh
+	# ./create-vol.sh
 
 now you got `/dev/mapper/writeboost-vol` powered by dm-writeboost.  
 
@@ -58,8 +58,9 @@ runtest.sh is provided to run tests. See the script
 
 ```
 $ vi config
-$ sh build.sh
-# sh runtest.sh 0 # run all tests for type=0
+$ ./build.sh
+# ./runtest.sh 0 (run all tests for type 0)
+# ./runtest.sh 1 3 (run only test 3 for type 1)
 ```
 
 ### (c) Setup init scripts (for admin)
@@ -67,9 +68,9 @@ If you are an admin and wants to install writeboost
 easiest way is to install the init scripts.
 
 ```
-$ sh build.sh
+$ ./build.sh
 $ vi writeboost
-# insserv -d writeboost
+# ./wb-installer.sh install
 ```
 
 ## Contributing to dm-writeboost

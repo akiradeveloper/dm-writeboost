@@ -11,6 +11,19 @@ load_kmods
 
 . ./config
 
+if [ ! -b "$BACKING" ] ; then
+    echo "BACKING should be a block device." >&2
+    exit 1
+fi
+if [ ! -b "$CACHE" ] ; then
+    echo "BACKING should be a block device." >&2
+    exit 1
+fi
+if [ -n "$PLOG" -a ! -b "$PLOG" ] ; then
+    echo "PLOG should be a block device." >&2
+    exit 1
+fi    
+
 echo 7 > /proc/sys/kernel/printk
 
 # discard the whole cache device before formatting blkdiscard command is include

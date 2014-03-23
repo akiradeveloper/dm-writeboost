@@ -70,6 +70,8 @@ easiest way is to install the init scripts.
 ```
 $ ./build.sh
 $ vi writeboost
+# ./cleanup-cache.sh <cache_dev> (forget all the caches)
+# mkfs.xfs -f <backing_dev>
 # ./wb-installer.sh install
 ```
 

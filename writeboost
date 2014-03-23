@@ -41,6 +41,7 @@ do_start() {
     # create the device
     dmsetup create ${VOLNAME} --table "0 `blockdev --getsize ${BACKING}` writeboost 1 ${BACKING} ${CACHE} ${PLOG} 4 segment_size_order 10 nr_rambuf_pool 8 6 enable_migration_modulator 1 sync_interval 0 update_record_interval 0"
 
+    mkdir -p ${MNTDIR}
     mount /dev/mapper/${VOLNAME} ${MNTDIR}
 }
 

@@ -27,6 +27,7 @@ export BACKING
 # cache device (cache_dev) - essential
 CACHE=/dev/hvg1/cache2g # VM
 # CACHE=/dev/hvg1/cache3m # VM
+# CACHE=/dev/hvg2/cache1g # VM
 # CACHE=/dev/sdb1 # server
 # CACHE=/dev/sdd2 # benchmark
 export CACHE

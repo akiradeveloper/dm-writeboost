@@ -62,7 +62,7 @@ $ sh build.sh
 # sh runtest.sh 0 # run all tests for type=0
 ```
 
-## (c) Setup init scripts (for admin)
+### (c) Setup init scripts (for admin)
 If you are an admin and wants to install writeboost
 easiest way is to install the init scripts.
 Run with the commands below and

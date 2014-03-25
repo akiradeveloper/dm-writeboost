@@ -1,17 +1,21 @@
 dm-writeboost
 =============
-Writeboost target provides log-structured caching.
-It batches random writes into a big sequential write to a cache device.
+dm-writeboost target provides block-level log-structured caching.
+It batches accepeted random writes into a big sequential write journal to a cache device.
+It is like dm-cache as a cache target but the difference is that dm-writeboost focuses on writes.
 
-It is like dm-cache as a cache target but the difference is that Writeboost
-focuses on bursty writes and the lifetime of the SSD cache device.
+Mechanism
+=========
 
-More documents and tests are available in
-https://github.com/akiradeveloper/dm-writeboost
+Basic
+-----
 
-Design
-======
-There are 1 foreground and 6 background processes.
+Persistent Logging
+------------------
+
+Workers
+=======
+There are 1 foreground and 6 background workers.
 
 Foreground
 ----------
@@ -20,45 +24,42 @@ When the buffer is full, it creates a "flush job" and queues it.
 
 Background
 ----------
-* wbflusher (Writeboost flusher)
-Executes a flush job.
-wbflusher exploits workqueue mechanism and may run in parallel.
-It exhibits the sysfs (/sys/bus/workqueue/devices/wbflusher)
-to control the behavior.
+(1) Writeboost flusher (wbflusher)
+  It executes a flush job.
 
-* Barrier deadline worker
-Barrier flags such as REQ_FUA and REQ_FLUSH are acked lazily.
-Immediately handling these bios badly deteriorate the throughput.
-Bios with these flags are queued and forcefully processed at worst
-within `barrier_deadline_ms` period.
+(2) Migrate Daemon
+  It migrates, or writes back, cache data to backing store.
 
-* Migrate Daemon
-It migrates, or writes back, cache data to backing store.
+  If `allow_migrate` is true, it migrates without impending situation.
+  Being in impending situation is that there are no room in cache device
+  for writing more flush jobs.
 
-If `allow_migrate` is true, it migrates without impending situation.
-Being in impending situation is that there are no room in cache device
-for writing more flush jobs.
+  Migration is done batching `nr_max_batched_migration` segments at maximum
+  at a time. Thus, unlike existing I/O scheduler, two dirty writes close in
+  positional space but distant in time space can be merged. Writetboost is
+  also a extension of I/O scheduler.
 
-Migration is done batching `nr_max_batched_migration` segments at maximum
-at a time. Thus, unlike existing I/O scheduler, two dirty writes close in
-positional space but distant in time space can be merged. Writetboost is
-also a extension of I/O scheduler.
+(3) Migration Modulator
+  Migration while the backing store is heavily loaded grows the device queue
+  longer and affects the read from the backing store.
+  Migration modulator surveils the load of the backing store and turns on/off
+  the migration by switching `allow_migrate`.
 
-* Migration Modulator
-Migration while the backing store is heavily loaded grows the device queue
-longer and affects the read from the backing store.
-Migration modulator surveils the load of the backing store and turns on/off
-the migration by switching `allow_migrate`.
+(4) Superblock Recorder
+  Superblock is a last sector of first 1MB region in cache device containing
+  what id of the segment lastly migrated. This daemon periodically updates
+  the region every `update_record_interval` seconds.
 
-* Superblock Recorder
-Superblock is a last sector of first 1MB region in cache device containing
-what id of the segment lastly migrated. This daemon periodically updates
-the region every `update_record_interval` seconds.
+(5) Sync Daemon
+  This daemon forcefully writes out all the dirty data persistently every
+  `sync_interval` seconds. Some careful users want to make all the writes
+  persistent periodically.
 
-* Sync Daemon
-This daemon forcefully writes out all the dirty data persistently every
-`sync_interval` seconds. Some careful users want to make all the writes
-persistent periodically.
+(6) Barrier deadline worker (type 0 only)
+  If dm-writeboost works in type 0, without persistent logging,
+  barrier I/Os flagged with REQ_FUA or REQ_FLUSH can be acked lazily.
+  Immediately processing these bios in foreground makes the throught worse.
+  I/Os with these flags are queued and forcefully processed until `barrier_deadline_ms` passed.
 
 Target Interface
 ================
@@ -69,21 +70,16 @@ Constructor
 <type>
 <essential args>*
 <#optional args> <optional args>*
-<#tunable args> <tunable args>* (see 'Message')
+<#tunable args> <tunable args>* (see 'Messages')
 
-Optionals are tunables are unordered lists of Key-Value pairs.
-
-Essential args and optional args are different for different buffer type.
-
-<type> (The type of the RAM buffer)
+<type>
 0: volatile RAM buffer (DRAM)
-1: non-volatile buffer with a block I/F
-2: non-volatile buffer with PRAM I/F
+1: type 0 + plog (block device)
 
-Currently, only type 0 is supported.
+<esential args> are different for different writeboost type.
+<optional args> and <tunable args> are unordered lists of key-value pairs.
 
-Type 0
-------
+(type 0)
 <essential args>
 backing_dev        : Slow device holding original data blocks.
 cache_dev          : Fast device holding cached data and its metadata.
@@ -98,8 +94,74 @@ rambuf_pool_amount : The amount of the RAM buffer pool (kB).
 		     benefit the performance.
                      default 2048
 
-Note that cache device is re-formatted if the first sector of the cache
-device is zeroed out.
+Examples:
+dmsetup create writeboost-vol --table "0 $sz writeboost 0 $BACKING $CACHE"
+dmsetup create writeboost-vol --table "0 $sz writeboost 0 $BACKING $CACHE \
+                                       4 rambuf_pool_amount 8192 segment_size_order 8 \
+				       2 allow_migrate 1"
+dmsetup create writeboost-vol --table "0 $sz writeboost 0 $BACKING $CACHE \
+                                       0 \
+				       2 allow_migrate 1"
+
+(type 1)
+<essential args>
+backing_dev
+cache_dev
+plog_dev_desc      : Descriptor to identify the plog device
+                     (type 1: block device)
+
+Example:
+dmsetup create writeboost-vol --table "0 $sz 0 writeboost 1 $BACKING $CACHE $PLOG"
+
+Note that cache device (and plog device if available)
+will be re-formatted if the first sector of the cache device is zeroed out.
+
+Messages
+--------
+(1) Setting up tunables in k-v pair style
+You can tune up the behavior of writeboost via message interface.
+
+barrier_deadline_ms (ms)
+  Default: 3
+  All the bios with barrier flags like REQ_FUA or REQ_FLUSH
+  are guaranteed to be acked within this deadline.
+
+allow_migrate (bool)
+  default: 1
+  Set to 1 to start migration.
+
+enable_migration_modulator (bool) and migrate_threshold (%0
+  default: 1 and 70
+  Set to 1 to enable migration modulator. 
+  Migration modulator surveils the load of backing device and sets the
+  migration started if the load is lower than the `migrate_threshold`.
+
+nr_max_batched_migration
+  default: 2048 / (1 << segment_size_order)
+  Number of segments to migrate in a iteration.
+  This default value is set for a single hdd drive.
+  If your backing device is built with multiple drives and
+  thus can afford much IOPS try setting a higher value.
+
+update_record_interval
+  default: 60 (sec)
+  The superblock record is updated every update_record_interval seconds.
+
+sync_interval 
+  default: 60 (sec)
+  All the dirty writes are guaranteed to be persistent every this interval.
+
+Example:
+dmsetup message writeboost-vol 0 enable_migration_modulator 0
+
+(2) Misc
+clear_stat
+  Clear the statistics
+drop_caches
+  Wait for all the dirty caches are migrated (Interruptible)
+
+Example:
+dmsetup message writeboost-vol 0 drop_caches
 
 Status
 ------
@@ -113,49 +175,3 @@ Status
 <stat (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
 <#not full flushed>
 <#tunable args> [tunable args]
-
-Messages
---------
-You can tune up the behavior of writeboost via message interface.
-
-* barrier_deadline_ms (ms)
-Default: 3
-All the bios with barrier flags like REQ_FUA or REQ_FLUSH
-are guaranteed to be acked within this deadline.
-
-* allow_migrate (bool)
-Default: 1
-Set to 1 to start migration.
-
-* enable_migration_modulator (bool) and
-  migrate_threshold (%)
-Default: 1 and 70
-Set to 1 to run migration modulator.
-Migration modulator surveils the load of backing store and sets the
-migration started if the load is lower than the `migrate_threshold`.
-
-* nr_max_batched_migration (int)
-Default: 1MB / segment size
-Number of segments to migrate at a time.
-Set higher value to fully exploit the capacily of the backing store.
-Even a single HDD is capable of processing 1MB/sec random writes so
-the default value is set to 1MB / segment size. Set higher value if
-you use RAID-ed drive as the backing store.
-
-* update_record_interval (sec)
-Default: 60
-The superblock record is updated every update_record_interval seconds.
-
-* sync_interval (sec)
-Default: 60
-All the dirty writes are guaranteed to be persistent every this interval.
-
-Example
-=======
-dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE}"
-dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE} \
-                                       4 rambuf_pool_amount 8192 segment_size_order 8 \
-				       2 allow_migrate 1"
-dmsetup create writeboost-vol --table "0 ${sz} 0 writeboost ${BACKING} {CACHE} \
-                                       0 \
-				       2 allow_migrate 1"

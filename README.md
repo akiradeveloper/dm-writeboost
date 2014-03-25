@@ -12,17 +12,20 @@ DCD, originally implemented in Solaris, is an extra logical block layer that gat
 into a big sequential write which then performs high throughput and low latency.
 See also the DCD paper [1] and its recent application [2].
 
-Persistent Logging (plog) is implemented to mitigate the penalty in handling
-write barriers (REQ\_FUA or REQ\_FLUSH). The medium to write plog is
-either block device or persistent RAM.
-
 ## Features
 * Capable of performing 375kiops (1.5GB/sec) random writes with a fast enough cache.  
   Outperforms other cache drivers in write (bcache, dm-cache)
 * Maximizes the lifetime of SSD cache device by writing in log-structured manner.
 * Log-structured nature properly ensures perfect metadata durability in any failure
-  (except the case data is gone)
-* Applies persistent memory to process write barriers more efficiently. Futurework.
+  (except the case data is perfectly gone)
+* Additional logging mechanism called
+  Persistent Logging (plog) is to mitigate the penalty in handling
+  write barriers (REQ\_FUA or REQ\_FLUSH).
+  Using persistent logging and what device medium to choose for that is selectable
+  between types chosen by the type argument of the constructor.
+  For the clear definition of the parameters and tunables,
+  please read the doc/dm-writeboost.txt.
+* Applies persistent memory to process write barriers more efficiently. (Future work)
 
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
@@ -49,6 +52,7 @@ I provice you with nice scripts for quick starting.
 
 (3) Run create script to make a device (su needed)
 
+	$ vi create-vol.sh (optional. Edit to tune)
 	# ./create-vol.sh
 
 now you got `/dev/mapper/writeboost-vol` powered by dm-writeboost.  

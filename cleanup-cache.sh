@@ -3,9 +3,13 @@
 # usage:
 # ./cleanup-cache.sh <volname>
 
+. ./util.sh
+
+fail_if_not_root
+
 dev=$1
 
-# discard the whole cache device before formatting blkdiscard command is
+# Discard the whole cache device before formatting blkdiscard command is
 # included in upstream util-linux. But don't worry, without discarding,
 # dm-writeboost works correctly.
 if which blkdiscard >/dev/null 2>&1 ; then

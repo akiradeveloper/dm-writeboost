@@ -7,6 +7,16 @@
 
 fail_if_not_root
 
+usage() {
+    echo "usage: $PROGNAME <volname>" >&2
+    exit 1
+}
+
+PROGNAME=$0
+
+if [ $# -lt 1 ] ; then
+    usage
+fi
 dev=$1
 
 # Discard the whole cache device before formatting blkdiscard command is

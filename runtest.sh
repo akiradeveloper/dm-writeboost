@@ -10,8 +10,7 @@
 
 fail_if_not_root
 
-modprobe libcrc32c
-insmod src/dm-writeboost.ko
+load_kmods
 
 T=$1
 N=$2

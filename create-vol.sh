@@ -10,13 +10,6 @@ insmod src/dm-writeboost.ko
 
 echo 7 > /proc/sys/kernel/printk
 
-# discard the whole cache device before formatting blkdiscard command is included in upstream util-linux.
-# but don't worry, without discarding, dm-writeboost works correctly.
-blkdiscard --offset 0 --length `blockdev --getsize64 ${CACHE}` ${CACHE}
-
-echo destroy ...
-dd if=/dev/zero of=${CACHE} bs=512 count=1 oflag=direct
-
 echo create wb device
 sz=`blockdev --getsize ${BACKING}`
 # type = 0

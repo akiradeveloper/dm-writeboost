@@ -52,7 +52,8 @@ I provice you with nice scripts for quick starting.
 
 (3) Run create script to make a device (su needed)
 
-	$ vi create-vol.sh (optional. Edit to tune)
+	$ vi create-vol.sh (optional)
+	# ./cleanup-cache.sh <cache_dev> (optional)
 	# ./create-vol.sh
 
 now you got `/dev/mapper/writeboost-vol` powered by dm-writeboost.  

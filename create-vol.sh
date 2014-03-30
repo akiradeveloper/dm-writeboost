@@ -3,8 +3,11 @@
 # usage:
 # #sh create.sh
 
-modprobe libcrc32c
-insmod src/dm-writeboost.ko
+. ./util.sh
+
+fail_if_not_root
+
+load_kmods
 
 . ./config
 

@@ -6,8 +6,11 @@
 # if <test no> is not specified run all tests
 # (root is required. don't forget you are testing a kernel module)
 
-modprobe libcrc32c
-insmod src/dm-writeboost.ko
+. ./util.sh
+
+fail_if_not_root
+
+load_kmods
 
 T=$1
 N=$2

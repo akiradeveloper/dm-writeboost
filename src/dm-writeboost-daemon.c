@@ -199,24 +199,23 @@ static void submit_migrate_io(struct wb_device *wb, struct migrate_io *mio)
 static void submit_migrate_ios(struct wb_device *wb)
 {
 	struct blk_plug plug;
-
-	struct rb_root migrate_tree = wb->migrate_tree;
-	wb->migrate_tree = RB_ROOT;
-
+	struct rb_root mt = wb->migrate_tree;
 	blk_start_plug(&plug);
 	do {
-		struct migrate_io *mio = migrate_io_from_node(rb_first(&migrate_tree));
-		rb_erase(&mio->rb_node, &migrate_tree);
+		struct migrate_io *mio = migrate_io_from_node(rb_first(&mt));
+		rb_erase(&mio->rb_node, &mt);
 		submit_migrate_io(wb, mio);
-	} while (!RB_EMPTY_ROOT(&migrate_tree));
+	} while (!RB_EMPTY_ROOT(&mt));
 	blk_finish_plug(&plug);
 }
 
-bool compare_migrate_io(struct migrate_io *new, struct migrate_io *parent)
+bool compare_migrate_io(struct migrate_io *mio, struct migrate_io *pmio)
 {
-	if (new->sector < parent->sector)
+	BUG_ON(!mio);
+	BUG_ON(!pmio);
+	if (mio->sector < pmio->sector)
 		return true;
-	if (new->id < parent->id)
+	if (mio->id < pmio->id)
 		return true;
 	return false;
 }
@@ -243,8 +242,9 @@ static void add_migrate_io(struct wb_device *wb, struct migrate_io *mio)
 	rbp = &wb->migrate_tree.rb_node;
 	parent = NULL;
 	while (*rbp) {
-		struct migrate_io *pmio = migrate_io_from_node(parent);
+		struct migrate_io *pmio;
 		parent = *rbp;
+		pmio = migrate_io_from_node(parent);
 
 		if (compare_migrate_io(mio, pmio))
 			rbp = &(*rbp)->rb_left;

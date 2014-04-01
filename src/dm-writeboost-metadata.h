@@ -40,7 +40,7 @@ u32 calc_checksum(void *rambuffer, u8 length);
 
 /*----------------------------------------------------------------*/
 
-int try_alloc_migration_buffer(struct wb_device *, size_t nr_batch);
+int try_alloc_migrate_ios(struct wb_device *, size_t nr_batch);
 
 /*----------------------------------------------------------------*/
 

@@ -48,8 +48,7 @@ void flush_barrier_ios(struct work_struct *work)
 
 /*----------------------------------------------------------------*/
 
-static void
-process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
+static void process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 {
 	int r = 0;
 	bool has_barrier = !bio_list_empty(&job->barrier_ios);
@@ -137,16 +136,6 @@ void wait_for_flushing(struct wb_device *wb, u64 id)
 
 /*----------------------------------------------------------------*/
 
-struct migrate_io {
-	struct rb_root rb_node;
-
-	sector_t sector; /* key */
-	u64 id; /* key */
-
-	void *buf;
-	u8 memorized_dirtiness;
-};
-
 static void migrate_endio(unsigned long error, void *context)
 {
 	struct wb_device *wb = context;
@@ -158,78 +147,120 @@ static void migrate_endio(unsigned long error, void *context)
 		wake_up(&wb->migrate_io_wait_queue);
 }
 
-/*
- * asynchronously submit the segment data at position k in the migrate buffer.
- * batched migration first collects all the segments to migrate into a migrate buffer.
- * so, there are a number of segment data in the migrate buffer.
- * this function submits the one in position k.
- */
-static void submit_migrate_io(struct wb_device *wb, struct segment_header *seg,
-			      size_t k)
+static void submit_migrate_io(struct wb_device *wb, struct migrate_io *mio)
 {
-	size_t a = wb->nr_caches_inseg * k;
-	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
+	if (!mio->memorized_dirtiness)
+		return;
 
-	u8 i;
-	for (i = 0; i < seg->length; i++) {
-		unsigned long offset = i << 12;
-		void *base = p + offset;
+	if (mio->memorized_dirtiness == 255) {
+		struct dm_io_request io_req_w = {
+			.client = wb_io_client,
+			.bi_rw = WRITE,
+			.notify.fn = migrate_endio,
+			.notify.context = wb,
+			.mem.type = DM_IO_VMA,
+			.mem.ptr.vma = mio->data,
+		};
+		struct dm_io_region region_w = {
+			.bdev = wb->backing_dev->bdev,
+			.sector = mio->sector,
+			.count = 1 << 3,
+		};
+		dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
+	} else {
+		u8 i;
+		for (i = 0; i < 8; i++) {
+			struct dm_io_request io_req_w;
+			struct dm_io_region region_w;
 
-		struct metablock *mb = seg->mb_array + i;
-		u8 dirty_bits = *(wb->memorized_dirtiness + (a + i));
-		if (!dirty_bits)
-			continue;
+			bool bit_on = mio->memorized_dirtiness & (1 << i);
+			if (!bit_on)
+				continue;
 
-		if (dirty_bits == 255) {
-			void *addr = base;
-			struct dm_io_request io_req_w = {
+			io_req_w = (struct dm_io_request) {
 				.client = wb_io_client,
 				.bi_rw = WRITE,
 				.notify.fn = migrate_endio,
 				.notify.context = wb,
 				.mem.type = DM_IO_VMA,
-				.mem.ptr.vma = addr,
+				.mem.ptr.vma = mio->data + (i << SECTOR_SHIFT),
 			};
-			struct dm_io_region region_w = {
+			region_w = (struct dm_io_region) {
 				.bdev = wb->backing_dev->bdev,
-				.sector = mb->sector,
-				.count = 1 << 3,
+				.sector = mio->sector + i,
+				.count = 1,
 			};
 			dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
-		} else {
-			u8 j;
-			for (j = 0; j < 8; j++) {
-				struct dm_io_request io_req_w;
-				struct dm_io_region region_w;
+		}
+	}
 
-				void *addr = base + (j << SECTOR_SHIFT);
-				bool bit_on = dirty_bits & (1 << j);
-				if (!bit_on)
-					continue;
+}
 
-				io_req_w = (struct dm_io_request) {
-					.client = wb_io_client,
-					.bi_rw = WRITE,
-					.notify.fn = migrate_endio,
-					.notify.context = wb,
-					.mem.type = DM_IO_VMA,
-					.mem.ptr.vma = addr,
-				};
-				region_w = (struct dm_io_region) {
-					.bdev = wb->backing_dev->bdev,
-					.sector = mb->sector + j,
-					.count = 1,
-				};
-				dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
-			}
+static void submit_migrate_ios(struct wb_device *wb)
+{
+	struct blk_plug plug;
+
+	struct rb_root migrate_tree = wb->migrate_tree;
+	wb->migrate_tree = RB_ROOT;
+
+	blk_start_plug(&plug);
+	do {
+		struct migrate_io *mio = migrate_io_from_node(rb_first(&migrate_tree));
+		rb_erase(&mio->rb_node, &migrate_tree);
+		submit_migrate_io(wb, mio);
+	} while (!RB_EMPTY_ROOT(&migrate_tree));
+	blk_finish_plug(&plug);
+}
+
+bool compare_migrate_io(struct migrate_io *new, struct migrate_io *parent)
+{
+	if (new->sector < parent->sector)
+		return true;
+	if (new->id < parent->id)
+		return true;
+	return false;
+}
+
+static void inc_migrate_io_count(u8 dirty_bits, size_t *migrate_io_count)
+{
+	u8 i;
+	if (!dirty_bits)
+		return;
+
+	if (dirty_bits == 255) {
+		(*migrate_io_count)++;
+	} else {
+		for (i = 0; i < 8; i++) {
+			if (dirty_bits & (1 << i))
+				(*migrate_io_count)++;
 		}
 	}
 }
 
-static void memorize_data_to_migrate(struct wb_device *wb,
-				     struct segment_header *seg, size_t k)
+static void add_migrate_io(struct wb_device *wb, struct migrate_io *mio)
+{
+	struct rb_node **rbp, *parent;
+	rbp = &wb->migrate_tree.rb_node;
+	parent = NULL;
+	while (*rbp) {
+		struct migrate_io *pmio = migrate_io_from_node(parent);
+		parent = *rbp;
+
+		if (compare_migrate_io(mio, pmio))
+			rbp = &(*rbp)->rb_left;
+		else
+			rbp = &(*rbp)->rb_right;
+	}
+	rb_link_node(&mio->rb_node, parent, rbp);
+	rb_insert_color(&mio->rb_node, &wb->migrate_tree);
+}
+
+static void prepare_migrate_ios(struct wb_device *wb, struct segment_header *seg,
+				size_t k, size_t *migrate_io_count)
 {
 	int r = 0;
+
+	u8 i;
 
 	void *p = wb->migrate_buffer + (wb->nr_caches_inseg << 12) * k;
 	struct dm_io_request io_req_r = {
@@ -245,93 +276,19 @@ static void memorize_data_to_migrate(struct wb_device *wb,
 		.count = seg->length << 3,
 	};
 	IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
-}
 
-#define migrate_io_from_node(node) rb_entry((node), struct migrate_io, rb_node)
-
-bool compare_migrate_io(struct migrate_io *new, struct migrate_io *parent)
-{
-	if (new->sector < parent->sector)
-		return true;
-	if (new->id < parent->id)
-		return true;
-	return false;
-}
-
-/*
- * we first memorize the dirtiness in the segments.
- * the memorized dirtiness is dirtier than that of any future moment
- * because it is only monotonously decreasing after flushed.
- * therefore, we will migrate the possible dirtiest state of the
- * segments which won't lose any dirty data.
- */
-static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_header *seg,
-					 size_t k, size_t *migrate_io_count)
-{
-	u8 i, j;
-
-	struct metablock *mb;
-	size_t a = wb->nr_caches_inseg * k;
-
-	/*
-	 * we first memorize the dirtiness of the metablocks.
-	 * dirtiness may decrease while we run through the migration code
-	 * and it may cause corruption.
-	 */
 	for (i = 0; i < seg->length; i++) {
-		struct migrate_io *mio = wb->migrate_ios + (a + i);
-		mb = seg->mb_array + i;
+		struct metablock *mb = seg->mb_array + i;
 
-		*(wb->memorized_dirtiness + (a + i)) = read_mb_dirtiness(wb, seg, mb);
-
-		/*
-		 * new code (sorted migration)
-		 */
+		struct migrate_io *mio = wb->migrate_ios + (wb->nr_caches_inseg * k + i);
 		mio->memorized_dirtiness = read_mb_dirtiness(wb, seg, mb);
+		inc_migrate_io_count(mio->memorized_dirtiness, migrate_io_count);
 		mio->sector = mb->sector;
-		mio->buf; /* TODO */
+		mio->data = p + (i << 12);
 		mio->id = seg->id;
 
-		struct rb_node **rbp, *parent;
-		rbp = &wb->migrate_tree.rb_node;
-		while (*rbp) {
-			struct migrate_io *io = migrate_io_from_node(parent);
-			parent = *rbp;
-
-			if (compare_migrate_io(mio, io))
-				rbp = &(*rbp)->rb_left;
-			else
-				rbp = &(*rbp)->rb_right;
-		}
-		rb_link_node(&mio->rb_node, parent, rbp);
-		rb_insert_color(&mio->rb_node, &wb->migrate_tree);
+		add_migrate_io(wb, mio);
 	}
-
-	for (i = 0; i < seg->length; i++) {
-		u8 dirty_bits = *(wb->memorized_dirtiness + (a + i));
-
-		if (!dirty_bits)
-			continue;
-
-		if (dirty_bits == 255) {
-			(*migrate_io_count)++;
-		} else {
-			for (j = 0; j < 8; j++) {
-				if (dirty_bits & (1 << j))
-					(*migrate_io_count)++;
-			}
-		}
-	}
-}
-
-/*
- * memorize the dirtiness and count up the number of io to migrate.
- */
-static void memorize_dirty_state(struct wb_device *wb, struct segment_header *seg,
-				 size_t k, size_t *migrate_io_count)
-{
-	memorize_data_to_migrate(wb, seg, k);
-	memorize_metadata_to_migrate(wb, seg, k, migrate_io_count);
 }
 
 static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
@@ -346,48 +303,28 @@ static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
 static void transport_emigrates(struct wb_device *wb)
 {
 	int r;
-	struct segment_header *seg;
 	size_t k, migrate_io_count = 0;
 
-	for (k = 0; k < wb->num_emigrates; k++) {
-		seg = *(wb->emigrates + k);
-		memorize_dirty_state(wb, seg, k, &migrate_io_count);
-	}
+	wb->migrate_tree = RB_ROOT;
 
-migrate_write:
+	for (k = 0; k < wb->num_emigrates; k++)
+		prepare_migrate_ios(wb, *(wb->emigrates + k), k, &migrate_io_count);
+
 	atomic_set(&wb->migrate_io_count, migrate_io_count);
 	atomic_set(&wb->migrate_fail_count, 0);
 
-	for (k = 0; k < wb->num_emigrates; k++) {
-		seg = *(wb->emigrates + k);
-		submit_migrate_io(wb, seg, k);
-	}
+	submit_migrate_ios(wb);
 
-	LIVE_DEAD(
-		wait_event(wb->migrate_io_wait_queue,
-			!atomic_read(&wb->migrate_io_count))
-		,
-		atomic_set(&wb->migrate_io_count, 0)
-	);
-
-	/*
-	 * if one or more migrates are failed, retry
-	 */
-	if (atomic_read(&wb->migrate_fail_count)) {
-		WBWARN("%u writebacks failed. retry",
-		       atomic_read(&wb->migrate_fail_count));
-		goto migrate_write;
-	}
-	BUG_ON(atomic_read(&wb->migrate_io_count));
+	wait_event(wb->migrate_io_wait_queue, !atomic_read(&wb->migrate_io_count));
+	if (atomic_read(&wb->migrate_fail_count))
+		set_bit(WB_DEAD, &wb->flags);
 
 	/*
 	 * we clean up the metablocks because there is no reason
 	 * to leave the them dirty.
 	 */
-	for (k = 0; k < wb->num_emigrates; k++) {
-		seg = *(wb->emigrates + k);
-		cleanup_segment(wb, seg);
-	}
+	for (k = 0; k < wb->num_emigrates; k++)
+		cleanup_segment(wb, *(wb->emigrates + k));
 
 	/*
 	 * we must write back a segments if it was written persistently.
@@ -411,7 +348,7 @@ static u32 calc_nr_mig(struct wb_device *wb)
 
 	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
 	if (wb->nr_cur_batched_migration != nr_max_batch)
-		try_alloc_migration_buffer(wb, nr_max_batch);
+		try_alloc_migrate_ios(wb, nr_max_batch);
 	return min(nr_mig_candidates, wb->nr_cur_batched_migration);
 }
 

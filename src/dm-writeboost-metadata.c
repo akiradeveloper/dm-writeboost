@@ -1503,13 +1503,13 @@ static int recover_cache(struct wb_device *wb)
  * bad User may set # of batches that can hardly allocate.
  * This function is robust in that case.
  */
-int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
+int try_alloc_migrate_ios(struct wb_device *wb, size_t nr_batch)
 {
 	int r = 0;
 
 	struct segment_header **emigrates;
 	void *buf;
-	void *memorized_dirtiness;
+	struct migrate_io *migrate_ios;
 
 	emigrates = kmalloc(nr_batch * sizeof(struct segment_header *), GFP_KERNEL);
 	if (!emigrates) {
@@ -1525,11 +1525,11 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 		goto bad_alloc_buffer;
 	}
 
-	memorized_dirtiness = kmalloc(nr_batch * wb->nr_caches_inseg, GFP_KERNEL);
-	if (!memorized_dirtiness) {
+	migrate_ios = kmalloc(nr_batch * wb->nr_caches_inseg * sizeof(struct migrate_io), GFP_KERNEL);
+	if (!migrate_ios) {
 		WBERR("failed to allocate memorized dirtiness");
 		r = -ENOMEM;
-		goto bad_alloc_memorized_dirtiness;
+		goto bad_alloc_migrate_ios;
 	}
 
 	/*
@@ -1538,21 +1538,21 @@ int try_alloc_migration_buffer(struct wb_device *wb, size_t nr_batch)
 	kfree(wb->emigrates); /* kfree(NULL) is safe */
 	if (wb->migrate_buffer)
 		vfree(wb->migrate_buffer);
-	kfree(wb->memorized_dirtiness);
+	kfree(wb->migrate_ios);
 
 	/*
 	 * swap by new values
 	 */
 	wb->emigrates = emigrates;
 	wb->migrate_buffer = buf;
-	wb->memorized_dirtiness = memorized_dirtiness;
+	wb->migrate_ios = migrate_ios;
 	wb->nr_cur_batched_migration = nr_batch;
 
 	return r;
 
 bad_alloc_buffer:
 	kfree(wb->emigrates);
-bad_alloc_memorized_dirtiness:
+bad_alloc_migrate_ios:
 	vfree(wb->migrate_buffer);
 
 	return r;
@@ -1562,7 +1562,7 @@ static void free_migration_buffer(struct wb_device *wb)
 {
 	kfree(wb->emigrates);
 	vfree(wb->migrate_buffer);
-	kfree(wb->memorized_dirtiness);
+	kfree(wb->migrate_ios);
 }
 
 /*----------------------------------------------------------------*/
@@ -1632,7 +1632,7 @@ static int init_migrate_daemon(struct wb_device *wb)
 	 */
 	nr_batch = 1 << (11 - wb->segment_size_order);
 	wb->nr_max_batched_migration = nr_batch;
-	if (try_alloc_migration_buffer(wb, nr_batch))
+	if (try_alloc_migrate_ios(wb, nr_batch))
 		return -ENOMEM;
 
 	init_waitqueue_head(&wb->migrate_wait_queue);

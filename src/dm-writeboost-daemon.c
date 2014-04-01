@@ -209,7 +209,7 @@ static void submit_migrate_ios(struct wb_device *wb)
 	blk_finish_plug(&plug);
 }
 
-bool compare_migrate_io(struct migrate_io *mio, struct migrate_io *pmio)
+static bool compare_migrate_io(struct migrate_io *mio, struct migrate_io *pmio)
 {
 	BUG_ON(!mio);
 	BUG_ON(!pmio);

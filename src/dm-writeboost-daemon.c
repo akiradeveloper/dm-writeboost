@@ -8,6 +8,8 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+#include <linux/rbtree.h>
+
 /*----------------------------------------------------------------*/
 
 static void update_barrier_deadline(struct wb_device *wb)
@@ -135,6 +137,16 @@ void wait_for_flushing(struct wb_device *wb, u64 id)
 
 /*----------------------------------------------------------------*/
 
+struct migrate_io {
+	struct rb_root rb_node;
+
+	sector_t sector; /* key */
+	u64 id; /* key */
+
+	void *buf;
+	u8 memorized_dirtiness;
+};
+
 static void migrate_endio(unsigned long error, void *context)
 {
 	struct wb_device *wb = context;
@@ -235,6 +247,17 @@ static void memorize_data_to_migrate(struct wb_device *wb,
 	IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
 }
 
+#define migrate_io_from_node(node) rb_entry((node), struct migrate_io, rb_node)
+
+bool compare_migrate_io(struct migrate_io *new, struct migrate_io *parent)
+{
+	if (new->sector < parent->sector)
+		return true;
+	if (new->id < parent->id)
+		return true;
+	return false;
+}
+
 /*
  * we first memorize the dirtiness in the segments.
  * the memorized dirtiness is dirtier than that of any future moment
@@ -256,8 +279,32 @@ static void memorize_metadata_to_migrate(struct wb_device *wb, struct segment_he
 	 * and it may cause corruption.
 	 */
 	for (i = 0; i < seg->length; i++) {
+		struct migrate_io *mio = wb->migrate_ios + (a + i);
 		mb = seg->mb_array + i;
+
 		*(wb->memorized_dirtiness + (a + i)) = read_mb_dirtiness(wb, seg, mb);
+
+		/*
+		 * new code (sorted migration)
+		 */
+		mio->memorized_dirtiness = read_mb_dirtiness(wb, seg, mb);
+		mio->sector = mb->sector;
+		mio->buf; /* TODO */
+		mio->id = seg->id;
+
+		struct rb_node **rbp, *parent;
+		rbp = &wb->migrate_tree.rb_node;
+		while (*rbp) {
+			struct migrate_io *io = migrate_io_from_node(parent);
+			parent = *rbp;
+
+			if (compare_migrate_io(mio, io))
+				rbp = &(*rbp)->rb_left;
+			else
+				rbp = &(*rbp)->rb_right;
+		}
+		rb_link_node(&mio->rb_node, parent, rbp);
+		rb_insert_color(&mio->rb_node, &wb->migrate_tree);
 	}
 
 	for (i = 0; i < seg->length; i++) {

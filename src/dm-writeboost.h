@@ -255,6 +255,8 @@ enum WB_FLAG {
 	WB_DEAD = 0,
 };
 
+struct migrate_io;
+
 /*
  * the context of the cache target instance.
  */
@@ -402,8 +404,10 @@ struct wb_device {
 	u32 nr_max_batched_migration; /* tunable */
 
 	u32 num_emigrates; /* number of emigrates */
+	struct rb_root migrate_tree;
 	struct segment_header **emigrates; /* Segments to be migrated */
 	void *migrate_buffer; /* memorizes the data blocks of the emigrates */
+	struct migrate_io *migrate_ios;
 	u8 *memorized_dirtiness; /* memorize the dirtiness of the metablocks to be migrated */
 
 	/*---------------------------------------------*/

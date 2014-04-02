@@ -24,7 +24,7 @@ mkfs.ext4 -q /dev/mapper/writeboost-vol
 echo mounting ...
 mount /dev/mapper/writeboost-vol /mnt/writeboost-vol
 rm -rf /mnt/writeboost-vol/*
-RUBY=ruby-1.9.3-p362
+RUBY=ruby-2.1.1
 cp ../${RUBY}.tar.gz /mnt/writeboost-vol
 cd /mnt/writeboost-vol
 

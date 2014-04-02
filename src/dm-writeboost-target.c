@@ -149,8 +149,6 @@ static void plog_write_endio(unsigned long error, void *context)
 static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
 			      struct write_job *job)
 {
-	int r = 0;
-
 	struct dm_io_request io_req = {
 		.client = wb_io_client,
 		.bi_rw = WRITE,
@@ -230,8 +228,6 @@ static void wait_plog_writes_complete(struct wb_device *wb)
  */
 static void barrier_plog_writes(struct wb_device *wb)
 {
-	int r = 0;
-
 	wait_plog_writes_complete(wb);
 
 	/*

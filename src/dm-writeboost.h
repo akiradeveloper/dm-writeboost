@@ -238,6 +238,19 @@ struct plog_meta_device {
 
 /*----------------------------------------------------------------*/
 
+struct migrate_io {
+	struct rb_node rb_node;
+
+	sector_t sector; /* key */
+	u64 id; /* key */
+
+	void *data;
+	u8 memorized_dirtiness;
+};
+#define migrate_io_from_node(node) rb_entry((node), struct migrate_io, rb_node)
+
+/*----------------------------------------------------------------*/
+
 enum STATFLAG {
 	STAT_WRITE = 0, /* write or read */
 	STAT_HIT, /* hit or miss */
@@ -401,10 +414,12 @@ struct wb_device {
 	u32 nr_cur_batched_migration;
 	u32 nr_max_batched_migration; /* tunable */
 
+	struct rb_root migrate_tree;
+
 	u32 num_emigrates; /* number of emigrates */
-	struct segment_header **emigrates; /* Segments to be migrated */
-	void *migrate_buffer; /* memorizes the data blocks of the emigrates */
-	u8 *memorized_dirtiness; /* memorize the dirtiness of the metablocks to be migrated */
+	struct segment_header **emigrates; /* segments to be migrated */
+	void *migrate_buffer; /* the data blocks of the emigrates */
+	struct migrate_io *migrate_ios;
 
 	/*---------------------------------------------*/
 

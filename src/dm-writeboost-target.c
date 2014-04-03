@@ -1485,10 +1485,10 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	/*
 	 * default values
 	 */
-	wb->segment_size_order = 7;
-	wb->nr_rambuf_pool = 1;
+	wb->segment_size_order = 10;
+	wb->nr_rambuf_pool = 8;
 	if (wb->type)
-		wb->nr_plog_segs = 1;
+		wb->nr_plog_segs = 8;
 
 	r = consume_optional_argv(wb, &as);
 	if (r) {

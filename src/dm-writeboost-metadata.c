@@ -1626,11 +1626,7 @@ static int init_migrate_daemon(struct wb_device *wb)
 	atomic_set(&wb->migrate_fail_count, 0);
 	atomic_set(&wb->migrate_io_count, 0);
 
-	/*
-	 * default number of batched migration is 1MB / segment size.
-	 * an ordinary HDD can afford at least 1MB/sec.
-	 */
-	nr_batch = 1 << (11 - wb->segment_size_order);
+	nr_batch = 1 << (15 - wb->segment_size_order); /* 16MB */
 	wb->nr_max_batched_migration = nr_batch;
 	if (try_alloc_migrate_ios(wb, nr_batch))
 		return -ENOMEM;
@@ -1697,7 +1693,7 @@ bad_flush_job_pool:
 
 static void init_barrier_deadline_work(struct wb_device *wb)
 {
-	wb->barrier_deadline_ms = 3;
+	wb->barrier_deadline_ms = 10;
 	setup_timer(&wb->barrier_deadline_timer,
 		    barrier_deadline_proc, (unsigned long) wb);
 	bio_list_init(&wb->barrier_ios);
@@ -1712,7 +1708,7 @@ static int init_migrate_modulator(struct wb_device *wb)
 	 * storage should keep its load no more than 70%.
 	 */
 	wb->migrate_threshold = 70;
-	wb->enable_migration_modulator = true;
+	wb->enable_migration_modulator = false;
 	CREATE_DAEMON(modulator);
 	return r;
 
@@ -1723,7 +1719,7 @@ bad_modulator_daemon:
 static int init_recorder_daemon(struct wb_device *wb)
 {
 	int r = 0;
-	wb->update_record_interval = 60;
+	wb->update_record_interval = 0;
 	CREATE_DAEMON(recorder);
 	return r;
 
@@ -1734,7 +1730,7 @@ bad_recorder_daemon:
 static int init_sync_daemon(struct wb_device *wb)
 {
 	int r = 0;
-	wb->sync_interval = 60;
+	wb->sync_interval = 0;
 	CREATE_DAEMON(sync);
 	return r;
 

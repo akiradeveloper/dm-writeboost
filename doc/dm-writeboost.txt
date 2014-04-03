@@ -87,12 +87,11 @@ cache_dev          : Fast device holding cached data and its metadata.
 <optional args>
 segment_size_order : The size of RAM buffer
                      1 << n (sectors), 4 <= n <= 10
-                     default 7
-rambuf_pool_amount : The amount of the RAM buffer pool (kB).
-                     Too fewer amount may cause waiting for new buffer
-                     to become available again. But too much doesn't
-		     benefit the performance.
-                     default 2048
+                     default 10
+nr_rambuf_pool     : The number of RAM buffer in the rambuf_pool
+                     Too fewer may deteriorate the performance.
+                     But too much doesn't benefit.
+                     default 8
 
 Examples:
 dmsetup create writeboost-vol --table "0 $sz writeboost 0 $BACKING $CACHE"
@@ -122,33 +121,32 @@ Messages
 You can tune up the behavior of writeboost via message interface.
 
 barrier_deadline_ms (ms)
-  Default: 3
+  Default: 10
   All the bios with barrier flags like REQ_FUA or REQ_FLUSH
   are guaranteed to be acked within this deadline.
 
 allow_migrate (bool)
-  default: 1
+  default: 0
   Set to 1 to start migration.
 
-enable_migration_modulator (bool) and migrate_threshold (%0
-  default: 1 and 70
+enable_migration_modulator (bool) and migrate_threshold (%)
+  default: 0 and 70
   Set to 1 to enable migration modulator. 
   Migration modulator surveils the load of backing device and sets the
   migration started if the load is lower than the `migrate_threshold`.
 
 nr_max_batched_migration
-  default: 2048 / (1 << segment_size_order)
+  default: 1 << (15 - segment_size_order)
   Number of segments to migrate in a iteration.
-  This default value is set for a single hdd drive.
   If your backing device is built with multiple drives and
   thus can afford much IOPS try setting a higher value.
 
 update_record_interval
-  default: 60 (sec)
+  default: 0 (sec)
   The superblock record is updated every update_record_interval seconds.
 
 sync_interval 
-  default: 60 (sec)
+  default: 0 (sec)
   All the dirty writes are guaranteed to be persistent every this interval.
 
 Example:

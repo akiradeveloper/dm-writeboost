@@ -315,7 +315,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 
 		/* metadata */
 		mb = seg->mbarr + meta.idx;
-		mb->sector = calc_cache_alignment((u64)sector_cpu);
+		mb->sector = cpu_to_le64((u64)calc_cache_alignment(sector_cpu));
 		for (i = 0; i < meta.len; i++)
 			mb->dirty_bits |= (1 << (do_io_offset(sector_cpu) + i));
 

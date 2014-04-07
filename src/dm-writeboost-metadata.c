@@ -1345,7 +1345,7 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 	u32 i, start_idx = segment_id_to_idx(wb, *max_id + 1);
 	*max_id = 0;
 	for (i = start_idx; i < (start_idx + wb->nr_segments); i++) {
-		u32 checksum1, checksum2, k;
+		u32 actual, expected, k;
 		div_u64_rem(i, wb->nr_segments, &k);
 		seg = segment_at(wb, k);
 
@@ -1363,13 +1363,13 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		if (!le64_to_cpu(header->id))
 			continue;
 
-		checksum1 = le32_to_cpu(header->checksum);
-		checksum2 = calc_checksum(rambuf, header->length);
+		actual = calc_checksum(rambuf, header->length);
+		expected = le32_to_cpu(header->checksum);
 		wbdebug("id:%u, len:%u", header->id, header->length);
-		if (checksum1 != checksum2) {
+		if (actual != expected) {
 			WBWARN("checksum incorrect id:%llu checksum: %u != %u",
 			       (long long unsigned int) le64_to_cpu(header->id),
-			       checksum1, checksum2);
+			       actual, expected);
 			continue;
 		}
 

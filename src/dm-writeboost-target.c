@@ -178,7 +178,7 @@ static void do_append_plog(struct wb_device *wb, struct bio *bio,
 	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_iter.bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
-		.sector = cpu_to_le64(bio->bi_iter.bi_sector),
+		.sector = cpu_to_le64((u64)bio->bi_iter.bi_sector),
 		.checksum = cpu_to_le32(cksum),
 		.idx = mb_idx_inseg(wb, job->mb->idx),
 		.len = bio_sectors(bio),
@@ -281,12 +281,12 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
  * rebuild a RAM buffer (metadata and data) from a plog.
  * all valid logs are of id "log_id".
  */
-void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
+void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 {
 	struct segment_header_device *seg = rambuffer;
 	struct metablock_device *mb;
 
-	void *cur = plog_buf;
+	void *cur_plog_buf = plog_seg_buf;
 	while (true) {
 		u8 i;
 		u32 actual, expected;
@@ -295,16 +295,16 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 		void *addr;
 
 		struct plog_meta_device meta;
-		memcpy(&meta, cur, 512);
+		memcpy(&meta, cur_plog_buf, 512);
 		sector_cpu = le64_to_cpu(meta.sector);
 
-		actual = crc32c(WB_CKSUM_SEED, cur + 512, meta.len << SECTOR_SHIFT);
+		actual = crc32c(WB_CKSUM_SEED, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
 		expected = le32_to_cpu(meta.checksum);
 
 		if (actual != expected)
 			break;
 
-		if (log_id != le64_to_cpu(meta.id))
+		if (le64_to_cpu(meta.id) != log_id)
 			break;
 
 		/* update header data */
@@ -321,11 +321,11 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 
 		/* data */
 		bytes = do_io_offset(sector_cpu) << SECTOR_SHIFT;
-		addr = rambuffer + ((1  + meta.idx) * (1 << 12) + bytes);
-		memcpy(addr, cur + 512, meta.len << SECTOR_SHIFT);
+		addr = rambuffer + ((1 + meta.idx) * (1 << 12) + bytes);
+		memcpy(addr, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
 
 		/* shift to the next "possible" plog */
-		cur += ((1 + meta.len) << SECTOR_SHIFT);
+		cur_plog_buf += ((1 + meta.len) << SECTOR_SHIFT);
 	}
 
 	/* checksum */
@@ -1725,8 +1725,7 @@ static int __init writeboost_module_init(void)
 	 * more than one I/Os are submitted during a period
 	 * so the number of max_active workers are set to 0.
 	 */
-	safe_io_wq = alloc_workqueue("wbsafeiowq",
-			WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+	safe_io_wq = alloc_workqueue("wbsafeiowq", WQ_MEM_RECLAIM, 0);
 	if (!safe_io_wq) {
 		WBERR("failed to allocate safe_io_wq");
 		r = -ENOMEM;

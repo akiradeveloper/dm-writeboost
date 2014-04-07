@@ -321,7 +321,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 
 		/* data */
 		bytes = do_io_offset(sector_cpu) << SECTOR_SHIFT;
-		addr = rambuffer + ((1  + meta.idx) * (1 << 12) + bytes);
+		addr = rambuffer + ((1 + meta.idx) * (1 << 12) + bytes);
 		memcpy(addr, cur + 512, meta.len << SECTOR_SHIFT);
 
 		/* shift to the next "possible" plog */

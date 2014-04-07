@@ -1064,12 +1064,12 @@ static int flush_plogs(struct wb_device *wb)
 	u64 next_id;
 	u32 i, orig_idx;
 	struct plog_meta_device meta;
-	void *plog_buf;
+	void *plog_seg_buf;
 
 	if (!wb->type)
 		return 0;
 
-	plog_buf = kmalloc(wb->plog_seg_size << SECTOR_SHIFT, GFP_KERNEL);
+	plog_seg_buf = kmalloc(wb->plog_seg_size << SECTOR_SHIFT, GFP_KERNEL);
 	if (r)
 		return -ENOMEM;
 
@@ -1096,12 +1096,12 @@ static int flush_plogs(struct wb_device *wb)
 
 		div_u64_rem(orig_idx + i, wb->nr_plog_segs, &j);
 
-		read_plog(plog_buf, wb, j);
+		read_plog(plog_seg_buf, wb, j);
 		/*
 		 * the id of the head log is the log_id
 		 * that is identical within this plog.
 		 */
-		memcpy(&meta, plog_buf, 512);
+		memcpy(&meta, plog_seg_buf, 512);
 		log_id = le64_to_cpu(meta.id);
 
 		if (log_id != next_id)
@@ -1110,13 +1110,13 @@ static int flush_plogs(struct wb_device *wb)
 		/*
 		 * now at least one log is valid in this plog.
 		 */
-		flush_plog(wb, plog_buf, log_id);
+		flush_plog(wb, plog_seg_buf, log_id);
 		next_id++;
 	}
 	wbdebug();
 
 bad:
-	kfree(plog_buf);
+	kfree(plog_seg_buf);
 	return r;
 }
 

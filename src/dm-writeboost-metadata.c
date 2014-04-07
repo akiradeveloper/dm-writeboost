@@ -895,8 +895,8 @@ static void free_plog_dev(struct wb_device *wb)
 /*
  * initialize core devices
  * - cache device (SSD)
- * - persistent log device (SSD or PRAM)
  * - RAM buffers (DRAM)
+ * - persistent log device (SSD or PRAM)
  */
 static int init_devices(struct wb_device *wb)
 {

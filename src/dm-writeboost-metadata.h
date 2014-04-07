@@ -13,7 +13,7 @@ struct segment_header *
 get_segment_header_by_id(struct wb_device *, u64 segment_id);
 sector_t calc_mb_start_sector(struct wb_device *, struct segment_header *,
 			      u32 mb_idx);
-u32 mb_idx_inseg(struct wb_device *, u32 mb_idx);
+u8 mb_idx_inseg(struct wb_device *, u32 mb_idx);
 struct segment_header *mb_to_seg(struct wb_device *, struct metablock *);
 bool is_on_buffer(struct wb_device *, u32 mb_idx);
 

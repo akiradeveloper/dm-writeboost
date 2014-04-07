@@ -137,7 +137,7 @@ static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 /*
  * get the relative index in a segment of the mb_idx-th metablock
  */
-u32 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
+u8 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
 {
 	u32 tmp32;
 	div_u64_rem(mb_idx, wb->nr_caches_inseg, &tmp32);

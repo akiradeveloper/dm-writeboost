@@ -1725,8 +1725,7 @@ static int __init writeboost_module_init(void)
 	 * more than one I/Os are submitted during a period
 	 * so the number of max_active workers are set to 0.
 	 */
-	safe_io_wq = alloc_workqueue("wbsafeiowq",
-			WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
+	safe_io_wq = alloc_workqueue("wbsafeiowq", WQ_MEM_RECLAIM, 0);
 	if (!safe_io_wq) {
 		WBERR("failed to allocate safe_io_wq");
 		r = -ENOMEM;

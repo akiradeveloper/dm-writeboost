@@ -1208,7 +1208,7 @@ void prepare_segment_header_device(void *rambuffer,
 		struct metablock *mb = src->mb_array + i;
 		struct metablock_device *mbdev = dest->mbarr + i;
 
-		mbdev->sector = cpu_to_le64(mb->sector);
+		mbdev->sector = cpu_to_le64((u64)mb->sector);
 		mbdev->dirty_bits = mb->dirty_bits;
 	}
 

@@ -178,7 +178,7 @@ static void do_append_plog(struct wb_device *wb, struct bio *bio,
 	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bio->bi_iter.bi_size);
 	struct plog_meta_device meta = {
 		.id = cpu_to_le64(wb->current_seg->id),
-		.sector = cpu_to_le64(bio->bi_iter.bi_sector),
+		.sector = cpu_to_le64((u64)bio->bi_iter.bi_sector),
 		.checksum = cpu_to_le32(cksum),
 		.idx = mb_idx_inseg(wb, job->mb->idx),
 		.len = bio_sectors(bio),

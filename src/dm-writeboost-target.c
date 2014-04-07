@@ -304,7 +304,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
 		if (actual != expected)
 			break;
 
-		if (log_id != le64_to_cpu(meta.id))
+		if (le64_to_cpu(meta.id) != log_id)
 			break;
 
 		/* update header data */

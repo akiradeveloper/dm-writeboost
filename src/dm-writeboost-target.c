@@ -286,7 +286,7 @@ void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 	struct segment_header_device *seg = rambuffer;
 	struct metablock_device *mb;
 
-	void *cur = plog_seg_buf;
+	void *cur_plog_buf = plog_seg_buf;
 	while (true) {
 		u8 i;
 		u32 actual, expected;
@@ -295,10 +295,10 @@ void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 		void *addr;
 
 		struct plog_meta_device meta;
-		memcpy(&meta, cur, 512);
+		memcpy(&meta, cur_plog_buf, 512);
 		sector_cpu = le64_to_cpu(meta.sector);
 
-		actual = crc32c(WB_CKSUM_SEED, cur + 512, meta.len << SECTOR_SHIFT);
+		actual = crc32c(WB_CKSUM_SEED, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
 		expected = le32_to_cpu(meta.checksum);
 
 		if (actual != expected)
@@ -322,10 +322,10 @@ void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 		/* data */
 		bytes = do_io_offset(sector_cpu) << SECTOR_SHIFT;
 		addr = rambuffer + ((1 + meta.idx) * (1 << 12) + bytes);
-		memcpy(addr, cur + 512, meta.len << SECTOR_SHIFT);
+		memcpy(addr, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
 
 		/* shift to the next "possible" plog */
-		cur += ((1 + meta.len) << SECTOR_SHIFT);
+		cur_plog_buf += ((1 + meta.len) << SECTOR_SHIFT);
 	}
 
 	/* checksum */

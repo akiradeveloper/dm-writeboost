@@ -933,7 +933,7 @@ static void free_devices(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
-static int read_plog_t1(void *buf, struct wb_device *wb, u32 idx)
+static int read_plog_seg_t1(void *buf, struct wb_device *wb, u32 idx)
 {
 	int r = 0;
 
@@ -957,16 +957,16 @@ static int read_plog_t1(void *buf, struct wb_device *wb, u32 idx)
 }
 
 /*
- * Read the idx'th plog on the persistent device and
+ * Read the idx'th plog seg on the persistent device and
  * store it into a buffer.
  */
-static int read_plog(void *buf, struct wb_device *wb, u32 idx)
+static int read_plog_seg(void *buf, struct wb_device *wb, u32 idx)
 {
 	int r = 0;
 
 	switch (wb->type) {
 	case 1:
-		r = read_plog_t1(buf, wb, idx);
+		r = read_plog_seg_t1(buf, wb, idx);
 		break;
 	default:
 		BUG();
@@ -989,7 +989,7 @@ static int find_min_id_plog(struct wb_device *wb, u64 *id, u32 *idx)
 	*id = 0; *idx = 0;
 	for (i = 0; i < wb->nr_plog_segs; i++) {
 		struct plog_meta_device meta;
-		read_plog(plog_buf, wb, i);
+		read_plog_seg(plog_buf, wb, i);
 		memcpy(&meta, plog_buf, 512);
 
 		id_cpu = le64_to_cpu(meta.id);
@@ -1036,7 +1036,7 @@ static int flush_rambuf(struct wb_device *wb,
 }
 
 /*
- * Flush a plog (stored in a buffer) to the cache device.
+ * flush a plog (stored in a buffer) to the cache device.
  */
 static int flush_plog(struct wb_device *wb, void *plog_buf, u64 log_id)
 {
@@ -1096,7 +1096,7 @@ static int flush_plogs(struct wb_device *wb)
 
 		div_u64_rem(orig_idx + i, wb->nr_plog_segs, &j);
 
-		read_plog(plog_seg_buf, wb, j);
+		read_plog_seg(plog_seg_buf, wb, j);
 		/*
 		 * the id of the head log is the log_id
 		 * that is identical within this plog.

@@ -281,12 +281,12 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
  * rebuild a RAM buffer (metadata and data) from a plog.
  * all valid logs are of id "log_id".
  */
-void rebuild_rambuf(void *rambuffer, void *plog_buf, u64 log_id)
+void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 {
 	struct segment_header_device *seg = rambuffer;
 	struct metablock_device *mb;
 
-	void *cur = plog_buf;
+	void *cur = plog_seg_buf;
 	while (true) {
 		u8 i;
 		u32 actual, expected;

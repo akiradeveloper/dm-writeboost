@@ -22,6 +22,7 @@
 #include <linux/crc32c.h>
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
+#include <linux/dm-kcopyd.h>
 
 /*----------------------------------------------------------------*/
 
@@ -306,6 +307,11 @@ struct wb_device {
 	u8 segment_size_order; /* const */
 	u8 nr_caches_inseg; /* const */
 
+	struct kmem_cache *buf_1_cachep;
+	mempool_t *buf_1_pool; /* 1 sector buffer pool */
+	struct kmem_cache *buf_8_cachep;
+	mempool_t *buf_8_pool; /* 8 sector buffer pool */
+
 	/*---------------------------------------------*/
 
 	/******************
@@ -348,7 +354,17 @@ struct wb_device {
 	 *****************/
 
 	u32 nr_rambuf_pool; /* const */
+	struct kmem_cache *rambuf_cachep;
 	struct rambuffer *rambuf_pool;
+
+	/*---------------------------------------------*/
+
+	/**********************
+	 * One-shot Migration
+	 **********************/
+
+	wait_queue_head_t migrate_mb_wait_queue;
+	struct dm_kcopyd_client *copier;
 
 	/*---------------------------------------------*/
 
@@ -462,7 +478,9 @@ struct wb_device {
 	atomic_t nr_inflight_plog_writes; /* number of async plog writes not acked yet */
 
 	mempool_t *write_job_pool;
+	struct kmem_cache *plog_buf_cachep;
 	mempool_t *plog_buf_pool;
+	struct kmem_cache *plog_seg_buf_cachep;
 
 	sector_t plog_seg_size; /* const. the size of a plog in sector */
 	sector_t alloc_plog_head; /* next relative sector to allocate */
@@ -506,10 +524,12 @@ void rebuild_rambuf(void *rambuf, void *plog_buf, u64 log_id);
 
 /*----------------------------------------------------------------*/
 
-extern mempool_t *buf_1_pool; /* 1 sector buffer pool */
-extern mempool_t *buf_8_pool; /* 8 sector buffer pool */
 extern struct workqueue_struct *safe_io_wq;
 extern struct dm_io_client *wb_io_client;
+
+#define check_buffer_alignment(buf) \
+	do_check_buffer_alignment(buf, #buf, __func__)
+void do_check_buffer_alignment(void *, const char *, const char *);
 
 /*
  * wrapper of dm_io function.

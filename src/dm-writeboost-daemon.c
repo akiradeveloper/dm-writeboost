@@ -456,7 +456,7 @@ static void update_superblock_record(struct wb_device *wb)
 	o.last_migrated_segment_id =
 		cpu_to_le64(atomic64_read(&wb->last_migrated_segment_id));
 
-	buf = mempool_alloc(buf_1_pool, GFP_NOIO | __GFP_ZERO);
+	buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO | __GFP_ZERO);
 	memcpy(buf, &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
@@ -473,7 +473,7 @@ static void update_superblock_record(struct wb_device *wb)
 	};
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
-	mempool_free(buf, buf_1_pool);
+	mempool_free(buf, wb->buf_1_pool);
 }
 
 int recorder_proc(void *data)

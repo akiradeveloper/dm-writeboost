@@ -234,11 +234,27 @@ struct plog_meta_device {
 	__le32 checksum; /* checksum of the data */
 	__u8 idx; /* idx in the segment */
 	__u8 len; /* length in sector */
-	__u8 padding[512 - 8 - 8 - 4 - 1 - 1];
+	__u8 padding[512 - (8 + 8 + 4 + 1 + 1)];
 } __packed;
 
 /*----------------------------------------------------------------*/
 
+/*
+ * sorted batched migration
+ * ------------------------
+ *
+ * migrate daemon writes back segments on the cache device effectively.
+ * "batched" means it migrates number of segments at the same time
+ * in asynchronous manner.
+ * "sorted" means these migrate IOs are sorted in ascending order of
+ * LBA in the backing device. rb-tree is used to sort the migrate IOs.
+ *
+ * reading from the cache device is sequential thus also effective.
+ */
+
+/*
+ * migration of a cache line
+ */
 struct migrate_io {
 	struct rb_node rb_node;
 
@@ -249,6 +265,15 @@ struct migrate_io {
 	u8 memorized_dirtiness;
 };
 #define migrate_io_from_node(node) rb_entry((node), struct migrate_io, rb_node)
+
+/*
+ * migration of a segment
+ */
+struct segment_migrate {
+	struct segment_header *seg; /* segment to migrate */
+	struct migrate_io *ios;
+	void *buf; /* sequentially read */
+};
 
 /*----------------------------------------------------------------*/
 
@@ -284,7 +309,6 @@ struct wb_device {
 
 	struct dm_dev *backing_dev; /* slow device (HDD) */
 	struct dm_dev *cache_dev; /* fast device (SSD) */
-
 
 	/*
 	 * mutex is really light-weighted.
@@ -359,9 +383,9 @@ struct wb_device {
 
 	/*---------------------------------------------*/
 
-	/**********************
+	/********************
 	 * One-shot Migration
-	 **********************/
+	 ********************/
 
 	wait_queue_head_t migrate_mb_wait_queue;
 	struct dm_kcopyd_client *copier;
@@ -433,9 +457,7 @@ struct wb_device {
 	struct rb_root migrate_tree;
 
 	u32 num_emigrates; /* number of emigrates */
-	struct segment_header **emigrates; /* segments to be migrated */
-	void *migrate_buffer; /* the data blocks of the emigrates */
-	struct migrate_io *migrate_ios;
+	struct segment_migrate **emigrates;
 
 	/*---------------------------------------------*/
 
@@ -494,7 +516,6 @@ struct wb_device {
 	/* TODO */
 
 	/*---------------------------------------------*/
-
 
 	/************
 	 * Statistics

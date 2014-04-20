@@ -1393,12 +1393,13 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 	int r = 0;
 	struct segment_header *seg;
 	struct segment_header_device *header;
+	u32 i, start_idx;
 
 	void *rambuf = kmem_cache_alloc(wb->rambuf_cachep, GFP_KERNEL);
 	if (!rambuf)
 		return -ENOMEM;
 
-	u32 i, start_idx = segment_id_to_idx(wb, *max_id + 1);
+	start_idx = segment_id_to_idx(wb, *max_id + 1);
 	*max_id = 0;
 	for (i = start_idx; i < (start_idx + wb->nr_segments); i++) {
 		u32 actual, expected, k;
@@ -1552,6 +1553,44 @@ static int recover_cache(struct wb_device *wb)
 
 /*----------------------------------------------------------------*/
 
+static struct segment_migrate *alloc_segment_migrate(struct wb_device *wb)
+{
+	u8 i;
+
+	struct segment_migrate *segmig = kmalloc(sizeof(*segmig), GFP_NOIO);
+	if (!segmig)
+		goto bad_segmig;
+
+	segmig->ios = kmalloc(wb->nr_caches_inseg * sizeof(struct migrate_io), GFP_NOIO);
+	if (!segmig->ios)
+		goto bad_ios;
+
+	segmig->buf = kmem_cache_alloc(wb->rambuf_cachep, GFP_NOIO);
+	if (!segmig->buf)
+		goto bad_buf;
+
+	for (i = 0; i < wb->nr_caches_inseg; i++) {
+		struct migrate_io *mio = segmig->ios + i;
+		mio->data = segmig->buf + (i << 12);
+	}
+
+	return segmig;
+
+bad_buf:
+	kfree(segmig->ios);
+bad_ios:
+	kfree(segmig);
+bad_segmig:
+	return NULL;
+}
+
+static void free_segment_migrate(struct wb_device *wb, struct segment_migrate *segmig)
+{
+	kmem_cache_free(wb->rambuf_cachep, segmig->buf);
+	kfree(segmig->ios);
+	kfree(segmig);
+}
+
 /*
  * try to allocate new migration buffer by the @nr_batch size.
  * on success, it frees the old buffer.
@@ -1559,66 +1598,56 @@ static int recover_cache(struct wb_device *wb)
  * bad User may set # of batches that can hardly allocate.
  * This function is robust in that case.
  */
+static void free_migrate_ios(struct wb_device *wb)
+{
+	size_t i;
+	for (i = 0; i < wb->nr_cur_batched_migration; i++)
+		free_segment_migrate(wb, *(wb->emigrates + i));
+	kfree(wb->emigrates);
+}
+
+/*
+ * request to allocate data structures to migrate @nr_batch segments.
+ * previous structures are preserved in case of failure.
+ */
 int try_alloc_migrate_ios(struct wb_device *wb, size_t nr_batch)
 {
 	int r = 0;
+	size_t i;
 
-	struct segment_header **emigrates;
-	void *buf;
-	struct migrate_io *migrate_ios;
+	struct segment_migrate **emigrates = kzalloc(
+			nr_batch * sizeof(struct segment_migrate *), GFP_KERNEL);
+	if (!emigrates)
+		return -ENOMEM;
 
-	emigrates = kmalloc(nr_batch * sizeof(struct segment_header *), GFP_KERNEL);
-	if (!emigrates) {
-		WBERR("failed to allocate emigrates");
-		r = -ENOMEM;
-		return r;
-	}
+	for (i = 0; i < nr_batch; i++) {
+		struct segment_migrate **segmig = emigrates + i;
+		*segmig = alloc_segment_migrate(wb);
+		if (!segmig) {
+			int j;
+			for (j = 0; j < i; j++)
+				free_segment_migrate(wb, *(emigrates + j));
+			kfree(emigrates);
 
-	buf = vmalloc(nr_batch * (wb->nr_caches_inseg << 12));
-	if (!buf) {
-		WBERR("failed to allocate migration buffer");
-		r = -ENOMEM;
-		goto bad_alloc_buffer;
-	}
-
-	migrate_ios = kmalloc(nr_batch * wb->nr_caches_inseg * sizeof(struct migrate_io), GFP_KERNEL);
-	if (!migrate_ios) {
-		WBERR("failed to allocate memorized dirtiness");
-		r = -ENOMEM;
-		goto bad_alloc_migrate_ios;
+			WBERR("failed to allocate emigrates");
+			return -ENOMEM;
+		}
 	}
 
 	/*
-	 * free old buffers
+	 * free old buffers if exists.
+	 * wb->emigrates is firstly NULL under constructor .ctr.
 	 */
-	kfree(wb->emigrates); /* kfree(NULL) is safe */
-	if (wb->migrate_buffer)
-		vfree(wb->migrate_buffer);
-	kfree(wb->migrate_ios);
+	if (wb->emigrates)
+		free_migrate_ios(wb);
 
 	/*
 	 * swap by new values
 	 */
 	wb->emigrates = emigrates;
-	wb->migrate_buffer = buf;
-	wb->migrate_ios = migrate_ios;
 	wb->nr_cur_batched_migration = nr_batch;
 
 	return r;
-
-bad_alloc_buffer:
-	kfree(wb->emigrates);
-bad_alloc_migrate_ios:
-	vfree(wb->migrate_buffer);
-
-	return r;
-}
-
-static void free_migration_buffer(struct wb_device *wb)
-{
-	kfree(wb->emigrates);
-	vfree(wb->migrate_buffer);
-	kfree(wb->migrate_ios);
 }
 
 /*----------------------------------------------------------------*/
@@ -1698,7 +1727,7 @@ static int init_migrate_daemon(struct wb_device *wb)
 	return r;
 
 bad_migrate_daemon:
-	free_migration_buffer(wb);
+	free_migrate_ios(wb);
 	return r;
 }
 
@@ -1858,7 +1887,7 @@ bad_migrate_modulator:
 bad_flusher:
 bad_recover:
 	kthread_stop(wb->migrate_daemon);
-	free_migration_buffer(wb);
+	free_migrate_ios(wb);
 bad_migrate_daemon:
 	free_metadata(wb);
 bad_metadata:
@@ -1883,7 +1912,7 @@ void free_cache(struct wb_device *wb)
 	destroy_workqueue(wb->flusher_wq);
 
 	kthread_stop(wb->migrate_daemon);
-	free_migration_buffer(wb);
+	free_migrate_ios(wb);
 
 	free_metadata(wb);
 

@@ -1,0 +1,236 @@
+Writeboost
+==========
+Writeboostターゲットはブロックレベルのログ構造化キャッシングを提供する.
+Writeboostは, 受け取ったランダムライトを巨大なログにまとめ,
+キャッシュデバイスへのシーケンシャルライトを行う.
+
+
+Mechanism
+=========
+Writeboostは, ライトのみをキャッシュする. 言い換えると, リードはキャッシュしない.
+しかし, これは決して, リードの性能を向上しないという意味ではない.
+
+ほとんどのストレージシステムにとって, ライトはリードよりも負荷が高い処理である.
+(cf. RAID Penalty)
+ライトをキャッシュレイヤで処理することにより, backingデバイスへのライトを
+カットすることが出来る.
+仮にbackingデバイスのライト負荷を下げることが出来れば, リード性能の改善につながる.
+backingデバイスがリードに集中出来るようになるからである.
+
+Writeboostは, backingデバイスのライト負荷を軽減するために2つのメカニズムを有する.
+
+1. ライトをキャッシュデバイス上で処理することにより,
+   backingデバイスにライトが行くのをカットする.
+2. ライトバックでは, データは行き先LBA順にソートされ, 非同期で発行される. これにより,
+   backingデバイスの平均ライト負荷は, Writeboostなしの場合に比べて低くなる.
+
+加えて, キャッシュされたデータは典型的に,
+ページキャッシュからライトバックされてきたものであり,
+再度リードヒットする可能性が高い. これは当然, リード性能を高める.
+   
+すなわち, Writeboostはライトとリード両方の性能向上を実現する.
+
+キャッシュデバイスとして利用するNAND SSDにとって, 寿命は大きな問題である.
+リードによるステージングは
+1. SSDキャッシュの寿命を縮める.
+2. ページキャッシュとのデータ重複により, 無意味な場合がある.
+
+Writeboostは, これらの性能と寿命の観点から, ライトのみをキャッシュすることとしている.
+そして, 純粋なライトキャッシュとして最適化していることがWriteboostの価値である.
+
+Basic Mechanism
+---------------
+Writeboostは,
+RAMバッファ (rambuf),
+キャッシュデバイス (cache_dev, 例: SSD), 
+backingデバイス (backing_dev, 例: HDD)
+の三層を制御する.
+ライトデータはまず, RAMバッファに格納され, バッファが一杯になると,
+メタデータを書き足してログを作成し,
+バックグラウンドでキャッシュデバイスへとシーケンシャルライトする.
+その後, キャッシュデバイス上のダーティデータは,
+バックグラウンドでbackingデバイスへとライトバックされる.
+
+Persistent Logging
+------------------
+Writeboostは, 初期化時に指定するtypeによってその機能を拡張することが出来る.
+type 0では, Basic Mechanismのみが提供される.
+そして, type 1では, Persistent Logging (or plog)が提供される.
+この機能拡張は, ライトデータをRAMバッファ以外に,
+永続的なデバイス(plog_dev)にも書くことにより,
+FLUSH命令におけるペナルティを軽減させる狙いを持つ.
+この機能はファイルシステムにおけるフルデータジャーナリング相当のものである.
+現実点では, plog_devとしてブロックデバイスのみサポートする.
+
+Log Replay
+----------
+再起動時, Writeboostは, キャッシュデバイス上に書かれたログをリプレイし,
+メモリ上のメタデータを復元する.
+ログは時系列順に書かれているため, これをキャッシュデバイスへの書き込みの他にアーカイブ
+しておくことにより, 任意の状態を復元することも理論的には可能である.
+
+
+Processings
+===========
+Writeboostは, 1つのForeground処理と6つのbackground処理によって構成される.
+
+Foreground Processing
+---------------------
+bioを受け取り, キャッシュhit/missに応じた処理を行う.
+ライトデータはRAMバッファに格納する.
+RAMバッファが一杯になった時, ログを作成し, flush jobとしてキューする.
+
+Background Processings
+----------------------
+(1)　Flusher Daemon
+  flush jobをキューから取り出して処理する.
+  flush jobに格納されたログをキャッシュデバイスに対してシーケンシャルライトする.
+
+(2) Migrate Daemon
+  キャッシュデバイス上のダーティデータをbackingデバイスにライトバックする.
+  Writeboostでは, ライトバックのことをマイグレーションと呼ぶ.
+  
+  もし, `allow_migrate`がtrueであれば, 差し迫った状況でなければライトバックしない.
+  ここで, 差し迫った状況とは, ライトバックしてクリーンなセグメントを作らなければ,
+  ログをこれ以上書くことが出来ない状況のことである.
+  
+  Writeboostはライトバックについて2つの手法によって性能最適化を図る.
+  - ライトバックは複数のセグメントに対してバッチ的に行われる.
+    `nr_max_batched_migration`は, 一回にライトバックする最大のセグメント数である.
+  - ライトバックされるデータは, ライトバック先のLBAによって昇順にソートされる.
+
+(3) Migration Modulator
+  backingデバイスの負荷が高い時にはライトバックを抑制すべきである.
+  このデーモンは, backingデバイスの負荷を監視し,
+  高負荷時には`allow_migrate`をfalseにすることでライトバックを抑制する.
+  このデーモンは, `enable_migration_modulator`がtrueの時に有効になり,
+  負荷のスレッショルドは`migrate_threshold`によって指定出来る.
+  
+(4) Superblock Recorder
+  このデーモンはSuperblockに, どのセグメントIDまでライトバックしたかなど
+  を一定のタイミング(`update_record_interval`で指定)で書く.
+  Log Replay時に処理を省く効果がある.
+  
+(5) Sync Daemon
+  RAMバッファ上のデータは, 電断時に消失してしまう.
+  また, キャッシュデバイズがRAMキャッシュを持っている場合,
+  ここにあるデータも, 電断時には保証されない.
+  このデーモンは, 一定のタイミング(`sync_interval`で指定)でこれらのデータを永続化する.
+
+(6) Barrier Deadline (type 0のみ有効)
+  Persistent Loggingがない場合, ダーティデータの永続化処理はペナルティが高い.
+  例えば, バッファが一杯になる前にキャッシュデバイスにフラッシュしなければ
+  いけないケースがある.
+  このペナルティを軽減させるため, FLUSH命令へのACKを最大で`barrier_deadline_ms`(ms)
+  遅延させる最適化を行っている.
+  これにより, 複数プロセスがライトを発行している場合には, 遅延時間中にバッファが一杯になる
+  可能性がある.
+  
+  
+ターゲットインターフェイス
+======================
+すべての操作は, dmsetupコマンドによって行う.
+
+初期化(コンストラクタ)
+-------------------
+<type>
+<essential args>
+<#optional args> <optional args>
+<#tunable args> <tunable args>
+
+<type>については, 'Mechanism'参照
+<essential args>は, <type>によって異なる.
+<optional args>と<tunable args>は, kvペアのunorderedな列である.
+
+type 0 (すべての<type>に共通):
+  <essential args>
+  backing_dev: オリジナルのデータがあるブロックデバイス (例: HDD)
+  cache_dev: キャッシュとして利用するブロックデバイス (例: SSD)
+  
+  <optional_args>
+  segment_size_order : RAM bufferのサイズを決める.
+                       RAM bufferのサイズは, 1 << n(セクタ)となる.
+                       4 <= n <= 10
+                       default 10
+  nr_rambuf_pool     : 確保するRAM bufferの枚数
+                       default 8
+                      
+  <tunable args>
+  'メッセージ'を参照
+                                     
+例:
+dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE"
+dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE \
+                              4 nr_rambuf_pool 32 segment_size_order 8 \
+                              2 allow_migrate 1"
+dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE \
+                              0 \
+                              2 allow_migrate 1"
+                      
+type 1:
+  <essential args>
+  backing_dev
+  cache_dev
+  plog_dev_desc     　: plogデバイスを特定するための文字列
+
+例:
+dmsetup create wbdev --table "0 $sz 0 writeboost 1 $BACKING $CACHE $PLOG"
+
+初期化(フォーマット)
+-----------------
+キャッシュデバイスやplogデバイスは,
+キャッシュデバイスの最初の1セクタ(512バイト)がゼロ埋めされている場合に,
+コンストラクタ以下でリフォーマットされる.
+
+メッセージ
+---------
+Writeboostデバイスの挙動は, 実行時に変更することが可能である.
+設定は, dmsetup messageを利用する.
+
+(1) Tunables
+コンストラクタにおけるtunablesは, 実行時に変更可能である.
+詳細は, 'Background Processings'参照
+
+barrier_deadline_ms (ms)
+  Default: 10
+
+allow_migrate (bool)
+  default: 0
+
+enable_migration_modulator (bool) and migrate_threshold (%)
+  default: 0 and 70
+
+nr_max_batched_migration
+  default: 1 << (15 - segment_size_order)
+
+update_record_interval (sec)
+  default: 0
+
+sync_interval (sec)
+  default: 0
+
+例:
+dmsetup message wbdev 0 enable_migration_modulator 0
+
+(2) その他
+clear_stats
+  統計情報('ステイタス'参照)をクリアする.
+drop_caches
+  キャッシュデバイス上にあるすべてのダーティデータがライトバックされるのを待つ.
+  (Interruptible)
+
+例:
+dmsetup message wbdev 0 drop_caches
+
+ステイタス
+---------
+<cursor pos>
+<#cache blocks>
+<#segments>
+<current id>
+<lastly flushed id>
+<lastly migrated id>
+<#dirty cache blocks>
+<stat (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
+<#none-full flushed>
+<#tunable args> <tunable args>

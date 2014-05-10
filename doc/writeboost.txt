@@ -223,13 +223,13 @@ dmsetup message wbdev 0 drop_caches
 
 Status
 ------
-<cursor pos>
-<#cache blocks>
-<#segments>
-<current id>
-<lastly flushed id>
-<lastly migrated id>
-<#dirty cache blocks>
-<stat (w/r) x (hit/miss) x (on buffer?) x (fullsize?)>
-<#none-full flushed>
+<cursor_pos>
+<nr_cache_blocks>
+<nr_segments>
+<current_id>
+<last_flushed_id>
+<last_migrated_id>
+<nr_dirty_cache_blocks>
+<stat (write?) x (hit?) x (on buffer?) x (fullsize?)>
+<nr_partial_flushed>
 <#tunable args> <tunable args>

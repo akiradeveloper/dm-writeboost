@@ -1,12 +1,18 @@
 # DM-WRITEBOOST
 Log-structured Caching for Linux
 
-## What's new
-* Merged in Joe's tree https://github.com/jthornber/linux-2.6 and maintained in the tree.
-  For testing, please use linux-2.6.config in this repo.
-* bumped up the version to 0.9. it's close to release
-* dm-writeboost is now able to run on >= v3.14
-* I received Japanese OSS Encouragement award by developing dm-writeboost. Thanks
+## The kernel code is maintained.
+Already merged in Joe's tree https://github.com/jthornber/linux-2.6.
+Joe Thornber is a developer of several DM targes including dm-thin and dm-cache
+working for Redhat.
+There code in this repository is not always maintained.
+Please use the code in Joe's tree. It's always maintained.
+
+Other than the kernel code, the documentation and several useful scripts
+are upstream here.
+
+## Award
+I received Japanese OSS Encouragement award for developing dm-writeboost. Thanks
 
 ## Overview
 dm-writeboost is an implementation of [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).  
@@ -16,9 +22,9 @@ See also the DCD paper [1] and its recent application [2].
 
 ## Features
 * Capable of performing 375kiops (1.5GB/sec) random writes with a fast enough cache.  
-  Outperforms other cache drivers in write (bcache, dm-cache)
+  Outperforms other cache drivers (bcache, dm-cache) in write performance.
 * Maximizes the lifetime of SSD cache device by writing in log-structured manner.
-* Log-structured nature properly ensures perfect metadata durability in any failure
+* Log-structured nature properly ensures perfect metadata durability in any failure.
   (except the case data is perfectly gone)
 * Additional logging mechanism called
   Persistent Logging (plog) is to mitigate the penalty in handling
@@ -34,7 +40,7 @@ See also the DCD paper [1] and its recent application [2].
 * [2] G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)
 
 ## Quick Start
-I provice you with nice scripts for quick starting.  
+I provide you with nice scripts for quick starting.  
 
 ### Before anything else, you need to build and install the Linux kernel
 * The kernel version must be >= 3.14
@@ -72,7 +78,7 @@ $ ./build.sh
 
 ### (c) Setup init scripts (for admin)
 If you are an admin and wants to install writeboost
-easiest way is to install the init scripts.
+the easiest way is to install the init scripts.
 
 ```
 $ ./build.sh
@@ -104,3 +110,4 @@ git-flow style is recommended but not forced.
 ## Developer Info
 Akira Hayakawa (@akiradeveloper)  
 e-mail: ruby.wktk@gmail.com
+

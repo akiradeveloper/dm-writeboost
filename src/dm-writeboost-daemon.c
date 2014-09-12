@@ -12,32 +12,19 @@
 
 /*----------------------------------------------------------------*/
 
-static void update_barrier_deadline(struct wb_device *wb)
-{
-	mod_timer(&wb->barrier_deadline_timer,
-		  jiffies + msecs_to_jiffies(ACCESS_ONCE(wb->barrier_deadline_ms)));
-}
-
 void queue_barrier_io(struct wb_device *wb, struct bio *bio)
 {
 	mutex_lock(&wb->io_lock);
 	bio_list_add(&wb->barrier_ios, bio);
 	mutex_unlock(&wb->io_lock);
 
-	if (!timer_pending(&wb->barrier_deadline_timer))
-		update_barrier_deadline(wb);
-}
-
-void barrier_deadline_proc(unsigned long data)
-{
-	struct wb_device *wb = (struct wb_device *) data;
-	schedule_work(&wb->barrier_deadline_work);
+	schedule_work(&wb->flush_barrier_work);
 }
 
 void flush_barrier_ios(struct work_struct *work)
 {
 	struct wb_device *wb = container_of(
-		work, struct wb_device, barrier_deadline_work);
+		work, struct wb_device, flush_barrier_work);
 
 	if (bio_list_empty(&wb->barrier_ios))
 		return;
@@ -52,16 +39,15 @@ static void process_deferred_barriers(struct wb_device *wb, struct flush_job *jo
 {
 	int r = 0;
 	bool has_barrier = !bio_list_empty(&job->barrier_ios);
-	wbdebug("has_barrier:%d", has_barrier);
 
 	/*
-	 * make all the data until now persistent.
+	 * Make all the data until now persistent.
 	 */
 	if (has_barrier)
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
 	/*
-	 * ack the chained barrier requests.
+	 * Ack the chained barrier requests.
 	 */
 	if (has_barrier) {
 		struct bio *bio;
@@ -73,9 +59,6 @@ static void process_deferred_barriers(struct wb_device *wb, struct flush_job *jo
 			);
 		}
 	}
-
-	if (has_barrier)
-		update_barrier_deadline(wb);
 }
 
 void flush_proc(struct work_struct *work)
@@ -88,7 +71,7 @@ void flush_proc(struct work_struct *work)
 	struct segment_header *seg = job->seg;
 
 	struct dm_io_request io_req = {
-		.client = wb_io_client,
+		.client = wb->io_client,
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
@@ -101,29 +84,26 @@ void flush_proc(struct work_struct *work)
 	};
 
 	/*
-	 * the actual write requests to the cache device are not serialized.
-	 * they may perform in parallel.
+	 * The actual write requests to the cache device are not serialized.
+	 * They may perform in parallel.
 	 */
 	IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 	/*
-	 * deferred ACK for barrier requests
-	 * to serialize barrier ACK in logging we wait for the previous
+	 * Deferred ACK for barrier requests
+	 * To serialize barrier ACK in logging we wait for the previous
 	 * segment to be persistently written (if needed).
 	 */
-	wbdebug("WAIT BEFORE:%u", seg->id);
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
-	wbdebug("WAIT AFTER:%u", seg->id);
 
 	process_deferred_barriers(wb, job);
 
 	/*
-	 * we can count up the last_flushed_segment_id only after segment
+	 * We can count up the last_flushed_segment_id only after segment
 	 * is written persistently. counting up the id is serialized.
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
-	wbdebug("WAKE UP:%u", seg->id);
 
 	mempool_free(job, wb->flush_job_pool);
 }
@@ -136,34 +116,34 @@ void wait_for_flushing(struct wb_device *wb, u64 id)
 
 /*----------------------------------------------------------------*/
 
-static void migrate_endio(unsigned long error, void *context)
+static void writeback_endio(unsigned long error, void *context)
 {
 	struct wb_device *wb = context;
 
 	if (error)
-		atomic_inc(&wb->migrate_fail_count);
+		atomic_inc(&wb->writeback_fail_count);
 
-	if (atomic_dec_and_test(&wb->migrate_io_count))
-		wake_up(&wb->migrate_io_wait_queue);
+	if (atomic_dec_and_test(&wb->writeback_io_count))
+		wake_up(&wb->writeback_io_wait_queue);
 }
 
-static void submit_migrate_io(struct wb_device *wb, struct migrate_io *mio)
+static void submit_writeback_io(struct wb_device *wb, struct writeback_io *writeback_io)
 {
-	if (!mio->memorized_dirtiness)
+	if (!writeback_io->memorized_dirtiness)
 		return;
 
-	if (mio->memorized_dirtiness == 255) {
+	if (writeback_io->memorized_dirtiness == 255) {
 		struct dm_io_request io_req_w = {
-			.client = wb_io_client,
+			.client = wb->io_client,
 			.bi_rw = WRITE,
-			.notify.fn = migrate_endio,
+			.notify.fn = writeback_endio,
 			.notify.context = wb,
 			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = mio->data,
+			.mem.ptr.addr = writeback_io->data,
 		};
 		struct dm_io_region region_w = {
 			.bdev = wb->backing_dev->bdev,
-			.sector = mio->sector,
+			.sector = writeback_io->sector,
 			.count = 1 << 3,
 		};
 		dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
@@ -173,21 +153,21 @@ static void submit_migrate_io(struct wb_device *wb, struct migrate_io *mio)
 			struct dm_io_request io_req_w;
 			struct dm_io_region region_w;
 
-			bool bit_on = mio->memorized_dirtiness & (1 << i);
+			bool bit_on = writeback_io->memorized_dirtiness & (1 << i);
 			if (!bit_on)
 				continue;
 
 			io_req_w = (struct dm_io_request) {
-				.client = wb_io_client,
+				.client = wb->io_client,
 				.bi_rw = WRITE,
-				.notify.fn = migrate_endio,
+				.notify.fn = writeback_endio,
 				.notify.context = wb,
 				.mem.type = DM_IO_KMEM,
-				.mem.ptr.addr = mio->data + (i << SECTOR_SHIFT),
+				.mem.ptr.addr = writeback_io->data + (i << SECTOR_SHIFT),
 			};
 			region_w = (struct dm_io_region) {
 				.bdev = wb->backing_dev->bdev,
-				.sector = mio->sector + i,
+				.sector = writeback_io->sector + i,
 				.count = 1,
 			};
 			dm_safe_io(&io_req_w, 1, &region_w, NULL, false);
@@ -196,98 +176,98 @@ static void submit_migrate_io(struct wb_device *wb, struct migrate_io *mio)
 
 }
 
-static void submit_migrate_ios(struct wb_device *wb)
+static void submit_writeback_ios(struct wb_device *wb)
 {
 	struct blk_plug plug;
-	struct rb_root mt = wb->migrate_tree;
+	struct rb_root wt = wb->writeback_tree;
 	blk_start_plug(&plug);
 	do {
-		struct migrate_io *mio = migrate_io_from_node(rb_first(&mt));
-		rb_erase(&mio->rb_node, &mt);
-		submit_migrate_io(wb, mio);
-	} while (!RB_EMPTY_ROOT(&mt));
+		struct writeback_io *writeback_io = writeback_io_from_node(rb_first(&wt));
+		rb_erase(&writeback_io->rb_node, &wt);
+		submit_writeback_io(wb, writeback_io);
+	} while (!RB_EMPTY_ROOT(&wt));
 	blk_finish_plug(&plug);
 }
 
 /*
- * compare two migrate IOs
- * if the two have the same sector then compare them with the IDs.
- * we process the older ID first and then overwrites with the older.
+ * Compare two writeback IOs
+ * If the two have the same sector then compare them with the IDs.
+ * We process the older ID first and then overwrites with the older.
  *
  * (10, 3) < (11, 1)
  * (10, 3) < (10, 4)
  */
-static bool compare_migrate_io(struct migrate_io *mio, struct migrate_io *pmio)
+static bool compare_writeback_io(struct writeback_io *a, struct writeback_io *b)
 {
-	BUG_ON(!mio);
-	BUG_ON(!pmio);
-	if (mio->sector < pmio->sector)
+	BUG_ON(!a);
+	BUG_ON(!b);
+	if (a->sector < b->sector)
 		return true;
-	if (mio->id < pmio->id)
+	if (a->id < b->id)
 		return true;
 	return false;
 }
 
-static void inc_migrate_io_count(u8 dirty_bits, size_t *migrate_io_count)
+static void inc_writeback_io_count(u8 dirty_bits, size_t *writeback_io_count)
 {
 	u8 i;
 	if (!dirty_bits)
 		return;
 
 	if (dirty_bits == 255) {
-		(*migrate_io_count)++;
+		(*writeback_io_count)++;
 	} else {
 		for (i = 0; i < 8; i++) {
 			if (dirty_bits & (1 << i))
-				(*migrate_io_count)++;
+				(*writeback_io_count)++;
 		}
 	}
 }
 
 /*
- * add mio to rb-tree for sorted migration.
- * all migrate IOs are sorted in ascending order.
+ * Add writeback IO to rb-tree for sorted writeback.
+ * All writeback IOs are sorted in ascending order.
  */
-static void add_migrate_io(struct wb_device *wb, struct migrate_io *mio)
+static void add_writeback_io(struct wb_device *wb, struct writeback_io *writeback_io)
 {
 	struct rb_node **rbp, *parent;
-	rbp = &wb->migrate_tree.rb_node;
+	rbp = &wb->writeback_tree.rb_node;
 	parent = NULL;
 	while (*rbp) {
-		struct migrate_io *pmio;
+		struct writeback_io *parent_io;
 		parent = *rbp;
-		pmio = migrate_io_from_node(parent);
+		parent_io = writeback_io_from_node(parent);
 
-		if (compare_migrate_io(mio, pmio))
+		if (compare_writeback_io(writeback_io, parent_io))
 			rbp = &(*rbp)->rb_left;
 		else
 			rbp = &(*rbp)->rb_right;
 	}
-	rb_link_node(&mio->rb_node, parent, rbp);
-	rb_insert_color(&mio->rb_node, &wb->migrate_tree);
+	rb_link_node(&writeback_io->rb_node, parent, rbp);
+	rb_insert_color(&writeback_io->rb_node, &wb->writeback_tree);
 }
 
 /*
- * read the data to migrate IOs and add them into the rb-tree to sort.
+ * Read the data to writeback IOs and add them into the rb-tree to sort.
  */
-static void prepare_migrate_ios(struct wb_device *wb, struct segment_migrate *segmig,
-				size_t *migrate_io_count)
+static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment *writeback_seg,
+				  size_t *writeback_io_count)
 {
 	int r = 0;
 	u8 i;
 
-	struct segment_header *seg = segmig->seg;
+	struct segment_header *seg = writeback_seg->seg;
 
 	struct dm_io_request io_req_r = {
-		.client = wb_io_client,
+		.client = wb->io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = segmig->buf,
+		.mem.ptr.addr = writeback_seg->buf,
 	};
 	struct dm_io_region region_r = {
 		.bdev = wb->cache_dev->bdev,
-		.sector = seg->start_sector + (1 << 3), /* header excluded */
+		.sector = seg->start_sector + (1 << 3), /* Header excluded */
 		.count = seg->length << 3,
 	};
 	IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
@@ -295,14 +275,14 @@ static void prepare_migrate_ios(struct wb_device *wb, struct segment_migrate *se
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
 
-		struct migrate_io *mio = segmig->ios + i;
-		mio->sector = mb->sector;
-		mio->id = seg->id;
-		/* mio->data is already set */
-		mio->memorized_dirtiness = read_mb_dirtiness(wb, seg, mb);
+		struct writeback_io *writeback_io = writeback_seg->ios + i;
+		writeback_io->sector = mb->sector;
+		writeback_io->id = seg->id;
+		/* writeback_io->data is already set */
+		writeback_io->memorized_dirtiness = read_mb_dirtiness(wb, seg, mb);
 
-		inc_migrate_io_count(mio->memorized_dirtiness, migrate_io_count);
-		add_migrate_io(wb, mio);
+		inc_writeback_io_count(writeback_io->memorized_dirtiness, writeback_io_count);
+		add_writeback_io(wb, writeback_io);
 	}
 }
 
@@ -315,124 +295,123 @@ static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
 	}
 }
 
-static void transport_emigrates(struct wb_device *wb)
+static void transport_writeback_segs(struct wb_device *wb)
 {
 	int r = 0;
-	size_t k, migrate_io_count = 0;
+	size_t k, writeback_io_count = 0;
 
-	struct segment_migrate *segmig;
+	struct writeback_segment *writeback_seg;
 
-	wb->migrate_tree = RB_ROOT;
+	wb->writeback_tree = RB_ROOT;
 
-	for (k = 0; k < wb->num_emigrates; k++) {
-		segmig = *(wb->emigrates + k);
-		prepare_migrate_ios(wb, segmig, &migrate_io_count);
+	for (k = 0; k < wb->num_writeback_segs; k++) {
+		writeback_seg = *(wb->writeback_segs + k);
+		prepare_writeback_ios(wb, writeback_seg, &writeback_io_count);
 	}
 
-	atomic_set(&wb->migrate_io_count, migrate_io_count);
-	atomic_set(&wb->migrate_fail_count, 0);
+	atomic_set(&wb->writeback_io_count, writeback_io_count);
+	atomic_set(&wb->writeback_fail_count, 0);
 
-	submit_migrate_ios(wb);
+	submit_writeback_ios(wb);
 
-	wait_event(wb->migrate_io_wait_queue, !atomic_read(&wb->migrate_io_count));
-	if (atomic_read(&wb->migrate_fail_count))
+	wait_event(wb->writeback_io_wait_queue, !atomic_read(&wb->writeback_io_count));
+	if (atomic_read(&wb->writeback_fail_count))
 		set_bit(WB_DEAD, &wb->flags);
 
 	/*
-	 * we clean up the metablocks because there is no reason
+	 * We clean up the metablocks because there is no reason
 	 * to leave the them dirty.
 	 */
-	for (k = 0; k < wb->num_emigrates; k++) {
-		segmig = *(wb->emigrates + k);
-		cleanup_segment(wb, segmig->seg);
+	for (k = 0; k < wb->num_writeback_segs; k++) {
+		writeback_seg = *(wb->writeback_segs + k);
+		cleanup_segment(wb, writeback_seg->seg);
 	}
 
 	/*
-	 * we must write back a segments if it was written persistently.
-	 * nevertheless, we betray the upper layer.
-	 * remembering which segment is persistent is too expensive
+	 * We must write back a segments if it was written persistently.
+	 * Nevertheless, we betray the upper layer.
+	 * Remembering which segment is persistent is too expensive
 	 * and furthermore meaningless.
-	 * so we consider all segments are persistent and write them back
+	 * So we consider all segments are persistent and write them back
 	 * persistently.
 	 */
 	IO(blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL));
 }
 
 /*
- * calculate the number of segments to migrate.
+ * Calculate the number of segments to write back.
  */
-static u32 calc_nr_mig(struct wb_device *wb)
+static u32 calc_nr_writeback(struct wb_device *wb)
 {
-	u32 nr_mig_candidates, nr_max_batch;
+	u32 nr_writeback_candidates, nr_max_batch;
 
-	nr_mig_candidates = atomic64_read(&wb->last_flushed_segment_id) -
-			    atomic64_read(&wb->last_migrated_segment_id);
-	if (!nr_mig_candidates)
+	nr_writeback_candidates = atomic64_read(&wb->last_flushed_segment_id) -
+				  atomic64_read(&wb->last_writeback_segment_id);
+	if (!nr_writeback_candidates)
 		return 0;
 
-	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_migration);
-	if (wb->nr_cur_batched_migration != nr_max_batch)
-		try_alloc_migrate_ios(wb, nr_max_batch);
-	return min(nr_mig_candidates, wb->nr_cur_batched_migration);
+	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_writeback);
+	if (wb->nr_cur_batched_writeback != nr_max_batch)
+		try_alloc_writeback_ios(wb, nr_max_batch);
+	return min(nr_writeback_candidates, wb->nr_cur_batched_writeback);
 }
 
-static bool should_migrate(struct wb_device *wb)
+static bool should_writeback(struct wb_device *wb)
 {
-	return ACCESS_ONCE(wb->allow_migrate) ||
-	       ACCESS_ONCE(wb->urge_migrate)  ||
+	return ACCESS_ONCE(wb->allow_writeback) ||
+	       ACCESS_ONCE(wb->urge_writeback)  ||
 	       ACCESS_ONCE(wb->force_drop);
 }
 
-static void do_migrate_proc(struct wb_device *wb)
+static void do_writeback_proc(struct wb_device *wb)
 {
-	u32 k, nr_mig;
+	u32 k, nr_writeback;
 
-	if (!should_migrate(wb)) {
+	if (!should_writeback(wb)) {
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		return;
 	}
 
-	nr_mig = calc_nr_mig(wb);
-	if (!nr_mig) {
+	nr_writeback = calc_nr_writeback(wb);
+	if (!nr_writeback) {
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		return;
 	}
 
 	/*
-	 * store segments into emigrates
+	 * Store segments into writeback_segs
 	 */
-	for (k = 0; k < nr_mig; k++) {
-		struct segment_migrate *segmig = *(wb->emigrates + k);
-		segmig->seg = get_segment_header_by_id(wb,
-			atomic64_read(&wb->last_migrated_segment_id) + 1 + k);
+	for (k = 0; k < nr_writeback; k++) {
+		struct writeback_segment *writeback_seg = *(wb->writeback_segs + k);
+		writeback_seg->seg = get_segment_header_by_id(wb,
+			atomic64_read(&wb->last_writeback_segment_id) + 1 + k);
 	}
-	wb->num_emigrates = nr_mig;
-	transport_emigrates(wb);
+	wb->num_writeback_segs = nr_writeback;
+	transport_writeback_segs(wb);
 
-	atomic64_add(nr_mig, &wb->last_migrated_segment_id);
-	wake_up(&wb->migrate_wait_queue);
-	wbdebug("done migrate last id:%u", atomic64_read(&wb->last_migrated_segment_id));
+	atomic64_add(nr_writeback, &wb->last_writeback_segment_id);
+	wake_up(&wb->writeback_wait_queue);
 }
 
-int migrate_proc(void *data)
+int writeback_proc(void *data)
 {
 	struct wb_device *wb = data;
 	while (!kthread_should_stop())
-		do_migrate_proc(wb);
+		do_writeback_proc(wb);
 	return 0;
 }
 
 /*
- * wait for a segment to be migrated.
- * after migrated the metablocks in the segment are clean.
+ * Wait for a segment to be written back.
+ * After written back the metablocks in the segment are clean.
  */
-void wait_for_migration(struct wb_device *wb, u64 id)
+void wait_for_writeback(struct wb_device *wb, u64 id)
 {
-	wb->urge_migrate = true;
-	wake_up_process(wb->migrate_daemon);
-	wait_event(wb->migrate_wait_queue,
-		atomic64_read(&wb->last_migrated_segment_id) >= id);
-	wb->urge_migrate = false;
+	wb->urge_writeback = true;
+	wake_up_process(wb->writeback_daemon);
+	wait_event(wb->writeback_wait_queue,
+		atomic64_read(&wb->last_writeback_segment_id) >= id);
+	wb->urge_writeback = false;
 }
 
 /*----------------------------------------------------------------*/
@@ -448,15 +427,15 @@ int modulator_proc(void *data)
 	while (!kthread_should_stop()) {
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
-		if (!ACCESS_ONCE(wb->enable_migration_modulator))
+		if (!ACCESS_ONCE(wb->enable_writeback_modulator))
 			goto modulator_update;
 
 		util = div_u64(100 * (new - old), 1000);
 
-		if (util < ACCESS_ONCE(wb->migrate_threshold))
-			wb->allow_migrate = true;
+		if (util < ACCESS_ONCE(wb->writeback_threshold))
+			wb->allow_writeback = true;
 		else
-			wb->allow_migrate = false;
+			wb->allow_writeback = false;
 
 modulator_update:
 		old = new;
@@ -477,14 +456,14 @@ static void update_superblock_record(struct wb_device *wb)
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 
-	o.last_migrated_segment_id =
-		cpu_to_le64(atomic64_read(&wb->last_migrated_segment_id));
+	o.last_writeback_segment_id =
+		cpu_to_le64(atomic64_read(&wb->last_writeback_segment_id));
 
 	buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO | __GFP_ZERO);
 	memcpy(buf, &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
-		.client = wb_io_client,
+		.client = wb->io_client,
 		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
@@ -538,8 +517,6 @@ int sync_proc(void *data)
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
 			continue;
 		}
-
-		wbdebug();
 
 		flush_current_buffer(wb);
 		IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));

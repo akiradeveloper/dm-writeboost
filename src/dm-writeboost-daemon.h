@@ -15,13 +15,12 @@ void wait_for_flushing(struct wb_device *, u64 id);
 /*----------------------------------------------------------------*/
 
 void queue_barrier_io(struct wb_device *, struct bio *);
-void barrier_deadline_proc(unsigned long data);
 void flush_barrier_ios(struct work_struct *);
 
 /*----------------------------------------------------------------*/
 
-int migrate_proc(void *);
-void wait_for_migration(struct wb_device *, u64 id);
+int writeback_proc(void *);
+void wait_for_writeback(struct wb_device *, u64 id);
 
 /*----------------------------------------------------------------*/
 

@@ -1,15 +1,25 @@
 # DM-WRITEBOOST
 Log-structured Caching for Linux
 
-## The kernel code is NOT maintained.
+## The kernel code is NOT maintained
 Already merged in Joe's tree https://github.com/jthornber/linux-2.6.
-Joe Thornber is a developer of several DM targes including dm-thin and dm-cache
+Joe Thornber is a developer of several DM targets including dm-thin and dm-cache
 working for Redhat.
 The code in this repository is NOT maintained.
 Please use the code in Joe's tree. It's always maintained.
 
 Other than the kernel code, the documentation and several useful scripts
 are upstream here.
+
+## For Testing, Go to device-mapper-test-suite
+The test scripts in this repository are obsolete and will be purged.
+We are testing Writeboost in
+device-mapper-test-suite (https://github.com/jthornber/device-mapper-test-suite).
+It is the official test suite written in Ruby. It also tests several other DM targets
+including dm-thin, dm-cache, dm-era and so on.
+
+With the framework, you can run benchmark tests without much efforts.
+We really appreciate you join our project.
 
 ## Award
 I received Japanese OSS Encouragement award for developing dm-writeboost. Thanks

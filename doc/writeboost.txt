@@ -151,6 +151,9 @@ type 0:
   see `Messages`
                                     
 E.g.
+BACKING=/dev/sdb # Example
+CACHE=/dev/sdc # Example
+sz=`blockdev --getsize ${BACKING}`
 dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE"
 dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE \
                               4 nr_rambuf_pool 32 segment_size_order 8 \
@@ -166,6 +169,7 @@ type 1:
   plog_dev_desc      : A string descriptor to specify the plog device
 
 E.g.
+PLOG=/dev/sdd # Example
 dmsetup create wbdev --table "0 $sz 0 writeboost 1 $BACKING $CACHE $PLOG"
 
 Initialization (Reformatting)

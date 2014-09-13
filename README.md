@@ -1,11 +1,11 @@
 # DM-WRITEBOOST
 Log-structured Caching for Linux
 
-## The kernel code is maintained.
+## The kernel code is NOT maintained.
 Already merged in Joe's tree https://github.com/jthornber/linux-2.6.
 Joe Thornber is a developer of several DM targes including dm-thin and dm-cache
 working for Redhat.
-There code in this repository is not always maintained.
+The code in this repository is NOT maintained.
 Please use the code in Joe's tree. It's always maintained.
 
 Other than the kernel code, the documentation and several useful scripts

@@ -3,12 +3,12 @@
 # desc: writeboost installer
 # install files to /etc/init.d and /etc/rcN.d
 
-. ./util.sh
-
-fail_if_not_root
+if [ $(id -u) -ne 0 ] ; then
+	echo "This command requires root privilege." >&2
+	exit 1
+fi
 
 do_install() {
-    cd src; make install; cd -
     install -m 755 -t /etc/init.d writeboost
     insserv -d /etc/init.d/writeboost
 }

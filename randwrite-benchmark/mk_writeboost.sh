@@ -1,4 +1,4 @@
-. ../config
+. ./config
 
 modprobe libcrc32c
 insmod ../src/dm-writeboost.ko

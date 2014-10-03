@@ -1,10 +1,7 @@
 #! /bin/sh
 
-export WB_ROOT=`pwd`
-
 # Setup this file
 # so as to fit your environment.
-
 
 # Desc (read this first):
 #
@@ -43,10 +40,3 @@ export PLOG
 echo BACKING: ${BACKING}
 echo CACHE  : ${CACHE}
 echo PLOG   : ${PLOG}
-
-# common routines
-remove_dev() {
-    dmsetup suspend writeboost-vol
-    dmsetup resume writeboost-vol
-    dmsetup remove writeboost-vol
-}

@@ -41,7 +41,7 @@ See also the DCD paper [1] and its recent application [2].
 
 ## References
 * [1] Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
-  (https://www.ele.uri.edu/research/hpcl/DCD/DCD.html)
+  (http://www.ele.uri.edu/research/hpcl/DCD/DCD.html)
 * [2] G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)
   (https://www.usenix.org/conference/fast-10/extending-ssd-lifetimes-disk-based-write-caches)
 

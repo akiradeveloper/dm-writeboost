@@ -265,6 +265,7 @@ struct read_cache_cells {
 	struct read_cache_cell *array;
 	u32 cursor;
 	atomic_t ack_count;
+	u32 read_cache_threshold;
 };
 
 /*----------------------------------------------------------------*/
@@ -479,6 +480,15 @@ struct wb_device {
 	struct task_struct *sync_daemon;
 	unsigned long sync_interval; /* Tunable */
 
+	/*---------------------------------------------*/
+
+	/**************
+	 * Read Caching
+	 **************/
+
+	struct work_struct read_cache_work;
+	struct read_cache_cells *read_cache_cells;
+	
 	/*---------------------------------------------*/
 
 	/********************

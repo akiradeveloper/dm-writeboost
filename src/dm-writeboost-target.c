@@ -1132,9 +1132,12 @@ static int process_write(struct wb_device *wb, struct bio *bio)
 	return process_write_job(wb, bio, job);
 }
 
-#define PBD_NONE 0
-#define PBD_CELL_IDX 1
-#define PBD_SEG 2
+enum PBD_FLAG {
+	PBD_NONE = 0,
+	PBD_WILL_CACHE = 1,
+	PBD_READ_SEG = 2,
+};
+
 struct per_bio_data {
 	int type;
 	union {
@@ -1178,7 +1181,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 
 	if (likely(dirty_bits == 255)) {
 		struct per_bio_data *pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
-		pbd->type = CACHE_HIT_READ;
+		pbd->type = PBD_READ_SEG;
 		pbd->seg = res.found_seg;
 
 		bio_remap(bio, wb->cache_dev,
@@ -1228,12 +1231,11 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	switch (pbd->type) {
 	case PBD_NONE:
 		return 0;
-	case PBD_CELL_IDX:
+	case PBD_WILL_CACHE:
 		rc_cell_add_data(wb, bio);
 		return 0;
-	case PBD_SEG:
-		struct segment_header * = pbd->seg;
-		dec_inflight_ios(wb, seg);
+	case PBD_SEG_REF:
+		dec_inflight_ios(wb, pbd->seg);
 		return 0;
 	}
 }
@@ -1242,12 +1244,9 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 
 static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, struct bio *bio)
 {
-	/*
-	 * TODO Implement hash table. This is temporary.
-	 */
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i;
-	for (i = 0; i < ARRAY_SIZE(cells->array); i++) {
+	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *tmp = cells->array + i;
 		if (tmp->sector == bio_sectors(bio))
 			return tmp;
@@ -1260,6 +1259,9 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	struct per_bio_data *pbd;
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *found, *new_cell;
+
+	if (!ACCESS_ONCE(wb->read_cache_threshold))
+		return;
 
 	if (!cells->cursor)
 		return;
@@ -1276,7 +1278,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	new_cell->sector = bio_sectors(bio);
 
 	pbd = dm_per_bio_data(bio, wb->ti);
-	pbd->type = PBD_CELL_IDX;
+	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
 }
 
@@ -1300,10 +1302,11 @@ static void read_cache_cell_add_data(struct wb_device *wb, struct bio *bio)
 		schedule_work(&wb->read_cache_work);
 }
 
-static void process_write_read_cache(struct wb_device *wb, struct read_cache_cell *cell)
+static void feed_read_cache(struct wb_device *wb, struct read_cache_cell *cell)
 {
 	struct metablock *mb;
 	struct segment_header *seg;
+	
 	if (ACCESS_ONCE(cell->cancelled))
 		return;
 
@@ -1311,7 +1314,7 @@ static void process_write_read_cache(struct wb_device *wb, struct read_cache_cel
 	if (!mb_idx_inseg(wb, wb->cursor))
 		queue_current_buffer(wb);
 	mb = ht_lookup(wb, ht_get_head(wb, cell->sector), cell->sector);
-	if (mb) {
+	if (unlikely(mb)) {
 		mutex_unlock(&wb->io_lock);
 		return;
 	}
@@ -1324,7 +1327,7 @@ static void process_write_read_cache(struct wb_device *wb, struct read_cache_cel
 	atomic_dec(&seg->wb->nr_inflight_ios);
 }
 
-static void read_cache_work(struct work_struct *work)
+static void read_cache_proc(struct work_struct *work)
 {
 	struct wb_device *wb = container_of(work, struct wb_device, read_cache_work);
 	struct read_cache_cells *cells = wb->read_cache_cells;
@@ -1332,7 +1335,7 @@ static void read_cache_work(struct work_struct *work)
 	u32 i;
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		process_write_read_cache(wb, cell);
+		feed_read_cache(wb, cell);
 	}
 	reinit_read_cache_cells(cells);
 }
@@ -1340,8 +1343,8 @@ static void read_cache_work(struct work_struct *work)
 static void reinit_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells;
+	u32 cur_threshold;
 	u32 i;
-
 	cells = wb->read_cache_cells;
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
@@ -1351,32 +1354,75 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 
 	mutex_lock(&wb->io_lock);
 	cells->cursor = cells->size;
+	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
+	if (!cur_threshold && (cells->size != cur_threshold * 2))
+		realloc_read_cache_cells(wb, cur_threshold * 2);
 	mutex_unlock(&wb->io_lock);
 }
 
-static int init_read_cache_cells(struct wb_device *wb, u32 n)
+static void realloc_read_cache_cells(struct wb_device *wb, u32 n)
+{
+	struct read_cache_cells *new_cells;
+	new_cells = alloc_read_cache_cells(wb, n);
+	if (!new_cells)
+		return;
+	wb->read_cache_cells = new_cells;
+	reinit_read_cache_cells(wb);
+}
+
+static void free_read_cache_cells(struct wb_device *wb)
+{
+	struct read_cache_cells *cells = wb->cells;
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		kfree(cell->data);
+	}
+	kfree(wb->cells->array);
+	kfree(wb->cells);
+}
+
+static int alloc_read_cache_cells(struct wb_device *wb, u32 n)
 {
 	struct read_cache_cells *cells;
 	u32 i;
 	cells = kmalloc(sizeof(struct read_cache_cells), GFP_KERNEL);
 	if (!cells)
-		return -ENOMEM;
+		return NULL;
 
 	cells->size = n;
 	cells->array = kmalloc(sizeof(struct read_cache_cell) * n, GFP_KERNEL);
 	if (!cells->array)
-		return -ENOMEM;
+		goto bad_cells_array;
 
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		u32 j;
 		cell->data = kmalloc(1 << 12, GFP_KERNEL);
-		/* TODO */
-		BUG_ON(!cell->data);
-		if (!cell->data)
-			return -ENOMEM
+		if (!cell->data) {
+			u32 j;
+			for (j = 0; j < i; j++) {
+				cell = cells->array + j;
+				kfree(cell->data);
+			}
+			goto bad_cell_data;
+		}
 	}
+	return cells;
 
+bad_cell_data:
+	kfree(cells->array);
+bad_cells_array:
+	kfree(cells);	
+	return NULL;
+}
+
+static int init_read_cache_cells(struct wb_device *wb)
+{
+	struct read_cache_cells *cells;
+	cells = alloc_read_cache_cells(wb, 16);
+	if (!cells)
+		return -ENOMEM;
+	wb->read_cache_cells = cells;
+	INIT_WORK(&wb->read_cache_work, read_cache_proc);
 	reinit_read_cache_cells(wb);
 }
 
@@ -1491,6 +1537,7 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		{0, 100, "Invalid writeback_threshold"},
 		{0, 3600, "Invalid update_record_interval"},
 		{0, 3600, "Invalid sync_interval"},
+		{0, 128, "Invalid read_cache_threshold"},
 	};
 	unsigned tmp;
 
@@ -1506,6 +1553,7 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		consume_kv(writeback_threshold, 3);
 		consume_kv(update_record_interval, 4);
 		consume_kv(sync_interval, 5);
+		consume_kv(read_cache_threshold, 6);
 
 		if (!r) {
 			argc--;
@@ -1719,11 +1767,18 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_tunable_argv;
 	}
 
+	r = init_read_cache_cells(wb);
+	if (r) {
+		ri->error = "init_read_cache_cells failed";
+		goto bad_read_cache_cells;
+	}
+
 	clear_stat(wb);
 	atomic64_set(&wb->count_non_full_flushed, 0);
 
 	return r;
 
+bad_read_cache_cells:
 bad_tunable_argv:
 	free_cache(wb);
 bad_resume_cache:
@@ -1813,7 +1868,7 @@ static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
 {
 	ssize_t sz = 0;
 
-	DMEMIT(" %d", 12);
+	DMEMIT(" %d", 14);
 	DMEMIT(" allow_writeback %d",
 	       wb->allow_writeback ? 1 : 0);
 	DMEMIT(" enable_writeback_modulator %d",
@@ -1826,6 +1881,8 @@ static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
 	       wb->sync_interval);
 	DMEMIT(" update_record_interval %lu",
 	       wb->update_record_interval);
+	DMEMIT(" read_cache_threshold %u",
+	       wb->read_cache_threshold);
 }
 
 static void writeboost_status(struct dm_target *ti, status_type_t type,

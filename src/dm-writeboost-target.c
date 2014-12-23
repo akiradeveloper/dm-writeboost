@@ -441,8 +441,10 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	 * We wait for all requests to the new segment is consumed.
 	 * Mutex taken gurantees that no new I/O to this segment is coming in.
 	 */
+	DMINFO("ans we+");
 	wait_event(wb->inflight_ios_wq,
 		!atomic_read(&new_seg->nr_inflight_ios));
+	DMINFO("ans we-");
 
 	wait_for_writeback(wb, SUB_ID(id, wb->nr_segments));
 	if (count_dirty_caches_remained(new_seg)) {
@@ -483,24 +485,23 @@ static void init_flush_job(struct flush_job *job, struct wb_device *wb)
 {
 	job->wb = wb;
 	job->seg = wb->current_seg;
-	job->rambuf = wb->current_rambuf;
 
 	copy_barrier_requests(job, wb);
 }
 
 static void queue_flush_job(struct wb_device *wb)
 {
-	struct flush_job *job;
+	struct flush_job *job = &wb->current_rambuf->job;
 
 	wait_event(wb->inflight_ios_wq,
 		!atomic_read(&wb->current_seg->nr_inflight_ios));
 
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
-	job = mempool_alloc(wb->flush_job_pool, GFP_NOIO);
 	init_flush_job(job, wb);
 	INIT_WORK(&job->work, flush_proc);
 	queue_work(wb->flusher_wq, &job->work);
+	// schedule_work(&job->work);
 }
 
 static void queue_current_buffer(struct wb_device *wb)
@@ -990,6 +991,7 @@ static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
  * After returned, refcounts (in_flight_ios and in_flight_plog_writes)
  * are incremented.
  */
+static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
 static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 			      struct write_job *pos)
 {
@@ -1027,7 +1029,7 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 			dec_inflight_ios(wb, res.found_seg);
 		}
 	} else
-		might_cancel_read_cache_cell(wb, bio->bi_iter.bi_sector);
+		might_cancel_read_cache_cell(wb, bio);
 
 	prepare_new_pos(wb, bio, &res, pos);
 
@@ -1141,11 +1143,12 @@ enum PBD_FLAG {
 struct per_bio_data {
 	int type;
 	union {
-		u32 read_cell_idx;
+		u32 cell_idx;
 		struct segment_header *seg;
 	};
 };
 
+static void reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
@@ -1212,7 +1215,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 	struct per_bio_data *pbd;
 	pbd = dm_per_bio_data(bio, ti->per_bio_data_size);
-	pbd->type = NONE;
+	pbd->type = PBD_NONE;
 
 	if (bio->bi_rw & REQ_DISCARD)
 		return process_discard_bio(wb, bio);
@@ -1223,6 +1226,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
+static void read_cache_cell_copy_data(struct wb_device *, struct bio*);
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 {
 	struct wb_device *wb = ti->private;
@@ -1232,24 +1236,30 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	case PBD_NONE:
 		return 0;
 	case PBD_WILL_CACHE:
-		rc_cell_add_data(wb, bio);
+		read_cache_cell_copy_data(wb, bio);
 		return 0;
-	case PBD_SEG_REF:
+	case PBD_READ_SEG:
 		dec_inflight_ios(wb, pbd->seg);
 		return 0;
+	default:
+		BUG();
 	}
+	BUG();
 }
 
 /*----------------------------------------------------------------*/
 
-static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, struct bio *bio)
+static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, sector_t sector)
 {
+	/*
+	 * TODO data structure is too naive.
+	 */
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i;
 	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *tmp = cells->array + i;
-		if (tmp->sector == bio_sectors(bio))
-			return tmp;
+		struct read_cache_cell *cell = cells->array + i;
+		if (cell->sector == sector)
+			return cell;
 	}
 	return NULL;
 }
@@ -1260,128 +1270,126 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *found, *new_cell;
 
+	BUG_ON(!cells->threshold);
+
 	if (!ACCESS_ONCE(wb->read_cache_threshold))
 		return;
 
 	if (!cells->cursor)
 		return;
 
-	if (!is_fullsize(bio))
+	/*
+	 * We cache 4KB read data only for following reasons:
+	 * 1) Caching partial data (< 4KB) is likely meaningless.
+	 * 2) Caching partial data makes the read-caching mechanism very hard.
+	 */
+	if (!io_fullsize(bio))
 		return;
-		
-	found = lookup_read_cache_cell(wb, bio);
+
+	/*
+	 * We don't need to reserve the same adress twice
+	 * because it's either unchanged or invalidated.
+	 */
+	found = lookup_read_cache_cell(wb, bio->bi_iter.bi_sector);
 	if (found)
 		return;
 
 	cells->cursor--;
 	new_cell = cells->array + cells->cursor;
-	new_cell->sector = bio_sectors(bio);
+	new_cell->sector = bio->bi_iter.bi_sector;
 
-	pbd = dm_per_bio_data(bio, wb->ti);
+	pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
+
+	/*
+	 * TODO mark cancelled if it's seqread.
+	 */
 }
 
 static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 {
-	struct read_cache_cell *found = lookup_read_cache_cell(wb, bio);
+	struct read_cache_cell *found;
+	found = lookup_read_cache_cell(wb, calc_cache_alignment(bio->bi_iter.bi_sector));
 	if (found)
 		found->cancelled = true;
 }
 
-static void read_cache_cell_add_data(struct wb_device *wb, struct bio *bio)
+static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio)
 {
-	struct per_bio_data *pbd = dm_per_bio_data(bio, wb->ti);
+	struct per_bio_data *pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
 
+	/* DMINFO("cd"); */
+
+	/*
+	 * If the cell is cancelled for some reason such as being stale or
+	 * part of sequential read more than threshold memcpy can be skipped.
+	 */
 	if (!ACCESS_ONCE(cell->cancelled))
 		memcpy(cell->data, bio_data(bio), 1 << 12);
 
-	if (atomic_dec_and_test(&wb->rc_cells->ack_count))
-		schedule_work(&wb->read_cache_work);
+	if (atomic_dec_and_test(&cells->ack_count)) {
+		DMINFO("queue");
+		queue_work(cells->wq, &wb->read_cache_work);
+		// schedule_work(&wb->read_cache_work);
+	}
 }
 
-static void feed_read_cache(struct wb_device *wb, struct read_cache_cell *cell)
+/*
+ * Get a read cache cell through simplified write path if the cell data isn't stale.
+ */
+static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell)
 {
+	unsigned long flags;
 	struct metablock *mb;
+	u32 _mb_idx_inseg;
+	struct ht_head *head;
 	struct segment_header *seg;
-	
+
+	struct lookup_key key = {
+		.sector = cell->sector,
+	};
+
 	if (ACCESS_ONCE(cell->cancelled))
 		return;
 
 	mutex_lock(&wb->io_lock);
-	if (!mb_idx_inseg(wb, wb->cursor))
+	if (!mb_idx_inseg(wb, wb->cursor)) {
+		DMINFO("qcb stt %llu", cell->sector);
+		// wait_for_flushing(wb, wb->current_seg->id - 1);
 		queue_current_buffer(wb);
-	mb = ht_lookup(wb, ht_get_head(wb, cell->sector), cell->sector);
+		DMINFO("qcb end");
+	}
+	head = ht_get_head(wb, &key);
+	mb = ht_lookup(wb, head, &key);
 	if (unlikely(mb)) {
+		/*
+		 * Entering here will cause calling queue_current_buffer() again in the next 
+		 * iteration but it's really rare given that the cell wasn't found cancelled.
+		 */
 		mutex_unlock(&wb->io_lock);
 		return;
 	}
-	mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	seg = mb_to_seg(wb, mb);
-	atomic_inc(&seg->nr_inflight_ios);
+	seg = wb->current_seg;
+	/*
+	 * advance_cursor increments nr_inflight_ios
+	 */
+	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
+	mb = seg->mb_array + _mb_idx_inseg;
+	/* this metablock is clean and we don't have to taint it */
+	ht_register(wb, head, mb, &key);
 	mutex_unlock(&wb->io_lock);
 
-	memcpy(wb->current_rambuf + (mb_idx_inseg(wb, mb->idx) + 1) << 12, cell->data, 1 << 12);
-	atomic_dec(&seg->wb->nr_inflight_ios);
+	spin_lock_irqsave(&wb->lock, flags);
+	seg->length++;
+	spin_unlock_irqrestore(&wb->lock, flags);
+	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
+	dec_inflight_ios(wb, seg);
 }
 
-static void read_cache_proc(struct work_struct *work)
-{
-	struct wb_device *wb = container_of(work, struct wb_device, read_cache_work);
-	struct read_cache_cells *cells = wb->read_cache_cells;
-
-	u32 i;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		feed_read_cache(wb, cell);
-	}
-	reinit_read_cache_cells(cells);
-}
-
-static void reinit_read_cache_cells(struct wb_device *wb)
-{
-	struct read_cache_cells *cells;
-	u32 cur_threshold;
-	u32 i;
-	cells = wb->read_cache_cells;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		cell->cancelled = false;
-	}
-	atomic_set(&cells->ack_count, cells->size);
-
-	mutex_lock(&wb->io_lock);
-	cells->cursor = cells->size;
-	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
-	if (!cur_threshold && (cells->size != cur_threshold * 2))
-		realloc_read_cache_cells(wb, cur_threshold * 2);
-	mutex_unlock(&wb->io_lock);
-}
-
-static void realloc_read_cache_cells(struct wb_device *wb, u32 n)
-{
-	struct read_cache_cells *new_cells;
-	new_cells = alloc_read_cache_cells(wb, n);
-	if (!new_cells)
-		return;
-	wb->read_cache_cells = new_cells;
-	reinit_read_cache_cells(wb);
-}
-
-static void free_read_cache_cells(struct wb_device *wb)
-{
-	struct read_cache_cells *cells = wb->cells;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		kfree(cell->data);
-	}
-	kfree(wb->cells->array);
-	kfree(wb->cells);
-}
-
-static int alloc_read_cache_cells(struct wb_device *wb, u32 n)
+static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32 n)
 {
 	struct read_cache_cells *cells;
 	u32 i;
@@ -1389,7 +1397,14 @@ static int alloc_read_cache_cells(struct wb_device *wb, u32 n)
 	if (!cells)
 		return NULL;
 
+	cells->wq = alloc_ordered_workqueue("dmwb_rc", 0);
+	if (!cells->wq) {
+		BUG();
+		goto bad_wq;
+	}
+
 	cells->size = n;
+	cells->threshold = UINT_MAX; /* Default: every read will be cached */
 	cells->array = kmalloc(sizeof(struct read_cache_cell) * n, GFP_KERNEL);
 	if (!cells->array)
 		goto bad_cells_array;
@@ -1399,6 +1414,7 @@ static int alloc_read_cache_cells(struct wb_device *wb, u32 n)
 		cell->data = kmalloc(1 << 12, GFP_KERNEL);
 		if (!cell->data) {
 			u32 j;
+			BUG();
 			for (j = 0; j < i; j++) {
 				cell = cells->array + j;
 				kfree(cell->data);
@@ -1406,24 +1422,85 @@ static int alloc_read_cache_cells(struct wb_device *wb, u32 n)
 			goto bad_cell_data;
 		}
 	}
+	DMINFO("alloc end");
 	return cells;
 
 bad_cell_data:
 	kfree(cells->array);
 bad_cells_array:
-	kfree(cells);	
+	destroy_workqueue(cells->wq);
+bad_wq:
+	kfree(cells);
+	BUG();
 	return NULL;
+}
+
+static void free_read_cache_cells(struct wb_device *wb)
+{
+	struct read_cache_cells *cells = wb->read_cache_cells;
+	u32 i;
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		kfree(cell->data);
+	}
+	kfree(cells->array);
+	destroy_workqueue(cells->wq);
+	kfree(cells);
+}
+
+static void reinit_read_cache_cells(struct wb_device *wb)
+{
+	/*
+	 * FIXME the naive data structure can't invalidate the
+	 * cell correctly.
+	 */
+	struct read_cache_cells *cells = wb->read_cache_cells;
+	u32 i, cur_threshold;
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		cell->sector = UINT_MAX; /* tmp */
+		cell->cancelled = false;
+	}
+	atomic_set(&cells->ack_count, cells->size);
+
+	DMINFO("reinit lock");
+	mutex_lock(&wb->io_lock);
+	cells->cursor = cells->size;
+	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
+	if (cur_threshold && (cur_threshold != cells->threshold)) {
+		DMINFO("th ch %u->%u", cells->threshold, cur_threshold);
+		cells->threshold = cur_threshold;
+	}
+	mutex_unlock(&wb->io_lock);
+}
+
+static void read_cache_proc(struct work_struct *work)
+{
+	struct wb_device *wb = container_of(work, struct wb_device, read_cache_work);
+	struct read_cache_cells *cells = wb->read_cache_cells;
+	DMINFO("read cache proc");
+	u32 i;
+	for (i = 0; i < cells->size; i++) { /* FIXME better to be reverse order */
+		struct read_cache_cell *cell = cells->array + i;
+		/* DMINFO("inject %u %llu", i, cell->sector); */
+		inject_read_cache(wb, cell);
+	}
+	DMINFO("inject end");
+	reinit_read_cache_cells(wb);
+	DMINFO("reinit end");
 }
 
 static int init_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells;
-	cells = alloc_read_cache_cells(wb, 16);
+	INIT_WORK(&wb->read_cache_work, read_cache_proc);
+	cells = alloc_read_cache_cells(wb, 2000); /* 8MB */
 	if (!cells)
 		return -ENOMEM;
 	wb->read_cache_cells = cells;
-	INIT_WORK(&wb->read_cache_work, read_cache_proc);
 	reinit_read_cache_cells(wb);
+	DMINFO("init end %u", cells->threshold);
+	return 0;
 }
 
 /*----------------------------------------------------------------*/
@@ -1761,6 +1838,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_resume_cache;
 	}
 
+	wb->read_cache_threshold = 0; /* Default: read-caching disabled */
 	r = consume_tunable_argv(wb, &as);
 	if (r) {
 		ti->error = "consume_tunable_argv failed";
@@ -1769,7 +1847,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	r = init_read_cache_cells(wb);
 	if (r) {
-		ri->error = "init_read_cache_cells failed";
+		ti->error = "init_read_cache_cells failed";
 		goto bad_read_cache_cells;
 	}
 
@@ -1795,6 +1873,8 @@ bad_essential_argv:
 static void writeboost_dtr(struct dm_target *ti)
 {
 	struct wb_device *wb = ti->private;
+
+	free_read_cache_cells(wb);
 
 	free_cache(wb);
 

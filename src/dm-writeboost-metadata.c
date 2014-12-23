@@ -1698,26 +1698,13 @@ static int init_flusher(struct wb_device *wb)
 	 * Otherwise name conflict occurs when more than
 	 * one devices are created.
 	 */
-	wb->flusher_wq = alloc_workqueue(
-		"dmwb_flusher", WQ_MEM_RECLAIM, 1);
+	wb->flusher_wq = alloc_ordered_workqueue("dmwb_flusher", 0);
 	if (!wb->flusher_wq) {
 		DMERR("Failed to allocate flusher");
 		return -ENOMEM;
 	}
 
-	wb->flush_job_pool = mempool_create_kmalloc_pool(
-		wb->nr_rambuf_pool, sizeof(struct flush_job));
-	if (!wb->flush_job_pool) {
-		r = -ENOMEM;
-		DMERR("Failed to allocate flush_job_pool");
-		goto bad_flush_job_pool;
-	}
-
 	init_waitqueue_head(&wb->flush_wait_queue);
-	return r;
-
-bad_flush_job_pool:
-	destroy_workqueue(wb->flusher_wq);
 	return r;
 }
 
@@ -1824,7 +1811,6 @@ bad_recorder_daemon:
 bad_writeback_modulator:
 	cancel_work_sync(&wb->flush_barrier_work);
 
-	mempool_destroy(wb->flush_job_pool);
 	destroy_workqueue(wb->flusher_wq);
 bad_flusher:
 bad_recover:
@@ -1850,7 +1836,6 @@ void free_cache(struct wb_device *wb)
 
 	cancel_work_sync(&wb->flush_barrier_work);
 
-	mempool_destroy(wb->flush_job_pool);
 	destroy_workqueue(wb->flusher_wq);
 
 	kthread_stop(wb->writeback_daemon);

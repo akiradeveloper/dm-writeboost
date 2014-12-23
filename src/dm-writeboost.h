@@ -158,14 +158,6 @@ struct write_job {
 };
 
 /*
- * RAM buffer is a buffer that any dirty data are first written to.
- * Type member in wb_device indicates the buffer type.
- */
-struct rambuffer {
-	void *data; /* The DRAM buffer. Used as the buffer to submit I/O */
-};
-
-/*
  * Object to be consumed by wbflusher
  * Foreground queues this object and wbflusher later pops
  * one job to submit journal write to the cache device.
@@ -174,8 +166,16 @@ struct flush_job {
 	struct work_struct work;
 	struct wb_device *wb;
 	struct segment_header *seg;
-	struct rambuffer *rambuf; /* RAM buffer to flush */
 	struct bio_list barrier_ios; /* List of deferred bios */
+};
+
+/*
+ * RAM buffer is a buffer that any dirty data are first written to.
+ * Type member in wb_device indicates the buffer type.
+ */
+struct rambuffer {
+	void *data; /* The DRAM buffer. Used as the buffer to submit I/O */
+	struct flush_job job;
 };
 
 /*----------------------------------------------------------------*/
@@ -257,15 +257,16 @@ struct writeback_segment {
 struct read_cache_cell {
 	sector_t sector;
 	void *data;
-	int cancelled; /* Don't include this */ 
+	int cancelled; /* Don't include this */
 };
 
 struct read_cache_cells {
 	u32 size;
+	u32 threshold;
 	struct read_cache_cell *array;
 	u32 cursor;
 	atomic_t ack_count;
-	u32 read_cache_threshold;
+	struct workqueue_struct *wq;
 };
 
 /*----------------------------------------------------------------*/
@@ -488,7 +489,8 @@ struct wb_device {
 
 	struct work_struct read_cache_work;
 	struct read_cache_cells *read_cache_cells;
-	
+	u32 read_cache_threshold;
+
 	/*---------------------------------------------*/
 
 	/********************

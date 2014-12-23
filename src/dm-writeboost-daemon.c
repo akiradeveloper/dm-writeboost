@@ -65,6 +65,7 @@ void flush_proc(struct work_struct *work)
 	int r = 0;
 
 	struct flush_job *job = container_of(work, struct flush_job, work);
+	struct rambuffer *rambuf = container_of(job, struct rambuffer, job);
 
 	struct wb_device *wb = job->wb;
 	struct segment_header *seg = job->seg;
@@ -74,7 +75,7 @@ void flush_proc(struct work_struct *work)
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = job->rambuf->data,
+		.mem.ptr.addr = rambuf->data,
 	};
 	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
@@ -82,11 +83,18 @@ void flush_proc(struct work_struct *work)
 		.count = (seg->length + 1) << 3,
 	};
 
+	BUG_ON(!wb);
+	BUG_ON(!wb->io_client);
+	BUG_ON(!seg);
+	BUG_ON(!job->rambuf);
+	BUG_ON(!job->rambuf->data);
+	DMINFO("%u", seg->length);
+
 	/*
 	 * The actual write requests to the cache device are not serialized.
 	 * They may perform in parallel.
 	 */
-	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, false));
+	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, true));
 
 	/*
 	 * Deferred ACK for barrier requests
@@ -94,6 +102,7 @@ void flush_proc(struct work_struct *work)
 	 * segment to be persistently written (if needed).
 	 */
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
+	DMINFO("prev seg flushed %llu", seg->id);
 
 	process_deferred_barriers(wb, job);
 
@@ -103,8 +112,6 @@ void flush_proc(struct work_struct *work)
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
-
-	mempool_free(job, wb->flush_job_pool);
 }
 
 void wait_for_flushing(struct wb_device *wb, u64 id)

@@ -83,18 +83,11 @@ void flush_proc(struct work_struct *work)
 		.count = (seg->length + 1) << 3,
 	};
 
-	BUG_ON(!wb);
-	BUG_ON(!wb->io_client);
-	BUG_ON(!seg);
-	BUG_ON(!job->rambuf);
-	BUG_ON(!job->rambuf->data);
-	DMINFO("%u", seg->length);
-
 	/*
 	 * The actual write requests to the cache device are not serialized.
 	 * They may perform in parallel.
 	 */
-	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, true));
+	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 	/*
 	 * Deferred ACK for barrier requests
@@ -102,7 +95,6 @@ void flush_proc(struct work_struct *work)
 	 * segment to be persistently written (if needed).
 	 */
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
-	DMINFO("prev seg flushed %llu", seg->id);
 
 	process_deferred_barriers(wb, job);
 

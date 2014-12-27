@@ -11,6 +11,8 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+#include "linux/sort.h"
+
 /*----------------------------------------------------------------*/
 
 void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
@@ -1249,19 +1251,58 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 
 /*----------------------------------------------------------------*/
 
+static struct hlist_head *read_cache_get_head(struct read_cache_cells *cells, sector_t sector)
+{
+	u32 i;
+	div_u64_rem(sector >> 3, cells->size, &i);
+	return cells->heads + i;
+}
+
+static void read_cache_add(struct read_cache_cells *cells, struct read_cache_cell *cell)
+{
+	hlist_add_head(&cell->list, read_cache_get_head(cells, cell->sector));
+}
+
 static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, sector_t sector)
 {
-	/*
-	 * TODO data structure is too naive.
-	 */
-	struct read_cache_cells *cells = wb->read_cache_cells;
-	u32 i;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
+	struct read_cache_cell *cell;
+	hlist_for_each_entry(cell, read_cache_get_head(wb->read_cache_cells, sector), list) {
 		if (cell->sector == sector)
 			return cell;
 	}
 	return NULL;
+}
+
+static void read_cache_cancel_cells(struct read_cache_cells *cells, u32 n)
+{
+	u32 i;
+	u32 last = cells->cursor + cells->seqcount;
+	if (last > cells->size)
+		last = cells->size;
+	for (i = cells->cursor; i < last; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		cell->cancelled = true;
+	}
+}
+
+static void read_cache_cancel_foreground(struct read_cache_cells *cells, struct read_cache_cell *new_cell)
+{
+	if (new_cell->sector == cells->last_address + 8)
+		cells->seqcount++;
+	else {
+		cells->seqcount = 1;
+		cells->over_threshold = false;
+	}
+
+	if (cells->seqcount > cells->threshold) {
+		if (cells->over_threshold)
+			new_cell->cancelled = true;
+		else {
+			cells->over_threshold = true;
+			read_cache_cancel_cells(cells, cells->seqcount);
+		}
+	}
+	cells->last_address = new_cell->sector;
 }
 
 static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
@@ -1297,14 +1338,13 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	cells->cursor--;
 	new_cell = cells->array + cells->cursor;
 	new_cell->sector = bio->bi_iter.bi_sector;
+	read_cache_add(cells, new_cell);
 
 	pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
 
-	/*
-	 * TODO mark cancelled if it's seqread.
-	 */
+	read_cache_cancel_foreground(cells, new_cell->sector);
 }
 
 static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
@@ -1397,7 +1437,7 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 	if (!cells)
 		return NULL;
 
-	cells->wq = alloc_ordered_workqueue("dmwb_rc", 0);
+	cells->wq = alloc_ordered_workqueue("dmwb_read_cache", 0);
 	if (!cells->wq) {
 		BUG();
 		goto bad_wq;
@@ -1405,16 +1445,29 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 
 	cells->size = n;
 	cells->threshold = UINT_MAX; /* Default: every read will be cached */
+	cells->last_address = ~0;
+	cells->seqcount = 0;
+	cells->over_threshold = false;
 	cells->array = kmalloc(sizeof(struct read_cache_cell) * n, GFP_KERNEL);
 	if (!cells->array)
 		goto bad_cells_array;
 
+	cells->heads = kmalloc(sizeof(struct hlist_head) * cells->size, GFP_KERNEL);
+	if (!cells->heads)
+		goto bad_cells_heads;
+
+	for (i = 0; i < cells->size; i++) {
+		struct hlist_head *head = cells->heads + i;
+		INIT_HLIST_HEAD(head);
+	}
+
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
 		cell->data = kmalloc(1 << 12, GFP_KERNEL);
+		INIT_HLIST_NODE(&cell->list);
+		hlist_add_head(&cell->list, cells->heads + 0);
 		if (!cell->data) {
 			u32 j;
-			BUG();
 			for (j = 0; j < i; j++) {
 				cell = cells->array + j;
 				kfree(cell->data);
@@ -1422,11 +1475,14 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 			goto bad_cell_data;
 		}
 	}
+
 	DMINFO("alloc end");
 	return cells;
 
 bad_cell_data:
 	kfree(cells->array);
+bad_cells_heads:
+	kfree(cells->heads);
 bad_cells_array:
 	destroy_workqueue(cells->wq);
 bad_wq:
@@ -1450,16 +1506,12 @@ static void free_read_cache_cells(struct wb_device *wb)
 
 static void reinit_read_cache_cells(struct wb_device *wb)
 {
-	/*
-	 * FIXME the naive data structure can't invalidate the
-	 * cell correctly.
-	 */
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i, cur_threshold;
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		cell->sector = UINT_MAX; /* tmp */
 		cell->cancelled = false;
+		hlist_del(&cell->list);
 	}
 	atomic_set(&cells->ack_count, cells->size);
 
@@ -1470,8 +1522,13 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
 		DMINFO("th ch %u->%u", cells->threshold, cur_threshold);
 		cells->threshold = cur_threshold;
+		cells->over_threshold = false;
 	}
 	mutex_unlock(&wb->io_lock);
+}
+
+static void read_cache_cancel_background(struct read_cache_cells *cells)
+{
 }
 
 static void read_cache_proc(struct work_struct *work)
@@ -1479,6 +1536,9 @@ static void read_cache_proc(struct work_struct *work)
 	struct wb_device *wb = container_of(work, struct wb_device, read_cache_work);
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	DMINFO("read cache proc");
+
+	read_cache_cancel_background(cells);
+
 	u32 i;
 	for (i = 0; i < cells->size; i++) { /* FIXME better to be reverse order */
 		struct read_cache_cell *cell = cells->array + i;

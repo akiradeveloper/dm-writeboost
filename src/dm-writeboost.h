@@ -262,7 +262,7 @@ struct read_cache_cell {
 
 	/* for background cancellation */
 	u32 rank;
-	u32 rank_perm_idx;
+	u32 rank_idx;
 };
 
 struct read_cache_cells {

@@ -1527,8 +1527,90 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	mutex_unlock(&wb->io_lock);
 }
 
+static int cmp_read_cache_cells(const void *p1, const void *p2)
+{
+	struct read_cache_cell *cell1, *cell2;
+	cell1 = p1;
+	cell2 = p2;
+	return cell2->sector - cell1->sector;
+}
+
+static void swap_read_cache_cells(void *p1, void *p2, int size)
+{
+	u32 tmp;
+	struct read_cache_cell *cell1, *cell2;
+	cell1 = p1;
+	cell2 = p2;
+	tmp = cell1->rank;
+	cell1->rank = cell2->rank;
+	cell2->rank = tmp;
+}
+
+static void prepare_rank_indices(struct read_cache_cells *cells) 
+{
+	struct read_cache_cell *tmp;
+	u32 i;
+	for (i = 0; i < cells->size; i++) {
+		tmp = cells->array + i;
+		tmp->rank = i; // tmp
+		//cell->rank = (cell->size - i); // use this
+	}
+
+	sort(cells->array, cells->size, sizeof(struct read_cache_cell),
+	     cmp_read_cache_cells, swap_read_cache_cells);
+
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell;
+		tmp = cells->array + i;
+		cell = cells->array + tmp->rank;
+		cell->rand_idx = i; // cells[rank] = i;
+	}
+}
+
+/*
+ * Cancel range [first, last) if seqcount > threshold
+ */
+static void do_cancel_seq_cells(struct read_cache_cells *cells,
+				u32 first, u32 last, u32 seqcount)
+{
+	if (seqcount > cells->threshold) {
+		u32 i;
+		for (i = first; i < last; i++) {
+			struct read_cache_cell *tmp, *cell;
+			tmp = cells->array + i;
+			cell->cancelled = true;
+		}
+	}
+}
+
+static void cancel_seq_cells(struct read_cache_cells *cells)
+{
+	u32 last_idx = -1; // FIXME -1 + 1 = 0? should use signed value (or use u16 as idx)
+	u32 seqcount = 0; /* [last_idx, last_idx + seqcont) is sequential */
+	u32 last_sector = ~0;
+
+	u32 i;
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *tmp, *cell;
+		tmp = cells->array + i;
+		cell = tmp->rank_idx;
+
+		if (cell->sector == last_sector + 8) 
+			seqcount++;
+		else {
+			do_cancel_seq_cells(cells, last_idx, i, seqcount);
+			last_idx = i + 1; 
+			seqcount = 1;
+		}
+		last_sector = cell->sector;
+	}
+	do_cancel_seq_cells(cells, last_idx, i, seqcount);
+}
+
 static void read_cache_cancel_background(struct read_cache_cells *cells)
 {
+	prepare_rank_indices(cells);
+	cancel_seq_cells(cells);
 }
 
 static void read_cache_proc(struct work_struct *work)

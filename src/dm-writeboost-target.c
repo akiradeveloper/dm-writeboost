@@ -1282,6 +1282,7 @@ static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, sect
 		parent_cell = read_cache_cell_from_node(parent);
 		if (parent_cell->sector == sector)
 			return parent_cell;
+
 		if (sector < parent_cell->sector)
 			rbp = &(*rbp)->rb_left;
 		else
@@ -1302,9 +1303,10 @@ static void read_cache_cancel_cells(struct read_cache_cells *cells, u32 n)
 	}
 }
 
-static void read_cache_cancel_foreground(struct read_cache_cells *cells, struct read_cache_cell *new_cell)
+static void read_cache_cancel_foreground(struct read_cache_cells *cells,
+					 struct read_cache_cell *new_cell)
 {
-	if (new_cell->sector == cells->last_address + 8)
+	if (new_cell->sector == (cells->last_address + 8))
 		cells->seqcount++;
 	else {
 		cells->seqcount = 1;
@@ -1378,8 +1380,6 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
 
-	/* DMINFO("cd"); */
-
 	/*
 	 * If the cell is cancelled for some reason such as being stale or
 	 * part of sequential read more than threshold memcpy can be skipped.
@@ -1390,7 +1390,6 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio)
 	if (atomic_dec_and_test(&cells->ack_count)) {
 		DMINFO("queue");
 		queue_work(cells->wq, &wb->read_cache_work);
-		// schedule_work(&wb->read_cache_work);
 	}
 }
 
@@ -1531,96 +1530,38 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	mutex_unlock(&wb->io_lock);
 }
 
-#if 0
-static int cmp_read_cache_cells(const void *p1, const void *p2)
+static void visit_and_cancel_cells(struct rb_node *first, struct rb_node *last)
 {
-	const struct read_cache_cell *cell1 = p1, *cell2 = p2;
-	BUG_ON(!cell1);
-	BUG_ON(!cell2);
-	if (cell1->sector < cell2->sector)
-		return -1;
-	else if (cell1->sector > cell2->sector)
-		return 1;
-	else
-		return 0;
-}
-
-static void swap_read_cache_cells(void *p1, void *p2, int size)
-{
-	struct read_cache_cell *cell1 = p1, *cell2 = p2;
-	BUG_ON(!cell1);
-	BUG_ON(!cell2);
-	u32 tmp = cell1->rank;
-	cell1->rank = cell2->rank;
-	cell2->rank = tmp;
-}
-
-static void prepare_rank_indices(struct read_cache_cells *cells)
-{
-	u32 i;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		cell->rank = i; // tmp
-		//cell->rank = (cell->size - i); // use this
+	struct rb_node *rbp = first;
+	while (rbp != last) {
+		struct read_cache_cell *cell = read_cache_cell_from_node(rbp);
+		cell->cancelled = true;
+		rbp = rb_next(rbp);
 	}
-
-	sort(cells->array, cells->size, sizeof(struct read_cache_cell),
-	     cmp_read_cache_cells, swap_read_cache_cells);
-
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell;
-		cell = cells->array + i;
-		DMINFO("%u:%llu:%u", i, cell->sector, cell->rank);
-		cell = cells->array + cell->rank;
-		cell->rank_idx = i; // cells[rank] = i;
-	}
-}
-
-/*
- * Cancel range [first, last) if seqcount > threshold
- */
-static void do_cancel_seq_cells(struct read_cache_cells *cells,
-				u32 first, u32 last, u32 seqcount)
-{
-	if (seqcount > cells->threshold) {
-		u32 i;
-		for (i = first; i < last; i++) {
-			struct read_cache_cell *cell;
-			cell = cells->array + i;
-			cell = cells->array + cell->rank_idx;
-			cell->cancelled = true;
-		}
-	}
-}
-
-static void cancel_seq_cells(struct read_cache_cells *cells)
-{
-	s32 last_idx = -1;
-	u32 seqcount = 0; /* [last_idx, last_idx + seqcount) is sequential */
-	u32 last_sector = ~0;
-
-	u32 i;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		cell = cells->array + cell->rank_idx;
-		if (cell->sector == last_sector + 8)
-			seqcount++;
-		else {
-			do_cancel_seq_cells(cells, last_idx, i, seqcount);
-			last_idx = i + 1;
-			seqcount = 1;
-		}
-		last_sector = cell->sector;
-	}
-	do_cancel_seq_cells(cells, last_idx, i, seqcount);
 }
 
 static void read_cache_cancel_background(struct read_cache_cells *cells)
 {
-	prepare_rank_indices(cells);
-	cancel_seq_cells(cells);
+	struct rb_node *rbp = rb_first(&wb->read_cache_cells->rb_root);
+	struct rb_node *seqhead = rbp;
+	sector_t last_sector = ~0;
+
+	while (*rbp) {
+		struct read_cache_cell *cell = read_cache_cell_from_node(rbp);
+		if (cell->sector == (last_sector + 8))
+			seqcount++;
+		else {
+			if (seqcount > cells->threshold)
+				visit_and_cancel_cells(seqhead, rbp);
+			seqcount = 1;
+			seqhead = rbp;
+		}
+		last_sector = cell->sector;
+		rbp = rb_next(rbp);
+	}
+	if (seqcount > cells->threshold)
+		visit_and_cancel_cells(seqhead, rbp);
 }
-#endif 
 
 static void read_cache_proc(struct work_struct *work)
 {
@@ -1630,7 +1571,7 @@ static void read_cache_proc(struct work_struct *work)
 
 	DMINFO("read cache proc");
 
-	// read_cache_cancel_background(cells);
+	read_cache_cancel_background(cells);
 
 	for (i = 0; i < cells->size; i++) { /* FIXME better to be reverse order */
 		struct read_cache_cell *cell = cells->array + i;

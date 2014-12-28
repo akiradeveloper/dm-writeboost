@@ -258,11 +258,7 @@ struct read_cache_cell {
 	sector_t sector;
 	void *data;
 	int cancelled; /* Don't include this */
-	struct hlist_node list;
-
-	/* for background cancellation */
-	u32 rank;
-	u32 rank_idx;
+	struct rb_node rb_node;
 };
 
 struct read_cache_cells {
@@ -272,7 +268,7 @@ struct read_cache_cells {
 	u32 seqcount;
 	bool over_threshold;
 	struct read_cache_cell *array;
-	struct hlist_head *heads;
+	struct rb_root rb_root;
 	u32 cursor;
 	atomic_t ack_count;
 	struct workqueue_struct *wq;

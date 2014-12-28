@@ -1251,24 +1251,41 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 
 /*----------------------------------------------------------------*/
 
-static struct hlist_head *read_cache_get_head(struct read_cache_cells *cells, sector_t sector)
-{
-	u32 i;
-	div_u64_rem(sector >> 3, cells->size, &i);
-	return cells->heads + i;
-}
+#define read_cache_cell_from_node(node) rb_entry((node), struct read_cache_cell, rb_node)
 
 static void read_cache_add(struct read_cache_cells *cells, struct read_cache_cell *cell)
 {
-	hlist_add_head(&cell->list, read_cache_get_head(cells, cell->sector));
+	struct rb_node **rbp, *parent;
+	rbp = &cells->rb_root.rb_node;
+	parent = NULL;
+	while (*rbp) {
+		struct read_cache_cell *parent_cell;
+		parent = *rbp;
+		parent_cell = read_cache_cell_from_node(parent);
+		if (cell->sector < parent_cell->sector)
+			rbp = &(*rbp)->rb_left;
+		else
+			rbp = &(*rbp)->rb_right;
+	}
+	rb_link_node(&cell->rb_node, parent, rbp);
+	rb_insert_color(&cell->rb_node, &cells->rb_root);
 }
 
 static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, sector_t sector)
 {
-	struct read_cache_cell *cell;
-	hlist_for_each_entry(cell, read_cache_get_head(wb->read_cache_cells, sector), list) {
-		if (cell->sector == sector)
-			return cell;
+	struct rb_node **rbp, *parent;
+	rbp = &wb->read_cache_cells->rb_root.rb_node;
+	parent = NULL;
+	while (*rbp) {
+		struct read_cache_cell *parent_cell;
+		parent = *rbp;
+		parent_cell = read_cache_cell_from_node(parent);
+		if (parent_cell->sector == sector)
+			return parent_cell;
+		if (sector < parent_cell->sector)
+			rbp = &(*rbp)->rb_left;
+		else
+			rbp = &(*rbp)->rb_right;
 	}
 	return NULL;
 }
@@ -1344,7 +1361,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
 
-	read_cache_cancel_foreground(cells, new_cell->sector);
+	read_cache_cancel_foreground(cells, new_cell);
 }
 
 static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
@@ -1397,7 +1414,7 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 
 	mutex_lock(&wb->io_lock);
 	if (!mb_idx_inseg(wb, wb->cursor)) {
-		DMINFO("qcb stt %llu", cell->sector);
+		DMINFO("qcb stt");
 		// wait_for_flushing(wb, wb->current_seg->id - 1);
 		queue_current_buffer(wb);
 		DMINFO("qcb end");
@@ -1452,20 +1469,9 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 	if (!cells->array)
 		goto bad_cells_array;
 
-	cells->heads = kmalloc(sizeof(struct hlist_head) * cells->size, GFP_KERNEL);
-	if (!cells->heads)
-		goto bad_cells_heads;
-
-	for (i = 0; i < cells->size; i++) {
-		struct hlist_head *head = cells->heads + i;
-		INIT_HLIST_HEAD(head);
-	}
-
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
 		cell->data = kmalloc(1 << 12, GFP_KERNEL);
-		INIT_HLIST_NODE(&cell->list);
-		hlist_add_head(&cell->list, cells->heads + 0);
 		if (!cell->data) {
 			u32 j;
 			for (j = 0; j < i; j++) {
@@ -1481,8 +1487,6 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 
 bad_cell_data:
 	kfree(cells->array);
-bad_cells_heads:
-	kfree(cells->heads);
 bad_cells_array:
 	destroy_workqueue(cells->wq);
 bad_wq:
@@ -1511,12 +1515,12 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
 		cell->cancelled = false;
-		hlist_del(&cell->list);
 	}
 	atomic_set(&cells->ack_count, cells->size);
 
 	DMINFO("reinit lock");
 	mutex_lock(&wb->io_lock);
+	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
 	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
@@ -1527,32 +1531,36 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	mutex_unlock(&wb->io_lock);
 }
 
+#if 0
 static int cmp_read_cache_cells(const void *p1, const void *p2)
 {
-	struct read_cache_cell *cell1, *cell2;
-	cell1 = p1;
-	cell2 = p2;
-	return cell2->sector - cell1->sector;
+	const struct read_cache_cell *cell1 = p1, *cell2 = p2;
+	BUG_ON(!cell1);
+	BUG_ON(!cell2);
+	if (cell1->sector < cell2->sector)
+		return -1;
+	else if (cell1->sector > cell2->sector)
+		return 1;
+	else
+		return 0;
 }
 
 static void swap_read_cache_cells(void *p1, void *p2, int size)
 {
-	u32 tmp;
-	struct read_cache_cell *cell1, *cell2;
-	cell1 = p1;
-	cell2 = p2;
-	tmp = cell1->rank;
+	struct read_cache_cell *cell1 = p1, *cell2 = p2;
+	BUG_ON(!cell1);
+	BUG_ON(!cell2);
+	u32 tmp = cell1->rank;
 	cell1->rank = cell2->rank;
 	cell2->rank = tmp;
 }
 
-static void prepare_rank_indices(struct read_cache_cells *cells) 
+static void prepare_rank_indices(struct read_cache_cells *cells)
 {
-	struct read_cache_cell *tmp;
 	u32 i;
 	for (i = 0; i < cells->size; i++) {
-		tmp = cells->array + i;
-		tmp->rank = i; // tmp
+		struct read_cache_cell *cell = cells->array + i;
+		cell->rank = i; // tmp
 		//cell->rank = (cell->size - i); // use this
 	}
 
@@ -1561,9 +1569,10 @@ static void prepare_rank_indices(struct read_cache_cells *cells)
 
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell;
-		tmp = cells->array + i;
-		cell = cells->array + tmp->rank;
-		cell->rand_idx = i; // cells[rank] = i;
+		cell = cells->array + i;
+		DMINFO("%u:%llu:%u", i, cell->sector, cell->rank);
+		cell = cells->array + cell->rank;
+		cell->rank_idx = i; // cells[rank] = i;
 	}
 }
 
@@ -1576,8 +1585,9 @@ static void do_cancel_seq_cells(struct read_cache_cells *cells,
 	if (seqcount > cells->threshold) {
 		u32 i;
 		for (i = first; i < last; i++) {
-			struct read_cache_cell *tmp, *cell;
-			tmp = cells->array + i;
+			struct read_cache_cell *cell;
+			cell = cells->array + i;
+			cell = cells->array + cell->rank_idx;
 			cell->cancelled = true;
 		}
 	}
@@ -1585,21 +1595,19 @@ static void do_cancel_seq_cells(struct read_cache_cells *cells,
 
 static void cancel_seq_cells(struct read_cache_cells *cells)
 {
-	u32 last_idx = -1; // FIXME -1 + 1 = 0? should use signed value (or use u16 as idx)
-	u32 seqcount = 0; /* [last_idx, last_idx + seqcont) is sequential */
+	s32 last_idx = -1;
+	u32 seqcount = 0; /* [last_idx, last_idx + seqcount) is sequential */
 	u32 last_sector = ~0;
 
 	u32 i;
 	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *tmp, *cell;
-		tmp = cells->array + i;
-		cell = tmp->rank_idx;
-
-		if (cell->sector == last_sector + 8) 
+		struct read_cache_cell *cell = cells->array + i;
+		cell = cells->array + cell->rank_idx;
+		if (cell->sector == last_sector + 8)
 			seqcount++;
 		else {
 			do_cancel_seq_cells(cells, last_idx, i, seqcount);
-			last_idx = i + 1; 
+			last_idx = i + 1;
 			seqcount = 1;
 		}
 		last_sector = cell->sector;
@@ -1612,16 +1620,18 @@ static void read_cache_cancel_background(struct read_cache_cells *cells)
 	prepare_rank_indices(cells);
 	cancel_seq_cells(cells);
 }
+#endif 
 
 static void read_cache_proc(struct work_struct *work)
 {
 	struct wb_device *wb = container_of(work, struct wb_device, read_cache_work);
 	struct read_cache_cells *cells = wb->read_cache_cells;
+	u32 i;
+
 	DMINFO("read cache proc");
 
-	read_cache_cancel_background(cells);
+	// read_cache_cancel_background(cells);
 
-	u32 i;
 	for (i = 0; i < cells->size; i++) { /* FIXME better to be reverse order */
 		struct read_cache_cell *cell = cells->array + i;
 		/* DMINFO("inject %u %llu", i, cell->sector); */
@@ -1636,7 +1646,7 @@ static int init_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells;
 	INIT_WORK(&wb->read_cache_work, read_cache_proc);
-	cells = alloc_read_cache_cells(wb, 2000); /* 8MB */
+	cells = alloc_read_cache_cells(wb, 2048); /* 8MB */
 	if (!cells)
 		return -ENOMEM;
 	wb->read_cache_cells = cells;

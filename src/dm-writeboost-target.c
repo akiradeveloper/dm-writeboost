@@ -1542,11 +1542,12 @@ static void visit_and_cancel_cells(struct rb_node *first, struct rb_node *last)
 
 static void read_cache_cancel_background(struct read_cache_cells *cells)
 {
-	struct rb_node *rbp = rb_first(&wb->read_cache_cells->rb_root);
+	struct rb_node *rbp = rb_first(&cells->rb_root);
 	struct rb_node *seqhead = rbp;
 	sector_t last_sector = ~0;
+	u32 seqcount = 0;
 
-	while (*rbp) {
+	while (rbp) {
 		struct read_cache_cell *cell = read_cache_cell_from_node(rbp);
 		if (cell->sector == (last_sector + 8))
 			seqcount++;

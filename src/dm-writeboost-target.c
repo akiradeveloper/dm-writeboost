@@ -1708,7 +1708,7 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		{0, 100, "Invalid writeback_threshold"},
 		{0, 3600, "Invalid update_record_interval"},
 		{0, 3600, "Invalid sync_interval"},
-		{0, 128, "Invalid read_cache_threshold"},
+		{0, 127, "Invalid read_cache_threshold"},
 	};
 	unsigned tmp;
 

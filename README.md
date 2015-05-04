@@ -16,12 +16,13 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 * **Fast**: Since the sequential write is the best I/O pattern for every SSD and the code base is optimized for
   in-coming random writes, the write performance is the best of all caching drivers including dm-cache and
   bcache.  
+* **Portable**: Kernel version 3.10 or later is supported with minimum compile-time macros.
 
 ## Usage
-- Install: `sudo make install` to install and `sudo make uninstall` to uninstall.
+- **Install**: `sudo make install` to install and `sudo make uninstall` to uninstall.
   `sudo make uninstall MODULE_VERSION=xxx` can uninstall specific version that's installed.
   DKMS is required so please install it beforehand. (usually avaiable in package system)
-- Making device: Make a script to build a caching device. Please read doc/dm-writeboost-readme.txt for
+- **Make a device**: Make a script to build a caching device. Please read doc/dm-writeboost-readme.txt for
   the dmsetup command detail.
   You also need to rebuild the caching device after reboot. To do this, cron's @reboot
   is recommended but you can use systemd or sysvinit. Note you don't need to prepare anything

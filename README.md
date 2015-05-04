@@ -17,7 +17,17 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   in-coming random writes, the write performance is the best of all caching drivers including dm-cache and
   bcache.  
 
-## References
+## Usage
+- Install: `sudo make install` to install and `sudo make uninstall` to uninstall.
+  `sudo make uninstall MODULE_VERSION=xxx` can uninstall specific version that's installed.
+  DKMS is required so please install it beforehand. (usually avaiable in package system)
+- Making device: Make a script to build a caching device. Please read doc/dm-writeboost-readme.txt for
+  the dmsetup command detail.
+  You also need to rebuild the caching device after reboot. To do this, cron's @reboot
+  is recommended but you can use systemd or sysvinit. Note you don't need to prepare anything
+  for system shutdown because dm-writeboost is even durable even against sudden power failure.
+
+## Related works
 * Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
   (http://www.ele.uri.edu/research/hpcl/DCD/DCD.html)  
 * G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)

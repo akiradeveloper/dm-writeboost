@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2014 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
  */
@@ -24,11 +24,11 @@
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 #define SUB_ID(x, y) ((x) > (y) ? (x) - (y) : 0)
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * The detail of the disk format (SSD)
@@ -47,13 +47,13 @@
  * data[0] (4KB) + data[1] + ... + data[nr_cache_inseg - 1]
  */
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * Superblock Header (Immutable)
  * -----------------------------
- * First one sector of the super block region whose value
- * is unchanged after formatted.
+ * First one sector of the super block region whose value is unchanged after
+ * formatted.
  */
 #define WB_MAGIC 0x57427374 /* Magic number "WBst" */
 struct superblock_header_device {
@@ -64,19 +64,18 @@ struct superblock_header_device {
 /*
  * Superblock Record (Mutable)
  * ---------------------------
- * Last one sector of the superblock region.
- * Record the current cache status if required.
+ * Last one sector of the superblock region. Record the current cache status if
+ * required.
  */
 struct superblock_record_device {
 	__le64 last_writeback_segment_id;
 } __packed;
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
- * The size must be a factor of one sector to avoid starddling
- * neighboring two sectors.
- * Facebook's flashcache does the same thing.
+ * The size must be a factor of one sector to avoid starddling neighboring two
+ * sectors.
  */
 struct metablock_device {
 	__le64 sector;
@@ -89,18 +88,17 @@ struct metablock_device {
 struct segment_header_device {
 	/*
 	 * We assume 1 sector write is atomic.
-	 * This 1 sector region contains important information
-	 * such as checksum of the rest of the segment data.
-	 * We use 32bit checksum to audit if the segment is
-	 * correctly written to the cache device.
+	 * This 1 sector region contains important information such as checksum
+	 * of the rest of the segment data. We use 32bit checksum to audit if
+	 * the segment is correctly written to the cache device.
 	 */
 	/* - FROM ------------------------------------ */
 	__le64 id;
 	/* TODO Add timestamp? */
 	__le32 checksum;
 	/*
-	 * The number of metablocks in this segment header to be
-	 * considered in log replay. Note: 0 is allowed.
+	 * The number of metablocks in this segment header to be considered in
+	 * log replay.
 	 */
 	__u8 length;
 	__u8 padding[512 - (8 + 4 + 1)]; /* 512B */
@@ -108,12 +106,12 @@ struct segment_header_device {
 	struct metablock_device mbarr[0]; /* 16B * N */
 } __packed;
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 struct metablock {
 	sector_t sector; /* The original aligned address */
 
-	u32 idx; /* Index in the metablock array. const */
+	u32 idx; /* Const. Index in the metablock array */
 
 	struct hlist_node ht_list; /* Linked to the hash table */
 
@@ -124,10 +122,7 @@ struct metablock {
 struct segment_header {
 	u64 id; /* Must be initialized to 0 */
 
-	/*
-	 * The number of metablocks in a segment to flush and then write back.
-	 */
-	u8 length;
+	u8 length; /* The number of valid metablocks */
 
 	u32 start_idx; /* Const */
 	sector_t start_sector; /* Const */
@@ -137,30 +132,24 @@ struct segment_header {
 	struct metablock mb_array[0];
 };
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
-/*
- * Object to be used in async plog write
- */
 struct write_job {
 	struct wb_device *wb;
 
-	struct metablock *mb; /* Pos */
-	sector_t plog_head; /* Pos */
+	struct metablock *mb;
+	sector_t plog_head;
 
 	/*
-	 * We can't use zero-length array here
-	 * instead we must allocate the buffer
-	 * by explicitly calling kmalloc.
-	 * Otherwise, the dm_io() function fails.
+	 * We can't use zero-length array here instead we must allocate the
+	 * buffer by explicitly calling kmalloc. Otherwise, the dm_io() fails.
 	 */
 	void *plog_buf;
 };
 
 /*
- * Object to be consumed by wbflusher
- * Foreground queues this object and wbflusher later pops
- * one job to submit journal write to the cache device.
+ * Foreground queues this object and flush daemon later pops one job to submit
+ * logging write to the cache device.
  */
 struct flush_job {
 	struct work_struct work;
@@ -170,15 +159,14 @@ struct flush_job {
 };
 
 /*
- * RAM buffer is a buffer that any dirty data are first written to.
- * Type member in wb_device indicates the buffer type.
+ * RAM buffer is a buffer that any dirty data are first written into.
  */
 struct rambuffer {
-	void *data; /* The DRAM buffer. Used as the buffer to submit I/O */
+	void *data;
 	struct flush_job job;
 };
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * The data structures in persistent logging
@@ -214,23 +202,23 @@ struct plog_meta_device {
 	__u8 padding[512 - (8 + 8 + 4 + 1 + 1)];
 } __packed;
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * Batched and Sorted Writeback
  * ----------------------------
  *
  * Writeback daemon writes back segments on the cache device effectively.
- * "Batched" means it writes back number of segments at the same time
- * in asynchronous manner.
- * "Sorted" means these writeback IOs are sorted in ascending order of
- * LBA in the backing device. Rb-tree is used to sort the writeback IOs.
+ * "Batched" means it writes back number of segments at the same time in
+ * asynchronous manner.
+ * "Sorted" means these writeback IOs are sorted in ascending order of LBA in
+ * the backing device. Rb-tree is used to sort the writeback IOs.
  *
- * Reading from the cache device is sequential thus also effective.
+ * Reading from the cache device is sequential.
  */
 
 /*
- * Writeback of a cache line
+ * Writeback of a cache line (or metablock)
  */
 struct writeback_io {
 	struct rb_node rb_node;
@@ -241,7 +229,8 @@ struct writeback_io {
 	void *data;
 	u8 memorized_dirtiness;
 };
-#define writeback_io_from_node(node) rb_entry((node), struct writeback_io, rb_node)
+#define writeback_io_from_node(node) \
+	rb_entry((node), struct writeback_io, rb_node)
 
 /*
  * Writeback of a segment
@@ -252,29 +241,34 @@ struct writeback_segment {
 	void *buf; /* Sequentially read */
 };
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 struct read_cache_cell {
 	sector_t sector;
-	void *data;
+	void *data; /* 4KB data read */
 	int cancelled; /* Don't include this */
 	struct rb_node rb_node;
 };
 
 struct read_cache_cells {
 	u32 size;
-	u32 threshold;
-	sector_t last_address;
-	u32 seqcount;
-	bool over_threshold;
 	struct read_cache_cell *array;
-	struct rb_root rb_root;
 	u32 cursor;
 	atomic_t ack_count;
+	sector_t last_sector; /* The last read sector in foreground */
+	u32 seqcount;
+	u32 threshold;
+	bool over_threshold;
+	/*
+	 * We use RB-tree for lookup data structure that all elements are
+	 * sorted. Cells are sorted by the sector so we can easily detect
+	 * sequence.
+	 */
+	struct rb_root rb_root;
 	struct workqueue_struct *wq;
 };
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 enum STATFLAG {
 	STAT_WRITE = 3, /* Write or read */
@@ -286,9 +280,9 @@ enum STATFLAG {
 
 enum WB_FLAG {
 	/*
-	 * This flag is set when either one of the underlying devices
-	 * returned EIO and we must immediately block up the whole to
-	 * avoid further damage.
+	 * This flag is set when either one of the underlying devices returned
+	 * EIO and we must immediately block up the whole to avoid further
+	 * damage.
 	 */
 	WB_DEAD = 0,
 };
@@ -300,7 +294,6 @@ struct wb_device {
 	/*
 	 * 0: No persistent logging (plog) but only RAM buffers
 	 * 1: With plog (block device)
-	 * 2..: With plog (others) TODO
 	 */
 	int type;
 
@@ -309,19 +302,13 @@ struct wb_device {
 	struct dm_dev *backing_dev; /* Slow device (HDD) */
 	struct dm_dev *cache_dev; /* Fast device (SSD) */
 
-	/*
-	 * Mutex is really light-weighted.
-	 * To mitigate the overhead of the locking we chose to use mutex.
-	 * To optimize the read path, rw_semaphore is an option
-	 * but it means to sacrifice writes.
-	 */
-	struct mutex io_lock;
+	struct mutex io_lock; /* Mutex is light-weighed */
 
 	/*
 	 * Wq to wait for nr_inflight_ios to be zero.
 	 * nr_inflight_ios of segment header increments inside io_lock.
-	 * While the refcount > 0, the segment can not be overwritten
-	 * since there is at least one bio to direct it.
+	 * While the refcount > 0, the segment can not be overwritten since
+	 * there is at least one bio to direct it.
 	 */
 	wait_queue_head_t inflight_ios_wq;
 
@@ -337,7 +324,7 @@ struct wb_device {
 	struct workqueue_struct *io_wq;
 	struct dm_io_client *io_client;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/******************
 	 * Current position
@@ -347,7 +334,7 @@ struct wb_device {
 	struct segment_header *current_seg;
 	struct rambuffer *current_rambuf;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/**********************
 	 * Segment header array
@@ -356,7 +343,7 @@ struct wb_device {
 	u32 nr_segments; /* Const */
 	struct large_array *segment_header_array;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/********************
 	 * Chained Hash table
@@ -372,7 +359,7 @@ struct wb_device {
 	 */
 	struct ht_head *null_head;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/*****************
 	 * RAM buffer pool
@@ -382,7 +369,7 @@ struct wb_device {
 	struct kmem_cache *rambuf_cachep;
 	struct rambuffer *rambuf_pool;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/********************
 	 * One-shot Writeback
@@ -391,25 +378,24 @@ struct wb_device {
 	wait_queue_head_t writeback_mb_wait_queue;
 	struct dm_kcopyd_client *copier;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
-	/****************
-	 * Flusher Daemon
-	 ****************/
+	/**************
+	 * Flush Daemon
+	 **************/
 
 	mempool_t *flush_job_pool;
 	struct workqueue_struct *flusher_wq;
 
 	/*
-	 * Wait for a specified segment to be flushed
-	 * non-interruptible
+	 * Wait for a specified segment to be flushed. Non-interruptible
 	 * cf. wait_for_flushing()
 	 */
 	wait_queue_head_t flush_wait_queue;
 
 	atomic64_t last_flushed_segment_id;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/*************************
 	 * Barrier deadline worker
@@ -418,7 +404,7 @@ struct wb_device {
 	struct work_struct flush_barrier_work;
 	struct bio_list barrier_ios; /* List of barrier requests */
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/******************
 	 * Writeback Daemon
@@ -431,20 +417,19 @@ struct wb_device {
 	atomic64_t last_writeback_segment_id;
 
 	/*
-	 * Wait for a specified segment to be written back
-	 * Non-interruptible
+	 * Wait for a specified segment to be written back. Non-interruptible
 	 * cf. wait_for_writeback()
 	 */
 	wait_queue_head_t writeback_wait_queue;
 
 	/*
-	 * Wait for writing back all the dirty caches (or dropping caches)
-	 * Interruptible
+	 * Wait for writing back all the dirty caches. Interruptible
 	 */
 	wait_queue_head_t wait_drop_caches;
+	atomic64_t nr_dirty_caches;
 
 	/*
-	 * Wait for a backgraound writeback complete
+	 * Wait for a background writeback complete
 	 */
 	wait_queue_head_t writeback_io_wait_queue;
 	atomic_t writeback_io_count;
@@ -458,7 +443,7 @@ struct wb_device {
 	u32 num_writeback_segs; /* Number of segments to write back */
 	struct writeback_segment **writeback_segs;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/*********************
 	 * Writeback Modulator
@@ -468,7 +453,7 @@ struct wb_device {
 	int enable_writeback_modulator; /* Tunable */
 	u8 writeback_threshold; /* Tunable */
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/*********************
 	 * Superblock Recorder
@@ -477,7 +462,7 @@ struct wb_device {
 	struct task_struct *recorder_daemon;
 	unsigned long update_record_interval; /* Tunable */
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/*************
 	 * Sync Daemon
@@ -486,7 +471,7 @@ struct wb_device {
 	struct task_struct *sync_daemon;
 	unsigned long sync_interval; /* Tunable */
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/**************
 	 * Read Caching
@@ -494,9 +479,9 @@ struct wb_device {
 
 	struct work_struct read_cache_work;
 	struct read_cache_cells *read_cache_cells;
-	u32 read_cache_threshold;
+	u32 read_cache_threshold; /* Tunable */
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/********************
 	 * Persistent Logging
@@ -521,26 +506,22 @@ struct wb_device {
 	/* Type 1 */
 	struct dm_dev *plog_dev_t1;
 
-	/* Type 2 */
-	/* TODO */
-
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	/************
 	 * Statistics
 	 ************/
 
-	atomic64_t nr_dirty_caches;
 	atomic64_t stat[STATLEN];
 	atomic64_t count_non_full_flushed;
 
-	/*---------------------------------------------*/
+	/*--------------------------------------------------------------------*/
 
 	unsigned long flags;
 	bool should_emit_tunables; /* Should emit tunables in dmsetup table? */
 };
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 void acquire_new_seg(struct wb_device *, u64 id);
 void cursor_init(struct wb_device *);
@@ -552,15 +533,15 @@ void invalidate_previous_cache(struct wb_device *, struct segment_header *,
 			       struct metablock *old_mb, bool overwrite_fullsize);
 void rebuild_rambuf(void *rambuf, void *plog_buf, u64 log_id);
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 #define check_buffer_alignment(buf) \
 	do_check_buffer_alignment(buf, #buf, __func__)
 void do_check_buffer_alignment(void *, const char *, const char *);
 
 /*
- * Wrapper of dm_io function.
- * Set thread to true to run dm_io in other thread to avoid potential deadlock.
+ * dm_io wrapper
+ * thread: run dm_io in other thread to avoid deadlock
  */
 #define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
 	dm_safe_io_internal(wb, (io_req), (num_regions), (regions), \
@@ -571,15 +552,15 @@ int dm_safe_io_internal(struct wb_device *, struct dm_io_request *,
 
 sector_t dm_devsize(struct dm_dev *);
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * Device blockup (Marking the device as dead)
  * -------------------------------------------
  *
  * I/O error on cache device blocks up the whole system.
- * After the system is blocked up, cache device is dead,
- * all I/Os to cache device are ignored as if it becomes /dev/null.
+ * After the system is blocked up, cache device is dead, all I/Os to cache
+ * device are ignored as if it becomes /dev/null.
  */
 #define mark_dead(wb) set_bit(WB_DEAD, &wb->flags)
 #define is_live(wb) likely(!test_bit(WB_DEAD, &wb->flags))
@@ -613,6 +594,6 @@ sector_t dm_devsize(struct dm_dev *);
 		} \
 	} while (r)
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 #endif

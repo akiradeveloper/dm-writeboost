@@ -1,8 +1,8 @@
 /*
- * Writeboost
+ * DM-Writeboost
  * Log-structured Caching for Linux
  *
- * Copyright (C) 2012-2014 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
  */
@@ -13,7 +13,7 @@
 
 #include "linux/sort.h"
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 {
@@ -93,7 +93,7 @@ sector_t dm_devsize(struct dm_dev *dev)
 	return i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
@@ -131,7 +131,7 @@ static sector_t calc_cache_alignment(sector_t bio_sector)
 	return div_u64(bio_sector, 1 << 3) * (1 << 3);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * Wake up the processes on the wq if the wq is active.
@@ -246,15 +246,6 @@ static void barrier_plog_writes(struct wb_device *wb)
 {
 	wait_plog_writes_complete(wb);
 
-	/*
-	 * TODO
-	 * Can be optimized by avoid unnecessary flush requests.
-	 * If we have flushed before while holding the current segment
-	 * (i.e. we flushed the segments before the current segment)
-	 * We need not to flush them any more.
-	 * Adding some flag to segment_header can be thought however,
-	 * immature optimiazation is always harmful. So, did not.
-	 */
 	submit_flush_request(wb, wb->cache_dev, true);
 	switch (wb->type) {
 	case 1:
@@ -294,7 +285,6 @@ static void append_plog(struct wb_device *wb, struct bio *bio,
 
 /*
  * Rebuild a RAM buffer (metadata and data) from a plog.
- * All valid logs are of id "log_id".
  */
 void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 {
@@ -316,9 +306,11 @@ void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
 		actual = crc32c(WB_CKSUM_SEED, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
 		expected = le32_to_cpu(meta.checksum);
 
+		/* Checksum not same */
 		if (actual != expected)
 			break;
 
+		/* ID not same */
 		if (le64_to_cpu(meta.id) != log_id)
 			break;
 
@@ -379,7 +371,7 @@ static void acquire_new_plog_seg(struct wb_device *wb, u64 id)
 	wb->alloc_plog_head = 0;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {
@@ -394,11 +386,7 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 }
 
 /*
- * Prepare the kmalloc-ed RAM buffer for segment write.
- *
- * dm_io routine requires RAM buffer for its I/O buffer.
- * Even if we uses non-volatile RAM we have to copy the
- * data to the volatile buffer when we come to submit I/O.
+ * Prepare the RAM buffer for segment write.
  */
 static void prepare_rambuffer(struct rambuffer *rambuf,
 			      struct wb_device *wb,
@@ -441,12 +429,10 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 
 	/*
 	 * We wait for all requests to the new segment is consumed.
-	 * Mutex taken gurantees that no new I/O to this segment is coming in.
+	 * Mutex taken guarantees that no new I/O to this segment is coming in.
 	 */
-	DMINFO("ans we+");
 	wait_event(wb->inflight_ios_wq,
 		!atomic_read(&new_seg->nr_inflight_ios));
-	DMINFO("ans we-");
 
 	wait_for_writeback(wb, SUB_ID(id, wb->nr_segments));
 	if (count_dirty_caches_remained(new_seg)) {
@@ -457,7 +443,7 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	discard_caches_inseg(wb, new_seg);
 
 	/*
-	 * We must not set new id to the new segment before
+	 * We mustn't set new id to the new segment before
 	 * all wait_* events are done since they uses those id for waiting.
 	 */
 	new_seg->id = id;
@@ -474,7 +460,7 @@ static void prepare_new_seg(struct wb_device *wb)
 	cursor_init(wb);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
 {
@@ -503,7 +489,6 @@ static void queue_flush_job(struct wb_device *wb)
 	init_flush_job(job, wb);
 	INIT_WORK(&job->work, flush_proc);
 	queue_work(wb->flusher_wq, &job->work);
-	// schedule_work(&job->work);
 }
 
 static void queue_current_buffer(struct wb_device *wb)
@@ -520,7 +505,6 @@ void cursor_init(struct wb_device *wb)
 
 /*
  * Flush out all the transient data at a moment but _NOT_ persistently.
- * Clean up the writes before termination is an example of the use case.
  */
 void flush_current_buffer(struct wb_device *wb)
 {
@@ -537,7 +521,7 @@ void flush_current_buffer(struct wb_device *wb)
 	wait_for_flushing(wb, old_seg->id);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void inc_stat(struct wb_device *wb,
 		     int rw, bool found, bool on_buffer, bool fullsize)
@@ -565,9 +549,10 @@ static void clear_stat(struct wb_device *wb)
 		atomic64_t *v = &wb->stat[i];
 		atomic64_set(v, 0);
 	}
+	atomic64_set(&wb->count_non_full_flushed, 0);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 void inc_nr_dirty_caches(struct wb_device *wb)
 {
@@ -600,7 +585,6 @@ static void increase_dirtiness(struct wb_device *wb, struct segment_header *seg,
 	} else {
 		u8 i;
 		u8 acc_bits = 0;
-		/* TODO i = 0; ... */
 		for (i = io_offset(bio); i < (io_offset(bio) + bio_sectors(bio)); i++)
 			acc_bits += (1 << i);
 
@@ -616,9 +600,9 @@ static void increase_dirtiness(struct wb_device *wb, struct segment_header *seg,
 
 /*
  * Drop the dirtiness of the on-memory metablock to 0.
- * This only means the data of the metablock will never be written back and
- * omitting this only results in double writeback which is only a matter
- * of performance.
+ * This _only_ means the data of the metablock will never be written back and
+ * omitting this dropping _only_ results in double writeback
+ * which is only a matter of performance.
  */
 void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
 			 struct metablock *mb)
@@ -640,12 +624,6 @@ void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
 
 /*
  * Read the dirtiness of a metablock at the moment.
- *
- * In fact, I don't know if we should have the read statement surrounded
- * by spinlock. Why I do this is that I worry about reading the
- * intermediate value (neither the value of before-write nor after-write).
- * Intel CPU guarantees it but other CPU may not.
- * If any other CPU guarantees it we can remove the spinlock held.
  */
 u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
 		     struct metablock *mb)
@@ -660,7 +638,7 @@ u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
 	return val;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 struct writeback_mb_context {
 	struct wb_device *wb;
@@ -680,9 +658,9 @@ static void writeback_mb_complete(int read_err, unsigned long write_err, void *_
 }
 
 /*
- * Write back caches in cache device (SSD) to the backnig device (HDD).
- * We don't need to make the data written back persistent because this segment will be
- * reused only after writeback daemon writes back this segment.
+ * Write back a cache from cache device to the backing device.
+ * We don't need to make the data written back persistent because this segment
+ * will be reused only after writeback daemon wrote this segment back.
  */
 static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 			 struct metablock *mb, u8 dirty_bits, bool thread)
@@ -752,10 +730,10 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 }
 
 /*
- * Write back the caches on the RAM buffer to backing device.
- * Calling this function is really rare so the code is not optimal.
- * There is no need to write them back with FUA flag
- * because the caches are not flushed yet and thus not persistent.
+ * Write back a cache on the RAM buffer to backing device.
+ * Calling this function is really rare so the code needs not to be optimal.
+ * There is no need to write them back with FUA flag because the cache isn't
+ * flushed yet and thus isn't persistent.
  */
 static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8 dirty_bits)
 {
@@ -809,7 +787,7 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 
 	/*
 	 * Writeback works in background and may have cleaned up the metablock.
-	 * If the metablock is clean we need not to write back.
+	 * If the metablock is clean we don't have to write back.
 	 */
 	if (!dirty_bits)
 		needs_cleanup_prev_cache = false;
@@ -827,34 +805,24 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 	ht_del(wb, old_mb);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
 			       struct write_job *job)
 {
-	sector_t start_sector = ((mb_idx_inseg(wb, job->mb->idx) + 1) << 3) +
-				io_offset(bio);
+	sector_t start_sector = ((mb_idx_inseg(wb, job->mb->idx) + 1) << 3) + io_offset(bio);
 	size_t start_byte = start_sector << SECTOR_SHIFT;
 	void *data = bio_data(bio);
-
-	/*
-	 * Write data block to the volatile RAM buffer.
-	 */
 	memcpy(wb->current_rambuf->data + start_byte, data, bio->bi_iter.bi_size);
 }
 
 /*
  * Advance the cursor and return the old cursor.
- * After returned, nr_inflight_ios is incremented
- * to wait for this write to complete.
+ * After returned, nr_inflight_ios is incremented to wait for this write to complete.
  */
 static u32 advance_cursor(struct wb_device *wb)
 {
 	u32 old;
-	/*
-	 * If cursor is out of boundary
-	 * we put it back to the origin (i.e. log rotate)
-	 */
 	if (wb->cursor == wb->nr_caches)
 		wb->cursor = 0;
 	old = wb->cursor;
@@ -867,10 +835,7 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 {
 	bool plog_seg_no_space = false, rambuf_no_space = false;
 
-	/*
-	 * If there is no more space for appending new log
-	 * it's time to request new plog.
-	 */
+	/* If there is no more space for appending new log it's time to request new plog. */
 	if (wb->type)
 		plog_seg_no_space = (wb->alloc_plog_head + 1 + bio_sectors(bio)) > wb->plog_seg_size;
 
@@ -893,13 +858,9 @@ static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 
 /*
  * Process bio with REQ_DISCARD
- *
- * We only discard sectors on only the backing store because blocks on
- * cache device are unlikely to be discarded.
- * Discarding blocks is likely to be operated long after writing;
- * the block is likely to be written back before that.
- *
- * Moreover, it is very hard to implement discarding cache blocks.
+ * We only discard sectors on only the backing store because blocks on cache
+ * device are unlikely to be discarded. As discarding blocks is likely to be
+ * operated long after writing the block is likely to be written back before that.
  */
 static int process_discard_bio(struct wb_device *wb, struct bio *bio)
 {
@@ -912,9 +873,7 @@ static int process_discard_bio(struct wb_device *wb, struct bio *bio)
  */
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 {
-	/*
-	 * In device-mapper bio with REQ_FLUSH is for sure to have not data.
-	 */
+	/* In device-mapper bio with REQ_FLUSH is for sure to have no data. */
 	BUG_ON(bio->bi_iter.bi_size);
 
 	if (!wb->type) {
@@ -942,8 +901,7 @@ struct lookup_result {
 
 /*
  * Lookup a bio relevant cache data.
- * In cache hit case nr_inflight_ios is incremented
- * to protect the found segment by the refcount.
+ * In case of cache hit, nr_inflight_ios is incremented.
  */
 static void cache_lookup(struct wb_device *wb, struct bio *bio,
 			 struct lookup_result *res)
@@ -969,7 +927,7 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio,
 }
 
 /*
- * Prepare new write position because we don't have cache block to overwrite.
+ * Get new place to write.
  */
 static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
 			    struct lookup_result *res,
@@ -988,11 +946,6 @@ static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
 		wake_up_active_wq(&wb->inflight_ios_wq);
 }
 
-/*
- * Decide where to write the data according to the result of cache lookup.
- * After returned, refcounts (in_flight_ios and in_flight_plog_writes)
- * are incremented.
- */
 static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
 static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 			      struct write_job *pos)
@@ -1012,19 +965,15 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 
 	if (res.found) {
 		if (unlikely(res.on_buffer)) {
-			/*
-			 * Overwrite on the buffer
-			 */
+			/* Overwrite on the buffer */
 			pos->plog_head = advance_plog_head(wb, bio);
 			pos->mb = res.found_mb;
 			mutex_unlock(&wb->io_lock);
 			return;
 		} else {
 			/*
-			 * Cache hit on the cache device.
-			 * Since we will write new dirty data to the buffer
-			 * we need to invalidate the existing thus hit cache block
-			 * beforehand.
+			 * Invalidate the old cache on the cache device because
+			 * we can't overwrite cache block on the cache device.
 			 */
 			invalidate_previous_cache(wb, res.found_seg, res.found_mb,
 						  io_fullsize(bio));
@@ -1036,6 +985,8 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 	prepare_new_pos(wb, bio, &res, pos);
 
 	mutex_unlock(&wb->io_lock);
+
+	/* nr_inflight_ios is incremented */
 }
 
 /*
@@ -1053,11 +1004,9 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
-	 * Deferred ACK for FUA request
-	 *
-	 * Bio with REQ_FUA flag has data.
-	 * So, we must run through the path for usual bio.
-	 * And the data is now stored in the RAM buffer.
+	 * bio with REQ_FUA has data.
+	 * For such bio, we first treat it like a normal bio and then as a
+	 * REQ_FLUSH bio.
 	 */
 	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
 		queue_barrier_io(wb, bio);
@@ -1077,9 +1026,6 @@ static struct write_job *alloc_write_job(struct wb_device *wb)
 	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
 	job->wb = wb;
 
-	/*
-	 * Without plog, plog_buf need not to be allocated.
-	 */
 	if (wb->type)
 		job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
 
@@ -1087,24 +1033,22 @@ static struct write_job *alloc_write_job(struct wb_device *wb)
 }
 
 /*
- * (Locking) Dirtiness
+ * (Locking) Dirtiness of a metablock
+ * ----------------------------------
  * A cache data is placed either on RAM buffer or SSD if it was flushed.
- * To make locking easy, simplify the rule for the dirtiness of a cache data.
- *
+ * To make locking easy, we simplify the rule for the dirtiness of a cache data.
  * 1) If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
  *    only "increases".
- *    The justification for this design is that
- *    the cache on the RAM buffer is seldom written back.
  * 2) If the data is, on the other hand, on the SSD after flushed the dirtiness
  *    only "decreases".
  *
- * This simple rule can remove the possibility of dirtiness fluctuating
- * while on the RAM buffer. Thus, simplies locking design.
- *
- * --------------------------------------------------------------------
- * (Locking) Refcount
- * Writeboost has two refcount
- * (Only one if not using plog)
+ * These simple rules can remove the possibility of dirtiness fluctuate on the
+ * RAM buffer.
+ */
+
+/*
+ * (Locking) Refcount (in_flight_*)
+ * --------------------------------
  *
  * The basic common idea is
  * 1) Increment the refcount inside lock
@@ -1143,7 +1087,7 @@ enum PBD_FLAG {
 };
 
 struct per_bio_data {
-	int type;
+	enum PBD_FLAG type;
 	union {
 		u32 cell_idx;
 		struct segment_header *seg;
@@ -1178,9 +1122,8 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	}
 
 	/*
-	 * We must wait for the (maybe) queued segment to be flushed
-	 * to the cache device.
-	 * Without this, we read the wrong data from the cache device.
+	 * We need to wait for the segment to be flushed to the cache device.
+	 * Without this, we might read the wrong data from the cache device.
 	 */
 	wait_for_flushing(wb, res.found_seg->id);
 
@@ -1228,7 +1171,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
-static void read_cache_cell_copy_data(struct wb_device *, struct bio*);
+static void read_cache_cell_copy_data(struct wb_device *, struct bio*, int error);
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 {
 	struct wb_device *wb = ti->private;
@@ -1238,7 +1181,7 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	case PBD_NONE:
 		return 0;
 	case PBD_WILL_CACHE:
-		read_cache_cell_copy_data(wb, bio);
+		read_cache_cell_copy_data(wb, bio, error);
 		return 0;
 	case PBD_READ_SEG:
 		dec_inflight_ios(wb, pbd->seg);
@@ -1246,10 +1189,9 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	default:
 		BUG();
 	}
-	BUG();
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 #define read_cache_cell_from_node(node) rb_entry((node), struct read_cache_cell, rb_node)
 
@@ -1303,10 +1245,14 @@ static void read_cache_cancel_cells(struct read_cache_cells *cells, u32 n)
 	}
 }
 
+/*
+ * Track the forefront read address and cancel cells in case of over threshold.
+ * If the cell is cancelled foreground, we can save the memory copy in the background.
+ */
 static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 					 struct read_cache_cell *new_cell)
 {
-	if (new_cell->sector == (cells->last_address + 8))
+	if (new_cell->sector == (cells->last_sector + 8))
 		cells->seqcount++;
 	else {
 		cells->seqcount = 1;
@@ -1321,7 +1267,7 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 			read_cache_cancel_cells(cells, cells->seqcount);
 		}
 	}
-	cells->last_address = new_cell->sector;
+	cells->last_sector = new_cell->sector;
 }
 
 static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
@@ -1339,7 +1285,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 		return;
 
 	/*
-	 * We cache 4KB read data only for following reasons:
+	 * We only cache 4KB read data for following reasons:
 	 * 1) Caching partial data (< 4KB) is likely meaningless.
 	 * 2) Caching partial data makes the read-caching mechanism very hard.
 	 */
@@ -1347,7 +1293,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 		return;
 
 	/*
-	 * We don't need to reserve the same adress twice
+	 * We don't need to reserve the same address twice
 	 * because it's either unchanged or invalidated.
 	 */
 	found = lookup_read_cache_cell(wb, bio->bi_iter.bi_sector);
@@ -1363,6 +1309,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
 
+	/* Cancel the new_cell if needed */
 	read_cache_cancel_foreground(cells, new_cell);
 }
 
@@ -1374,23 +1321,21 @@ static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 		found->cancelled = true;
 }
 
-static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio)
+static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, int error)
 {
 	struct per_bio_data *pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
 
-	/*
-	 * If the cell is cancelled for some reason such as being stale or
-	 * part of sequential read more than threshold memcpy can be skipped.
-	 */
+	/* Data can be broken. So don't stage. */
+	if (error)
+		cell->cancelled = true;
+
 	if (!ACCESS_ONCE(cell->cancelled))
 		memcpy(cell->data, bio_data(bio), 1 << 12);
 
-	if (atomic_dec_and_test(&cells->ack_count)) {
-		DMINFO("queue");
+	if (atomic_dec_and_test(&cells->ack_count))
 		queue_work(cells->wq, &wb->read_cache_work);
-	}
 }
 
 /*
@@ -1412,12 +1357,8 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 		return;
 
 	mutex_lock(&wb->io_lock);
-	if (!mb_idx_inseg(wb, wb->cursor)) {
-		DMINFO("qcb stt");
-		// wait_for_flushing(wb, wb->current_seg->id - 1);
+	if (!mb_idx_inseg(wb, wb->cursor))
 		queue_current_buffer(wb);
-		DMINFO("qcb end");
-	}
 	head = ht_get_head(wb, &key);
 	mb = ht_lookup(wb, head, &key);
 	if (unlikely(mb)) {
@@ -1429,12 +1370,10 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 		return;
 	}
 	seg = wb->current_seg;
-	/*
-	 * advance_cursor increments nr_inflight_ios
-	 */
+	/* advance_cursor increments nr_inflight_ios */
 	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
 	mb = seg->mb_array + _mb_idx_inseg;
-	/* this metablock is clean and we don't have to taint it */
+	/* This metablock is clean and we don't have to taint it */
 	ht_register(wb, head, mb, &key);
 	mutex_unlock(&wb->io_lock);
 
@@ -1445,6 +1384,15 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	dec_inflight_ios(wb, seg);
 }
 
+static void free_read_cache_cell_data(struct read_cache_cells *cells)
+{
+	u32 i;
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		kfree(cell->data);
+	}
+}
+
 static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32 n)
 {
 	struct read_cache_cells *cells;
@@ -1453,15 +1401,9 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 	if (!cells)
 		return NULL;
 
-	cells->wq = alloc_ordered_workqueue("dmwb_read_cache", 0);
-	if (!cells->wq) {
-		BUG();
-		goto bad_wq;
-	}
-
 	cells->size = n;
 	cells->threshold = UINT_MAX; /* Default: every read will be cached */
-	cells->last_address = ~0;
+	cells->last_sector = ~0;
 	cells->seqcount = 0;
 	cells->over_threshold = false;
 	cells->array = kmalloc(sizeof(struct read_cache_cell) * n, GFP_KERNEL);
@@ -1481,29 +1423,27 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 		}
 	}
 
-	DMINFO("alloc end");
+	cells->wq = alloc_ordered_workqueue("dmwb_read_cache", 0);
+	if (!cells->wq)
+		goto bad_wq;
+
 	return cells;
 
+bad_wq:
+	free_read_cache_cell_data(cells);
 bad_cell_data:
 	kfree(cells->array);
 bad_cells_array:
-	destroy_workqueue(cells->wq);
-bad_wq:
 	kfree(cells);
-	BUG();
 	return NULL;
 }
 
 static void free_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells = wb->read_cache_cells;
-	u32 i;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		kfree(cell->data);
-	}
+	destroy_workqueue(cells->wq); /* This drains wq. So, must precede the others */
+	free_read_cache_cell_data(cells);
 	kfree(cells->array);
-	destroy_workqueue(cells->wq);
 	kfree(cells);
 }
 
@@ -1517,19 +1457,20 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	}
 	atomic_set(&cells->ack_count, cells->size);
 
-	DMINFO("reinit lock");
 	mutex_lock(&wb->io_lock);
 	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
 	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
-		DMINFO("th ch %u->%u", cells->threshold, cur_threshold);
 		cells->threshold = cur_threshold;
 		cells->over_threshold = false;
 	}
 	mutex_unlock(&wb->io_lock);
 }
 
+/*
+ * Cancel cells [first, last)
+ */
 static void visit_and_cancel_cells(struct rb_node *first, struct rb_node *last)
 {
 	struct rb_node *rbp = first;
@@ -1540,6 +1481,9 @@ static void visit_and_cancel_cells(struct rb_node *first, struct rb_node *last)
 	}
 }
 
+/*
+ * Find out sequence from cells and cancel them if larger than threshold.
+ */
 static void read_cache_cancel_background(struct read_cache_cells *cells)
 {
 	struct rb_node *rbp = rb_first(&cells->rb_root);
@@ -1570,18 +1514,13 @@ static void read_cache_proc(struct work_struct *work)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i;
 
-	DMINFO("read cache proc");
-
 	read_cache_cancel_background(cells);
 
-	for (i = 0; i < cells->size; i++) { /* FIXME better to be reverse order */
+	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		/* DMINFO("inject %u %llu", i, cell->sector); */
 		inject_read_cache(wb, cell);
 	}
-	DMINFO("inject end");
 	reinit_read_cache_cells(wb);
-	DMINFO("reinit end");
 }
 
 static int init_read_cache_cells(struct wb_device *wb)
@@ -1593,11 +1532,10 @@ static int init_read_cache_cells(struct wb_device *wb)
 		return -ENOMEM;
 	wb->read_cache_cells = cells;
 	reinit_read_cache_cells(wb);
-	DMINFO("init end %u", cells->threshold);
 	return 0;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
@@ -1630,9 +1568,7 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 		goto bad_get_cache;
 	}
 
-	/*
-	 * Plog device will be later allocated with this descriptor.
-	 */
+	/* Plog device will be later allocated with this descriptor. */
 	if (wb->type)
 		strcpy(wb->plog_dev_desc, dm_shift_arg(as));
 
@@ -1753,10 +1689,7 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 			DMERR("%s", ti->error);
 			return r;
 		}
-		/*
-		 * Tunables are emitted only if
-		 * they were origianlly passed.
-		 */
+		/* Tunables are emitted only if they were origianlly passed. */
 		wb->should_emit_tunables = true;
 	}
 
@@ -1912,9 +1845,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_essential_argv;
 	}
 
-	/*
-	 * Default values
-	 */
+	/* Default values */
 	wb->segment_size_order = 10;
 	wb->nr_rambuf_pool = 8;
 	if (wb->type)
@@ -1946,7 +1877,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	clear_stat(wb);
-	atomic64_set(&wb->count_non_full_flushed, 0);
 
 	return r;
 
@@ -1979,7 +1909,7 @@ static void writeboost_dtr(struct dm_target *ti)
 	ti->private = NULL;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 /*
  * .postsuspend is called before .dtr.
@@ -1989,7 +1919,6 @@ static void writeboost_postsuspend(struct dm_target *ti)
 {
 	int r = 0;
 	struct wb_device *wb = ti->private;
-
 	flush_current_buffer(wb);
 	maybe_IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 }
@@ -2118,11 +2047,6 @@ static struct target_type writeboost_target = {
 	.end_io = writeboost_end_io,
 	.ctr = writeboost_ctr,
 	.dtr = writeboost_dtr,
-	/*
-	 * .merge is not implemented
-	 * We split the passed I/O into 4KB cache block no matter
-	 * how big the I/O is.
-	 */
 	.postsuspend = writeboost_postsuspend,
 	.message = writeboost_message,
 	.status = writeboost_status,

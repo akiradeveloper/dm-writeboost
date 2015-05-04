@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2014 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This file is released under the GPL.
  */
@@ -10,7 +10,7 @@
 
 #include <linux/rbtree.h>
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 void queue_barrier_io(struct wb_device *wb, struct bio *bio)
 {
@@ -33,22 +33,18 @@ void flush_barrier_ios(struct work_struct *work)
 	flush_current_buffer(wb);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 {
 	int r = 0;
 	bool has_barrier = !bio_list_empty(&job->barrier_ios);
 
-	/*
-	 * Make all the data until now persistent.
-	 */
+	/* Make all the preceding data persistent. */
 	if (has_barrier)
 		maybe_IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
 
-	/*
-	 * Ack the chained barrier requests.
-	 */
+	/* Ack the chained barrier requests. */
 	if (has_barrier) {
 		struct bio *bio;
 		while ((bio = bio_list_pop(&job->barrier_ios))) {
@@ -83,24 +79,19 @@ void flush_proc(struct work_struct *work)
 		.count = (seg->length + 1) << 3,
 	};
 
-	/*
-	 * The actual write requests to the cache device are not serialized.
-	 * They may perform in parallel.
-	 */
 	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, false));
 
 	/*
 	 * Deferred ACK for barrier requests
-	 * To serialize barrier ACK in logging we wait for the previous
-	 * segment to be persistently written (if needed).
+	 * To serialize barrier ACK in logging we wait for the previous segment
+	 * to be persistently written (if needed).
 	 */
 	wait_for_flushing(wb, SUB_ID(seg->id, 1));
-
 	process_deferred_barriers(wb, job);
 
 	/*
 	 * We can count up the last_flushed_segment_id only after segment
-	 * is written persistently. counting up the id is serialized.
+	 * is written persistently. Counting up the id is serialized.
 	 */
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
@@ -112,7 +103,7 @@ void wait_for_flushing(struct wb_device *wb, u64 id)
 		atomic64_read(&wb->last_flushed_segment_id) >= id);
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void writeback_endio(unsigned long error, void *context)
 {
@@ -228,7 +219,7 @@ static void inc_writeback_io_count(u8 dirty_bits, size_t *writeback_io_count)
 }
 
 /*
- * Add writeback IO to rb-tree for sorted writeback.
+ * Add writeback IO to RB-tree for sorted writeback.
  * All writeback IOs are sorted in ascending order.
  */
 static void add_writeback_io(struct wb_device *wb, struct writeback_io *writeback_io)
@@ -251,7 +242,7 @@ static void add_writeback_io(struct wb_device *wb, struct writeback_io *writebac
 }
 
 /*
- * Read the data to writeback IOs and add them into the rb-tree to sort.
+ * Read the data to writeback IOs and add them into the RB-tree to sort.
  */
 static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment *writeback_seg,
 				  size_t *writeback_io_count)
@@ -310,9 +301,8 @@ static void do_writeback_segs(struct wb_device *wb)
 	struct writeback_segment *writeback_seg;
 
 	size_t writeback_io_count = 0;
-	/*
-	 * Create rbtree
-	 */
+
+	/* Create RB-tree */
 	wb->writeback_tree = RB_ROOT;
 	for (k = 0; k < wb->num_writeback_segs; k++) {
 		writeback_seg = *(wb->writeback_segs + k);
@@ -321,29 +311,18 @@ static void do_writeback_segs(struct wb_device *wb)
 	atomic_set(&wb->writeback_io_count, writeback_io_count);
 	atomic_set(&wb->writeback_fail_count, 0);
 
-	/*
-	 * Pop rbnodes out of the tree and submit writeback I/Os
-	 */
+	/* Pop rbnodes out of the tree and submit writeback I/Os */
 	submit_writeback_ios(wb);
 	wait_event(wb->writeback_io_wait_queue, !atomic_read(&wb->writeback_io_count));
 	if (atomic_read(&wb->writeback_fail_count))
 		mark_dead(wb);
+	maybe_IO(blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL));
 
+	/* A segment after written back is clean */
 	for (k = 0; k < wb->num_writeback_segs; k++) {
 		writeback_seg = *(wb->writeback_segs + k);
 		cleanup_segment(wb, writeback_seg->seg);
 	}
-
-	/*
-	 * We must write back a segments if it was written persistently.
-	 * Nevertheless, we betray the upper layer.
-	 * Remembering which segment is persistent is too expensive
-	 * and furthermore meaningless.
-	 * So we consider all segments are persistent and write them back
-	 * persistently.
-	 */
-	maybe_IO(blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL));
-
 	atomic64_add(wb->num_writeback_segs, &wb->last_writeback_segment_id);
 }
 
@@ -387,9 +366,7 @@ static void do_writeback_proc(struct wb_device *wb)
 		return;
 	}
 
-	/*
-	 * Store segments into writeback_segs
-	 */
+	/* Store segments into writeback_segs */
 	for (k = 0; k < nr_writeback; k++) {
 		struct writeback_segment *writeback_seg = *(wb->writeback_segs + k);
 		writeback_seg->seg = get_segment_header_by_id(wb,
@@ -412,7 +389,7 @@ int writeback_proc(void *data)
 
 /*
  * Wait for a segment to be written back.
- * After written back the metablocks in the segment are clean.
+ * The segment after written back is clean.
  */
 void wait_for_writeback(struct wb_device *wb, u64 id)
 {
@@ -423,7 +400,7 @@ void wait_for_writeback(struct wb_device *wb, u64 id)
 	wb->urge_writeback = false;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 int modulator_proc(void *data)
 {
@@ -454,7 +431,7 @@ modulator_update:
 	return 0;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 static void update_superblock_record(struct wb_device *wb)
 {
@@ -510,7 +487,7 @@ int recorder_proc(void *data)
 	return 0;
 }
 
-/*----------------------------------------------------------------*/
+/*----------------------------------------------------------------------------*/
 
 int sync_proc(void *data)
 {

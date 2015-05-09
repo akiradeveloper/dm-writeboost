@@ -402,7 +402,7 @@ void wait_for_writeback(struct wb_device *wb, u64 id)
 
 /*----------------------------------------------------------------------------*/
 
-int modulator_proc(void *data)
+int writeback_modulator_proc(void *data)
 {
 	struct wb_device *wb = data;
 
@@ -489,7 +489,7 @@ int sup_record_updater_proc(void *data)
 
 /*----------------------------------------------------------------------------*/
 
-int data_sync_proc(void *data)
+int data_synchronizer_proc(void *data)
 {
 	int r = 0;
 

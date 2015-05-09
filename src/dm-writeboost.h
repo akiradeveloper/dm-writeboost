@@ -394,27 +394,27 @@ struct wb_device {
 	 * Writeback Modulator
 	 *********************/
 
-	struct task_struct *modulator_daemon;
+	struct task_struct *writeback_modulator;
 	int enable_writeback_modulator; /* Tunable */
 	u8 writeback_threshold; /* Tunable */
 
 	/*--------------------------------------------------------------------*/
 
-	/*********************
-	 * Superblock Recorder
-	 *********************/
+	/***************************
+	 * Superblock Record Updater
+	 ***************************/
 
-	struct task_struct *recorder_daemon;
-	unsigned long update_record_interval; /* Tunable */
+	struct task_struct *sup_record_updater;
+	unsigned long update_sup_record_interval; /* Tunable */
 
 	/*--------------------------------------------------------------------*/
 
-	/*************
-	 * Sync Daemon
-	 *************/
+	/*******************
+	 * Data Synchronizer
+	 *******************/
 
-	struct task_struct *sync_daemon;
-	unsigned long sync_interval; /* Tunable */
+	struct task_struct *data_synchronizer;
+	unsigned long sync_data_interval; /* Tunable */
 
 	/*--------------------------------------------------------------------*/
 

@@ -379,7 +379,7 @@ static void do_writeback_proc(struct wb_device *wb)
 	wake_up(&wb->writeback_wait_queue);
 }
 
-int writeback_proc(void *data)
+int writeback_daemon_proc(void *data)
 {
 	struct wb_device *wb = data;
 	while (!kthread_should_stop())
@@ -466,7 +466,7 @@ static void update_superblock_record(struct wb_device *wb)
 	mempool_free(buf, wb->buf_1_pool);
 }
 
-int recorder_proc(void *data)
+int sup_record_updater_proc(void *data)
 {
 	struct wb_device *wb = data;
 
@@ -474,7 +474,7 @@ int recorder_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = ACCESS_ONCE(wb->update_record_interval) * 1000;
+		intvl = ACCESS_ONCE(wb->update_sup_record_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -489,7 +489,7 @@ int recorder_proc(void *data)
 
 /*----------------------------------------------------------------------------*/
 
-int sync_proc(void *data)
+int data_sync_proc(void *data)
 {
 	int r = 0;
 
@@ -498,7 +498,7 @@ int sync_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = ACCESS_ONCE(wb->sync_interval) * 1000;
+		intvl = ACCESS_ONCE(wb->sync_data_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));

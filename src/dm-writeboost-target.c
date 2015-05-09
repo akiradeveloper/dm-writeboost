@@ -1357,8 +1357,8 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		{0, 1, "Invalid enable_writeback_modulator"},
 		{1, 1000, "Invalid nr_max_batched_writeback"},
 		{0, 100, "Invalid writeback_threshold"},
-		{0, 3600, "Invalid update_record_interval"},
-		{0, 3600, "Invalid sync_interval"},
+		{0, 3600, "Invalid update_sup_record_interval"},
+		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},
 	};
 	unsigned tmp;
@@ -1373,8 +1373,8 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 		consume_kv(enable_writeback_modulator, 1);
 		consume_kv(nr_max_batched_writeback, 2);
 		consume_kv(writeback_threshold, 3);
-		consume_kv(update_record_interval, 4);
-		consume_kv(sync_interval, 5);
+		consume_kv(update_sup_record_interval, 4);
+		consume_kv(sync_data_interval, 5);
 		consume_kv(read_cache_threshold, 6);
 
 		if (!r) {
@@ -1685,10 +1685,10 @@ static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
 	       wb->writeback_threshold);
 	DMEMIT(" nr_cur_batched_writeback %u",
 	       wb->nr_cur_batched_writeback);
-	DMEMIT(" sync_interval %lu",
-	       wb->sync_interval);
-	DMEMIT(" update_record_interval %lu",
-	       wb->update_record_interval);
+	DMEMIT(" sync_data_interval %lu",
+	       wb->sync_data_interval);
+	DMEMIT(" update_sup_record_interval %lu",
+	       wb->update_sup_record_interval);
 	DMEMIT(" read_cache_threshold %u",
 	       wb->read_cache_threshold);
 }

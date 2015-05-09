@@ -1171,15 +1171,15 @@ int try_alloc_writeback_ios(struct wb_device *wb, size_t nr_batch)
 
 #define CREATE_DAEMON(name) \
 	do { \
-		wb->name##_daemon = kthread_create( \
-				name##_proc, wb,  "dmwb_" #name "_daemon"); \
-		if (IS_ERR(wb->name##_daemon)) { \
-			r = PTR_ERR(wb->name##_daemon); \
-			wb->name##_daemon = NULL; \
-			DMERR("couldn't spawn " #name " daemon"); \
-			goto bad_##name##_daemon; \
+		wb->name = kthread_create( \
+				name##_proc, wb,  "dmwb_" #name); \
+		if (IS_ERR(wb->name)) { \
+			r = PTR_ERR(wb->name); \
+			wb->name = NULL; \
+			DMERR("couldn't spawn " #name); \
+			goto bad_##name; \
 		} \
-		wake_up_process(wb->name##_daemon); \
+		wake_up_process(wb->name); \
 	} while (0)
 
 /*
@@ -1240,7 +1240,7 @@ static int init_writeback_daemon(struct wb_device *wb)
 	wb->allow_writeback = false;
 	wb->urge_writeback = false;
 	wb->force_drop = false;
-	CREATE_DAEMON(writeback);
+	CREATE_DAEMON(writeback_daemon);
 
 	return r;
 
@@ -1272,32 +1272,32 @@ static int init_writeback_modulator(struct wb_device *wb)
 	int r = 0;
 	wb->writeback_threshold = 70;
 	wb->enable_writeback_modulator = false;
-	CREATE_DAEMON(modulator);
+	CREATE_DAEMON(writeback_modulator);
 	return r;
 
-bad_modulator_daemon:
-	return r;
-}
-
-static int init_recorder_daemon(struct wb_device *wb)
-{
-	int r = 0;
-	wb->update_record_interval = 0;
-	CREATE_DAEMON(recorder);
-	return r;
-
-bad_recorder_daemon:
+bad_writeback_modulator:
 	return r;
 }
 
-static int init_sync_daemon(struct wb_device *wb)
+static int init_sup_record_updater(struct wb_device *wb)
 {
 	int r = 0;
-	wb->sync_interval = 0;
-	CREATE_DAEMON(sync);
+	wb->update_sup_record_interval = 0;
+	CREATE_DAEMON(sup_record_updater);
 	return r;
 
-bad_sync_daemon:
+bad_sup_record_updater:
+	return r;
+}
+
+static int init_data_synchronizer(struct wb_device *wb)
+{
+	int r = 0;
+	wb->sync_data_interval = 0;
+	CREATE_DAEMON(data_synchronizer);
+	return r;
+
+bad_data_synchronizer:
 	return r;
 }
 
@@ -1336,28 +1336,28 @@ int resume_cache(struct wb_device *wb)
 	r = init_writeback_modulator(wb);
 	if (r) {
 		DMERR("init_writeback_modulator failed");
-		goto bad_writeback_modulator;
+		goto bad_modulator;
 	}
 
-	r = init_recorder_daemon(wb);
+	r = init_sup_record_updater(wb);
 	if (r) {
-		DMERR("init_recorder_daemon failed");
-		goto bad_recorder_daemon;
+		DMERR("init_sup_recorder failed");
+		goto bad_updater;
 	}
 
-	r = init_sync_daemon(wb);
+	r = init_data_synchronizer(wb);
 	if (r) {
-		DMERR("init_sync_daemon failed");
-		goto bad_sync_daemon;
+		DMERR("init_data_synchronizer failed");
+		goto bad_synchronizer;
 	}
 
 	return r;
 
-bad_sync_daemon:
-	kthread_stop(wb->recorder_daemon);
-bad_recorder_daemon:
-	kthread_stop(wb->modulator_daemon);
-bad_writeback_modulator:
+bad_synchronizer:
+	kthread_stop(wb->sup_record_updater);
+bad_updater:
+	kthread_stop(wb->writeback_modulator);
+bad_modulator:
 	cancel_work_sync(&wb->flush_barrier_work);
 
 	destroy_workqueue(wb->flusher_wq);
@@ -1379,9 +1379,9 @@ void free_cache(struct wb_device *wb)
 	 * kthread_stop() wakes up the thread.
 	 * So we don't need to wake them up by ourselves.
 	 */
-	kthread_stop(wb->sync_daemon);
-	kthread_stop(wb->recorder_daemon);
-	kthread_stop(wb->modulator_daemon);
+	kthread_stop(wb->data_synchronizer);
+	kthread_stop(wb->sup_record_updater);
+	kthread_stop(wb->writeback_modulator);
 
 	cancel_work_sync(&wb->flush_barrier_work);
 

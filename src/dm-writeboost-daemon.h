@@ -19,20 +19,20 @@ void flush_barrier_ios(struct work_struct *);
 
 /*----------------------------------------------------------------------------*/
 
-int writeback_proc(void *);
+int writeback_daemon_proc(void *);
 void wait_for_writeback(struct wb_device *, u64 id);
 
 /*----------------------------------------------------------------------------*/
 
-int modulator_proc(void *);
+int writeback_modulator_proc(void *);
 
 /*----------------------------------------------------------------------------*/
 
-int sync_proc(void *);
+int data_synchronizer_proc(void *);
 
 /*----------------------------------------------------------------------------*/
 
-int recorder_proc(void *);
+int sup_record_updater_proc(void *);
 
 /*----------------------------------------------------------------------------*/
 

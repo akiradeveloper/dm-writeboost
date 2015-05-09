@@ -17,30 +17,25 @@ DM-Writeboost adds metadata block (with checksum) on the RAM buffer to create a
 processing in sequential manner and thereafter it's written back to the backing
 device in background as well.
 
-Persistent logging extension
-----------------------------
-DM-Writeboost can extend its functionality by "type" at construction.
-Type 0 offers only the basic mechanism and the type 1 offers extension called
-"Persistent logging".
-Persistent logging aims to reduce the penalty in flush operation by logging the
-side-effects on persistent logging device (plog_dev).
-The persistent logging device can be a part of the cache device but recommended
-to be the different small (it's ok to be few kb large) but yet fast and durable
-device.
-This extension is in principal similar to full-data journaling in filesystems.
-As of now, only block device interface supported for the persistent device but
-other interfaces will be supported in the future release.
-
 
 DM-Writeboost vs DM-Cache or bcache
 ===================================
-How DM-Writeboost differs from other existing SSD-caching solutions?
+How DM-Writeboost differs from other existing SSD-caching drivers?
+
+The most distinctive point is that DM-Writeboost writes to caching device the
+least frequently. Because it creates a log that's contains 127 writes before
+it actually writes the log to the caching device, writing to the caching device
+happens only once in 127 writes while other caching drivers writes more often.
+Since SSD's lifetime decreases as it experiences writes, users can reduce the
+risk of SSD disorder.
+
 DM-Writeboost performs very much efficient than other caching solutions in
 small random pattern. But since it always split the requests into 4KB chunks,
 it may not be the best when the ave. I/O size is very large in your workload.
-However, the splitting overhead aside, DM-Writeboost is always the best of all
-because it caches data in sequential manner - the most efficient I/O pattern
-for the SSD cache device in terms of both performance and lifetime.
+However, if the splitting overhead aside, DM-Writeboost is always the best of
+all because it caches data in sequential manner - the most efficient I/O pattern
+for the SSD cache device in terms of performance.
+
 It's known from experiments that DM-Writeboost performs no good when you create
 a DM-Writeboost'd device in virtual environment like KVM. So, keep in mind to
 use this driver in the host (or physical) machine.
@@ -51,81 +46,66 @@ How To Use DM-Writeboost
 Trigger cache device reformat
 -----------------------------
 The cache device is triggered reformating only if the first one sector of the
-cache device is zeroed out.
+cache device is zeroed out. Note that this operation should be omitted when
+you resume the cache device.
 e.g. dd if=/dev/zero of=/dev/mapper/wbdev oflag=direct bs=512 count=1
 
 Constructing DM-Writeboost'd device
 -----------------------------------
 You can construct DM-Writeboost'd device with dmsetup create command.
 
-<type>
 <essential args>
 <#optional args> <optional args>
 <#tunable args> <tunable args>
 
-- For <type>, see `Mechanism`
-- <essential args> differs by <type>
 - <optional args> and <tunable args> are unordered list of key-value pairs.
 
-type 0:
-  <essential args>
-  backing_dev        : A block device having original data (e.g. HDD)
-  cache_dev          : A block device having caches (e.g. SSD)
+<essential args>
+backing_dev        : A block device having original data (e.g. HDD)
+cache_dev          : A block device having caches (e.g. SSD)
 
-  <optional_args> (same in all <type>)
-  segment_size_order : Determines the size of a RAM buffer.
-                       RAM buffer size will be 1 << n (sector)
-                       accepts: 4..10
-                       default: 10
-  nr_rambuf_pool     : The number of RAM buffers to allocate
-                       accepts: 1..
-                       default: 8
+<optional_args>
+segment_size_order : Determines the size of a RAM buffer.
+                     RAM buffer size will be 1 << n (sector)
+                     accepts: 4..10
+                     default: 10
+nr_rambuf_pool     : The number of RAM buffers to allocate
+                     accepts: 1..
+                     default: 8
 
-  <tunable args>
-  see `Messages`
+<tunable args>
+see `Messages`
 
 e.g.
 BACKING=/dev/sdb # example
 CACHE=/dev/sdc # example
 sz=`blockdev --getsize ${BACKING}`
-dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE"
-dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE \
+dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE"
+dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE \
                               4 nr_rambuf_pool 32 segment_size_order 8 \
                               2 allow_writeback 1"
-dmsetup create wbdev --table "0 $sz writeboost 0 $BACKING $CACHE \
+dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE \
                               0 \
                               2 allow_writeback 1"
 
-type 1:
-  <essential args>
-  backing_dev
-  cache_dev
-  plog_dev_desc      : A string descriptor to specify the plog device
+When you shut down the system
+-----------------------------
+On shutting down the system, you don't need to do anything at all. The data
+and metadata is safely saved on the cache device. But, if you want to do
+deconstruct the device manually, use dmsetup remove.
 
-e.g.
-PLOG=/dev/sdd # example
-dmsetup create wbdev --table "0 $sz 0 writeboost 1 $BACKING $CACHE $PLOG"
-
-Deconstructing your device
---------------------------
-To deconstruct your DM-Writeboost'd device, just run dmsetup remove command.
-This will flushes the current RAM buffer and frees the internal data
-structures. Without this, some data can be lost.
-e.g. dmsetup remote wbdev
-
-Resuming your device
---------------------
-To resume your DM-Writeboost'd device of the previous deconstruction, just run
-dmsetup create command with the same parameter (DON'T zero out the first sector
-of the cache device!). This replays the logs on the cache device to restore the
-internal data structures.
+Resuming your device after system reboot
+----------------------------------------
+To resume your caching device of the on-disk state, run dmsetup create command
+with the same parameter but DO NOT zero out the first sector of the cache device.
+This replays the logs on the cache device to rebuild the internal data structures.
 
 Removing cache device
 ---------------------
 If you want to detach your cache device for some reasons (you don't like
 DM-Writeboost anymore or you try to upgrade the cache device to a newly
-perchased device) the safest way to do this is clean the dirty data up your
-cache device first and thereafter deconstrust the DM-Writeboost'd device.
+perchased device) the safest way to do this is clean the dirty data up from your
+cache device first and then deconstrust the DM-Writeboost'd device.
 You can use drop_caches message to forcibly clean up your cache device.
 e.g.
 dmsetup message wbdev 0 drop_caches
@@ -186,7 +166,7 @@ More than $read_cache_threshold * 4KB consecutive reads won't be staged.
 (2) Others
 drop_caches
   Wait for all dirty data on the cache device to be written back to the backing
-  device. Interruptible.
+  device. This is interruptible.
 clear_stats
   Clear the statistic info (see `Status`).
 

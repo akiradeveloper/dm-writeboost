@@ -25,7 +25,7 @@ void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 	}
 }
 
-struct safe_io {
+struct wb_io {
 	struct work_struct work;
 	int err;
 	unsigned long err_bits;
@@ -34,29 +34,30 @@ struct safe_io {
 	struct dm_io_region *regions;
 };
 
-static void safe_io_proc(struct work_struct *work)
+static void wb_io_fn(struct work_struct *work)
 {
-	struct safe_io *io = container_of(work, struct safe_io, work);
+	struct wb_io *io = container_of(work, struct wb_io, work);
 	io->err_bits = 0;
 	io->err = dm_io(io->io_req, io->num_regions, io->regions, &io->err_bits);
 }
 
-int dm_safe_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
+int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 			unsigned num_regions, struct dm_io_region *regions,
 			unsigned long *err_bits, bool thread, const char *caller)
 {
 	int err = 0;
 
 	if (thread) {
-		struct safe_io io = {
+		struct wb_io io = {
 			.io_req = io_req,
 			.regions = regions,
 			.num_regions = num_regions,
 		};
+		BUG_ON(io_req->notify.fn);
 
-		INIT_WORK_ONSTACK(&io.work, safe_io_proc);
+		INIT_WORK_ONSTACK(&io.work, wb_io_fn);
 		queue_work(wb->io_wq, &io.work);
-		flush_work(&io.work);
+		flush_workqueue(wb->io_wq);
 		destroy_work_on_stack(&io.work); /* Pair with INIT_WORK_ONSTACK */
 
 		err = io.err;
@@ -153,232 +154,6 @@ static void wake_up_active_wq(wait_queue_head_t *wq)
 		wake_up(wq);
 }
 
-static void plog_write_endio(unsigned long error, void *context)
-{
-	struct write_job *job = context;
-	struct wb_device *wb = job->wb;
-
-	if (error)
-		mark_dead(wb);
-
-	if (atomic_dec_and_test(&wb->nr_inflight_plog_writes))
-		wake_up_active_wq(&wb->plog_wait_queue);
-
-	mempool_free(job->plog_buf, wb->plog_buf_pool);
-	mempool_free(job, wb->write_job_pool);
-}
-
-static void do_append_plog_t1(struct wb_device *wb, struct bio *bio,
-			      struct write_job *job)
-{
-	int r;
-	struct dm_io_request io_req = {
-		.client = wb->io_client,
-		.bi_rw = WRITE,
-		.notify.fn = plog_write_endio,
-		.notify.context = job,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = job->plog_buf,
-	};
-	struct dm_io_region region = {
-		.bdev = wb->plog_dev_t1->bdev,
-		.sector = wb->plog_seg_start_sector + job->plog_head,
-		.count = 1 + bio_sectors(bio),
-	};
-
-	/*
-	 * We need to submit this plog write in background otherwise
-	 * causes serious deadlock. Although this is not a sync write
-	 * the process is waiting for all async plog writes complete.
-	 * Thus, essentially sync.
-	 */
-	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, true));
-	if (r)
-		plog_write_endio(0, job);
-}
-
-static void do_append_plog(struct wb_device *wb, struct bio *bio,
-			   struct write_job *job)
-{
-	u32 cksum = crc32c(WB_CKSUM_SEED, bio_data(bio), bi_size(bio));
-	struct plog_meta_device meta = {
-		.id = cpu_to_le64(wb->current_seg->id),
-		.sector = cpu_to_le64((u64)bi_sector(bio)),
-		.checksum = cpu_to_le32(cksum),
-		.idx = mb_idx_inseg(wb, job->mb->idx),
-		.len = bio_sectors(bio),
-	};
-	memcpy(job->plog_buf, &meta, 512);
-	memcpy(job->plog_buf + 512, bio_data(bio), bi_size(bio));
-
-	switch (wb->type) {
-	case 1:
-		do_append_plog_t1(wb, bio, job);
-		break;
-	default:
-		BUG();
-	}
-}
-
-/*
- * Submit sync flush request to @dev
- */
-static void submit_flush_request(struct wb_device *wb, struct dm_dev *dev, bool thread)
-{
-	int r = 0;
-	struct dm_io_request io_req = {
-		.bi_rw = WRITE_FLUSH,
-		.mem.type = DM_IO_KMEM,
-		.mem.ptr.addr = NULL,
-		.client = wb->io_client,
-	};
-	struct dm_io_region io_region = {
-		.bdev = dev->bdev,
-		.sector = 0,
-		.count = 0,
-	};
-	maybe_IO(dm_safe_io(&io_req, 1, &io_region, NULL, thread));
-}
-
-static void wait_plog_writes_complete(struct wb_device *wb)
-{
-	wait_event(wb->plog_wait_queue,
-		   !atomic_read(&wb->nr_inflight_plog_writes));
-}
-
-/*
- * Wait for all the plog writes complete
- * and then make all the predecessor writes persistent.
- */
-static void barrier_plog_writes(struct wb_device *wb)
-{
-	wait_plog_writes_complete(wb);
-
-	submit_flush_request(wb, wb->cache_dev, true);
-	switch (wb->type) {
-	case 1:
-		submit_flush_request(wb, wb->plog_dev_t1, true);
-		break;
-	default:
-		BUG();
-	}
-}
-
-/*
- * Submit a serialized plog write.
- * If the bio is REQ_FUA all the predeessor writes are all persistent
- *
- * @job and the held resources should be freed under this function.
- */
-static void append_plog(struct wb_device *wb, struct bio *bio,
-			struct write_job *job)
-{
-	if (!wb->type) {
-		/*
-		 * Without plog no endio frees the job
-		 * so we need to free it.
-		 */
-		mempool_free(job, wb->write_job_pool);
-		return;
-	}
-
-	/*
-	 * For type 1, resources are freed in endio.
-	 */
-	do_append_plog(wb, bio, job);
-
-	if (wb->type && (bio->bi_rw & REQ_FUA))
-		barrier_plog_writes(wb);
-}
-
-/*
- * Rebuild a RAM buffer (metadata and data) from a plog.
- */
-void rebuild_rambuf(void *rambuffer, void *plog_seg_buf, u64 log_id)
-{
-	struct segment_header_device *seg = rambuffer;
-	struct metablock_device *mb;
-
-	void *cur_plog_buf = plog_seg_buf;
-	while (true) {
-		u8 i;
-		u32 actual, expected;
-		sector_t sector_cpu;
-		size_t bytes;
-		void *addr;
-
-		struct plog_meta_device meta;
-		memcpy(&meta, cur_plog_buf, 512);
-		sector_cpu = le64_to_cpu(meta.sector);
-
-		actual = crc32c(WB_CKSUM_SEED, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
-		expected = le32_to_cpu(meta.checksum);
-
-		/* Checksum not same */
-		if (actual != expected)
-			break;
-
-		/* ID not same */
-		if (le64_to_cpu(meta.id) != log_id)
-			break;
-
-		/* Update header data */
-		seg->id = meta.id;
-		if ((meta.idx + 1) > seg->length)
-			seg->length = meta.idx + 1;
-
-		/* Metadata */
-		mb = seg->mbarr + meta.idx;
-		mb->sector = cpu_to_le64((u64)calc_cache_alignment(sector_cpu));
-		for (i = 0; i < meta.len; i++)
-			mb->dirty_bits |= (1 << (do_io_offset(sector_cpu) + i));
-
-		/* Data */
-		bytes = do_io_offset(sector_cpu) << SECTOR_SHIFT;
-		addr = rambuffer + ((1 + meta.idx) * (1 << 12) + bytes);
-		memcpy(addr, cur_plog_buf + 512, meta.len << SECTOR_SHIFT);
-
-		/* Shift to the next "possible" plog */
-		cur_plog_buf += ((1 + meta.len) << SECTOR_SHIFT);
-	}
-
-	/* Checksum */
-	seg->checksum = cpu_to_le32(calc_checksum(rambuffer, seg->length));
-}
-
-/*
- * Advance the current head for newer logs.
- * Returns the "current" head as the address for current appending.
- * After returned, nr_inflight_plog_writes increments.
- */
-static sector_t advance_plog_head(struct wb_device *wb, struct bio *bio)
-{
-	sector_t old;
-	if (!wb->type)
-		return 0;
-
-	old = wb->alloc_plog_head;
-	wb->alloc_plog_head += (1 + bio_sectors(bio));
-	atomic_inc(&wb->nr_inflight_plog_writes);
-	return old;
-}
-
-static void acquire_new_plog_seg(struct wb_device *wb, u64 id)
-{
-	u32 tmp32;
-
-	if (!wb->type)
-		return;
-
-	wait_for_flushing(wb, SUB_ID(id, wb->nr_plog_segs));
-
-	wait_plog_writes_complete(wb);
-
-	div_u64_rem(id - 1, wb->nr_plog_segs, &tmp32);
-	wb->plog_seg_start_sector = wb->plog_seg_size * tmp32;
-	wb->alloc_plog_head = 0;
-}
-
 /*----------------------------------------------------------------------------*/
 
 static u8 count_dirty_caches_remained(struct segment_header *seg)
@@ -458,7 +233,6 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	wb->current_seg = new_seg;
 
 	acquire_new_rambuffer(wb, id);
-	acquire_new_plog_seg(wb, id);
 }
 
 static void prepare_new_seg(struct wb_device *wb)
@@ -489,8 +263,7 @@ static void queue_flush_job(struct wb_device *wb)
 {
 	struct flush_job *job = &wb->current_rambuf->job;
 
-	wait_event(wb->inflight_ios_wq,
-		!atomic_read(&wb->current_seg->nr_inflight_ios));
+	wait_event(wb->inflight_ios_wq, !atomic_read(&wb->current_seg->nr_inflight_ios));
 
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
@@ -575,8 +348,7 @@ static void dec_nr_dirty_caches(struct wb_device *wb)
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
-static void increase_dirtiness(struct wb_device *wb, struct segment_header *seg,
-			       struct metablock *mb, struct bio *bio)
+static void increase_dirtiness(struct wb_device *wb, struct metablock *mb, struct bio *bio)
 {
 	unsigned long flags;
 
@@ -584,8 +356,8 @@ static void increase_dirtiness(struct wb_device *wb, struct segment_header *seg,
 
 	spin_lock_irqsave(&wb->lock, flags);
 	if (!mb->dirty_bits) {
-		seg->length++;
-		BUG_ON(seg->length > wb->nr_caches_inseg);
+		wb->current_seg->length++;
+		BUG_ON(wb->current_seg->length > wb->nr_caches_inseg);
 		was_clean = true;
 	}
 	if (likely(io_fullsize(bio))) {
@@ -612,8 +384,7 @@ static void increase_dirtiness(struct wb_device *wb, struct segment_header *seg,
  * omitting this dropping _only_ results in double writeback
  * which is only a matter of performance.
  */
-void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg,
-			 struct metablock *mb)
+void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg, struct metablock *mb)
 {
 	unsigned long flags;
 
@@ -777,7 +548,7 @@ static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8
 			.sector = dest,
 			.count = 1,
 		};
-		maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, true));
+		maybe_IO(wb_io(&io_req, 1, &region, NULL, true));
 	}
 	mempool_free(buf, wb->buf_1_pool);
 }
@@ -815,10 +586,9 @@ void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
 
 /*----------------------------------------------------------------------------*/
 
-static void write_on_rambuffer(struct wb_device *wb, struct bio *bio,
-			       struct write_job *job)
+static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct bio *bio)
 {
-	sector_t start_sector = ((mb_idx_inseg(wb, job->mb->idx) + 1) << 3) + io_offset(bio);
+	sector_t start_sector = ((mb_idx_inseg(wb, write_pos->idx) + 1) << 3) + io_offset(bio);
 	size_t start_byte = start_sector << SECTOR_SHIFT;
 	void *data = bio_data(bio);
 	memcpy(wb->current_rambuf->data + start_byte, data, bi_size(bio));
@@ -841,19 +611,12 @@ static u32 advance_cursor(struct wb_device *wb)
 
 static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 {
-	bool plog_seg_no_space = false, rambuf_no_space = false;
-
-	/* If there is no more space for appending new log it's time to request new plog. */
-	if (wb->type)
-		plog_seg_no_space = (wb->alloc_plog_head + 1 + bio_sectors(bio)) > wb->plog_seg_size;
-
-	rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
-
-	return plog_seg_no_space || rambuf_no_space;
+	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
+	return rambuf_no_space;
 }
 
 /*
- * queue_current_buffer if the RAM buffer or plog can't make space any more.
+ * queue_current_buffer if the RAM buffer can't make space any more.
  */
 static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
 {
@@ -883,16 +646,7 @@ static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 {
 	/* In device-mapper bio with REQ_FLUSH is for sure to have no data. */
 	BUG_ON(bi_size(bio));
-
-	if (!wb->type) {
-		queue_barrier_io(wb, bio);
-	} else {
-		barrier_plog_writes(wb);
-		if (is_live(wb))
-			bio_endio(bio, 0);
-		else
-			bio_endio(bio, -EIO);
-	}
+	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -911,8 +665,7 @@ struct lookup_result {
  * Lookup a bio relevant cache data.
  * In case of cache hit, nr_inflight_ios is incremented.
  */
-static void cache_lookup(struct wb_device *wb, struct bio *bio,
-			 struct lookup_result *res)
+static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_result *res)
 {
 	res->key = (struct lookup_key) {
 		.sector = calc_cache_alignment(bi_sector(bio)),
@@ -937,15 +690,11 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio,
 /*
  * Get new place to write.
  */
-static void prepare_new_pos(struct wb_device *wb, struct bio *bio,
-			    struct lookup_result *res,
-			    struct write_job *pos)
+static struct metablock *prepare_new_write_pos(struct wb_device *wb)
 {
-	pos->plog_head = advance_plog_head(wb, bio);
-	pos->mb = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	BUG_ON(pos->mb->dirty_bits);
-
-	ht_register(wb, res->head, pos->mb, &res->key);
+	struct metablock *ret = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
+	BUG_ON(ret->dirty_bits);
+	return ret;
 }
 
 static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
@@ -955,9 +704,9 @@ static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
 }
 
 static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
-static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
-			      struct write_job *pos)
+static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio)
 {
+	struct metablock *ret;
 	struct lookup_result res;
 
 	mutex_lock(&wb->io_lock);
@@ -974,49 +723,44 @@ static void prepare_write_pos(struct wb_device *wb, struct bio *bio,
 	if (res.found) {
 		if (unlikely(res.on_buffer)) {
 			/* Overwrite on the buffer */
-			pos->plog_head = advance_plog_head(wb, bio);
-			pos->mb = res.found_mb;
 			mutex_unlock(&wb->io_lock);
-			return;
+			return res.found_mb;
 		} else {
 			/*
 			 * Invalidate the old cache on the cache device because
 			 * we can't overwrite cache block on the cache device.
 			 */
-			invalidate_previous_cache(wb, res.found_seg, res.found_mb,
-						  io_fullsize(bio));
+			invalidate_previous_cache(wb, res.found_seg, res.found_mb, io_fullsize(bio));
 			dec_inflight_ios(wb, res.found_seg);
 		}
 	} else
 		might_cancel_read_cache_cell(wb, bio);
 
-	prepare_new_pos(wb, bio, &res, pos);
+	ret = prepare_new_write_pos(wb);
+	ht_register(wb, res.head, ret, &res.key);
 
 	mutex_unlock(&wb->io_lock);
 
 	/* nr_inflight_ios is incremented */
+	return ret;
 }
 
 /*
- * Write bio data to RAM buffer and plog (if available).
+ * Write bio data to RAM buffer.
  */
-static int process_write_job(struct wb_device *wb, struct bio *bio,
-			     struct write_job *job)
+static int do_process_write(struct wb_device *wb, struct metablock *write_pos, struct bio *bio)
 {
-	increase_dirtiness(wb, wb->current_seg, job->mb, bio);
+	increase_dirtiness(wb, write_pos, bio);
 
-	write_on_rambuffer(wb, bio, job);
-
-	append_plog(wb, bio, job);
+	write_on_rambuffer(wb, write_pos, bio);
 
 	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
 	 * bio with REQ_FUA has data.
-	 * For such bio, we first treat it like a normal bio and then as a
-	 * REQ_FLUSH bio.
+	 * For such bio, we first treat it like a normal bio and then as a REQ_FLUSH bio.
 	 */
-	if (!wb->type && (bio->bi_rw & REQ_FUA)) {
+	if (bio->bi_rw & REQ_FUA) {
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1027,17 +771,6 @@ static int process_write_job(struct wb_device *wb, struct bio *bio,
 		bio_endio(bio, -EIO);
 
 	return DM_MAPIO_SUBMITTED;
-}
-
-static struct write_job *alloc_write_job(struct wb_device *wb)
-{
-	struct write_job *job = mempool_alloc(wb->write_job_pool, GFP_NOIO);
-	job->wb = wb;
-
-	if (wb->type)
-		job->plog_buf = mempool_alloc(wb->plog_buf_pool, GFP_NOIO);
-
-	return job;
 }
 
 /*
@@ -1066,26 +799,16 @@ static struct write_job *alloc_write_job(struct wb_device *wb)
  *   prepare_write_pos:
  *     mutex_lock (to serialize write)
  *       inc in_flight_ios # refcount on the dst segment
- *       inc in_flight_plog_writes
  *     mutex_unlock
  *
- *   process_write_job:
- *     # submit async plog write
- *     # dec in_flight_plog_writes in endio
- *     append_plog()
- *
- *     # wait for all async plog writes complete
- *     # not always. only if we need to make precedents persistent.
- *     barrier_plog_writes()
- *
+ *   do_process_write:
  *     dec in_flight_ios
  *     bio_endio(bio)
  */
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
-	struct write_job *job = alloc_write_job(wb);
-	prepare_write_pos(wb, bio, job);
-	return process_write_job(wb, bio, job);
+	struct metablock *write_pos = prepare_write_pos(wb, bio);
+	return do_process_write(wb, write_pos, bio);
 }
 
 enum PBD_FLAG {
@@ -1101,6 +824,7 @@ struct per_bio_data {
 		struct segment_header *seg;
 	};
 };
+#define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->per_bio_data_size))
 
 static void reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
@@ -1136,7 +860,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	wait_for_flushing(wb, res.found_seg->id);
 
 	if (likely(dirty_bits == 255)) {
-		struct per_bio_data *pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
+		struct per_bio_data *pbd = per_bio_data(wb, bio);
 		pbd->type = PBD_READ_SEG;
 		pbd->seg = res.found_seg;
 
@@ -1166,8 +890,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	struct wb_device *wb = ti->private;
 
-	struct per_bio_data *pbd;
-	pbd = dm_per_bio_data(bio, ti->per_bio_data_size);
+	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_NONE;
 
 	if (bio->bi_rw & REQ_DISCARD)
@@ -1183,7 +906,7 @@ static void read_cache_cell_copy_data(struct wb_device *, struct bio*, int error
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 {
 	struct wb_device *wb = ti->private;
-	struct per_bio_data *pbd = dm_per_bio_data(bio, ti->per_bio_data_size);
+	struct per_bio_data *pbd = per_bio_data(wb, bio);
 
 	switch (pbd->type) {
 	case PBD_NONE:
@@ -1313,7 +1036,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	new_cell->sector = bi_sector(bio);
 	read_cache_add(cells, new_cell);
 
-	pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
+	pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
 
@@ -1331,7 +1054,7 @@ static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 
 static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, int error)
 {
-	struct per_bio_data *pbd = dm_per_bio_data(bio, wb->ti->per_bio_data_size);
+	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
 
@@ -1431,7 +1154,7 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 		}
 	}
 
-	cells->wq = alloc_ordered_workqueue("dmwb_read_cache", 0);
+	cells->wq = create_singlethread_workqueue("dmwb_read_cache");
 	if (!cells->wq)
 		goto bad_wq;
 
@@ -1550,18 +1273,6 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 	int r = 0;
 	struct dm_target *ti = wb->ti;
 
-	static struct dm_arg _args[] = {
-		{0, 1, "Invalid type"},
-	};
-	unsigned tmp;
-
-	r = dm_read_arg(_args, as, &tmp, &ti->error);
-	if (r) {
-		DMERR("%s", ti->error);
-		return r;
-	}
-	wb->type = tmp;
-
 	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
 			  &wb->backing_dev);
 	if (r) {
@@ -1575,10 +1286,6 @@ static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 		DMERR("Failed to get cache_dev");
 		goto bad_get_cache;
 	}
-
-	/* Plog device will be later allocated with this descriptor. */
-	if (wb->type)
-		strcpy(wb->plog_dev_desc, dm_shift_arg(as));
 
 	return r;
 
@@ -1697,8 +1404,6 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 			DMERR("%s", ti->error);
 			return r;
 		}
-		/* Tunables are emitted only if they were origianlly passed. */
-		wb->should_emit_tunables = true;
 	}
 
 	return do_consume_tunable_argv(wb, as, argc);
@@ -1763,12 +1468,7 @@ static int init_core_struct(struct dm_target *ti)
 		goto bad_buf_8_pool;
 	}
 
-	/*
-	 * Workqueue for generic I/O
-	 * More than one I/Os are submitted during a period
-	 * so the number of max_active workers are set to 0.
-	 */
-	wb->io_wq = alloc_workqueue("dm-" DM_MSG_PREFIX, WQ_MEM_RECLAIM, 0);
+	wb->io_wq = create_singlethread_workqueue("dmwb_io");
 	if (!wb->io_wq) {
 		DMERR("Failed to allocate io_wq");
 		r = -ENOMEM;
@@ -1787,7 +1487,6 @@ static int init_core_struct(struct dm_target *ti)
 	spin_lock_init(&wb->lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
 	clear_bit(WB_DEAD, &wb->flags);
-	wb->should_emit_tunables = false;
 
 	return r;
 
@@ -1856,8 +1555,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	/* Default values */
 	wb->segment_size_order = 10;
 	wb->nr_rambuf_pool = 8;
-	if (wb->type)
-		wb->nr_plog_segs = 8;
 
 	r = consume_optional_argv(wb, &as);
 	if (r) {
@@ -2031,18 +1728,14 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		break;
 
 	case STATUSTYPE_TABLE:
-		DMEMIT("%u", wb->type);
 		format_dev_t(buf, wb->backing_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
-		if (wb->type)
-			DMEMIT(" %s", wb->plog_dev_desc);
 		DMEMIT(" 4 segment_size_order %u nr_rambuf_pool %u",
 		       wb->segment_size_order,
 		       wb->nr_rambuf_pool);
-		if (wb->should_emit_tunables)
-			emit_tunables(wb, result + sz, maxlen - sz);
+		emit_tunables(wb, result + sz, maxlen - sz);
 		break;
 	}
 }

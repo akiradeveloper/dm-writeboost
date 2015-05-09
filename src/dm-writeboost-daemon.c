@@ -79,7 +79,7 @@ void flush_proc(struct work_struct *work)
 		.count = (seg->length + 1) << 3,
 	};
 
-	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, false));
+	maybe_IO(wb_io(&io_req, 1, &region, NULL, false));
 
 	/*
 	 * Deferred ACK for barrier requests
@@ -137,7 +137,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 			.sector = writeback_io->sector,
 			.count = 1 << 3,
 		};
-		maybe_IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
+		maybe_IO(wb_io(&io_req_w, 1, &region_w, NULL, false));
 		if (r)
 			writeback_endio(0, wb);
 	} else {
@@ -163,7 +163,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 				.sector = writeback_io->sector + i,
 				.count = 1,
 			};
-			maybe_IO(dm_safe_io(&io_req_w, 1, &region_w, NULL, false));
+			maybe_IO(wb_io(&io_req_w, 1, &region_w, NULL, false));
 			if (r)
 				writeback_endio(0, wb);
 		}
@@ -269,7 +269,7 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 	 * dm_io() allows region.count = 0
 	 * so we don't need to skip here in case of seg->length = 0
 	 */
-	maybe_IO(dm_safe_io(&io_req_r, 1, &region_r, NULL, false));
+	maybe_IO(wb_io(&io_req_r, 1, &region_r, NULL, false));
 
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
@@ -461,7 +461,7 @@ static void update_superblock_record(struct wb_device *wb)
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
-	maybe_IO(dm_safe_io(&io_req, 1, &region, NULL, false));
+	maybe_IO(wb_io(&io_req, 1, &region, NULL, false));
 
 	mempool_free(buf, wb->buf_1_pool);
 }

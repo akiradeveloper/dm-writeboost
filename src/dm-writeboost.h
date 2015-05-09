@@ -134,19 +134,6 @@ struct segment_header {
 
 /*----------------------------------------------------------------------------*/
 
-struct write_job {
-	struct wb_device *wb;
-
-	struct metablock *mb;
-	sector_t plog_head;
-
-	/*
-	 * We can't use zero-length array here instead we must allocate the
-	 * buffer by explicitly calling kmalloc. Otherwise, the dm_io() fails.
-	 */
-	void *plog_buf;
-};
-
 /*
  * Foreground queues this object and flush daemon later pops one job to submit
  * logging write to the cache device.
@@ -165,42 +152,6 @@ struct rambuffer {
 	void *data;
 	struct flush_job job;
 };
-
-/*----------------------------------------------------------------------------*/
-
-/*
- * The data structures in persistent logging
- * -----------------------------------------
- *
- * Plog:
- * plog_meta_device (512B) + data (512B-4096B)
- * A plog contains a self-contained information of a accepted write.
- * Plog is an atomic unit in persistent logging.
- *
- * plog_dev:
- * The persistent device where plogs are written.
- *
- * plog_seg:
- * Like cache_dev is split into segment_headers
- * plog_dev is split into plog_segs of the same size.
- *
- * E.g.
- * A plog_dev is split into two plog_seg
- *
- * |<------------------------ plog_dev ------------------------>|
- * |<-------- plog_seg ---------->|<-------- plog_seg --------->|
- * |(meta, data), (meta, data), ..|...                          |
- *  <-- plog -->
- */
-
-struct plog_meta_device {
-	__le64 id; /* Id of the segment */
-	__le64 sector; /* Orig sector */
-	__le32 checksum; /* Checksum of the data */
-	__u8 idx; /* Idx in the segment */
-	__u8 len; /* Length in sector */
-	__u8 padding[512 - (8 + 8 + 4 + 1 + 1)];
-} __packed;
 
 /*----------------------------------------------------------------------------*/
 
@@ -291,12 +242,6 @@ enum WB_FLAG {
  * The context of the cache target instance.
  */
 struct wb_device {
-	/*
-	 * 0: No persistent logging (plog) but only RAM buffers
-	 * 1: With plog (block device)
-	 */
-	int type;
-
 	struct dm_target *ti;
 
 	struct dm_dev *backing_dev; /* Slow device (HDD) */
@@ -380,9 +325,9 @@ struct wb_device {
 
 	/*--------------------------------------------------------------------*/
 
-	/**************
-	 * Flush Daemon
-	 **************/
+	/****************
+	 * Buffer Flusher
+	 ****************/
 
 	mempool_t *flush_job_pool;
 	struct workqueue_struct *flusher_wq;
@@ -483,31 +428,6 @@ struct wb_device {
 
 	/*--------------------------------------------------------------------*/
 
-	/********************
-	 * Persistent Logging
-	 ********************/
-
-	/* Common */
-	char plog_dev_desc[BDEVNAME_SIZE]; /* Passed as essential argv to describe the persistent device */
-
-	wait_queue_head_t plog_wait_queue; /* Wait queue to serialize writers */
-	atomic_t nr_inflight_plog_writes; /* Number of async plog writes not acked yet */
-
-	mempool_t *write_job_pool;
-	struct kmem_cache *plog_buf_cachep;
-	mempool_t *plog_buf_pool;
-	struct kmem_cache *plog_seg_buf_cachep;
-
-	sector_t plog_seg_size; /* Const. The size of a plog in sector */
-	sector_t alloc_plog_head; /* Next relative sector to allocate */
-	sector_t plog_seg_start_sector; /* The absolute start sector of the current plog */
-	u32 nr_plog_segs; /* Const. Number of plogs */
-
-	/* Type 1 */
-	struct dm_dev *plog_dev_t1;
-
-	/*--------------------------------------------------------------------*/
-
 	/************
 	 * Statistics
 	 ************/
@@ -518,7 +438,6 @@ struct wb_device {
 	/*--------------------------------------------------------------------*/
 
 	unsigned long flags;
-	bool should_emit_tunables; /* Should emit tunables in dmsetup table? */
 };
 
 /*----------------------------------------------------------------------------*/
@@ -529,9 +448,7 @@ void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);
 u8 read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
-void invalidate_previous_cache(struct wb_device *, struct segment_header *,
-			       struct metablock *old_mb, bool overwrite_fullsize);
-void rebuild_rambuf(void *rambuf, void *plog_buf, u64 log_id);
+void invalidate_previous_cache(struct wb_device *, struct segment_header *, struct metablock *old_mb, bool overwrite_fullsize);
 
 /*----------------------------------------------------------------------------*/
 
@@ -543,10 +460,10 @@ void do_check_buffer_alignment(void *, const char *, const char *);
  * dm_io wrapper
  * thread: run dm_io in other thread to avoid deadlock
  */
-#define dm_safe_io(io_req, num_regions, regions, err_bits, thread) \
-	dm_safe_io_internal(wb, (io_req), (num_regions), (regions), \
+#define wb_io(io_req, num_regions, regions, err_bits, thread) \
+	wb_io_internal(wb, (io_req), (num_regions), (regions), \
 			    (err_bits), (thread), __func__)
-int dm_safe_io_internal(struct wb_device *, struct dm_io_request *,
+int wb_io_internal(struct wb_device *, struct dm_io_request *,
 			unsigned num_regions, struct dm_io_region *,
 			unsigned long *err_bits, bool thread, const char *caller);
 

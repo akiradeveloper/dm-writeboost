@@ -7,8 +7,8 @@ manner.
 
 Mechanism
 =========
-Controlling three layers (RAM buffer, cache device and backing device)
-----------------------------------------------------------------------
+Control three layers (RAM buffer, cache device and backing device)
+------------------------------------------------------------------
 DM-Writeboost controls three different layers - RAM buffer (rambuf), cache
 device (cache_dev, e.g SSD) and backing device (backing_dev, e.g. HDD).
 All data are first stored in the RAM buffer and when the RAM buffer is full,
@@ -50,8 +50,8 @@ cache device is zeroed out. Note that this operation should be omitted when
 you resume the cache device.
 e.g. dd if=/dev/zero of=/dev/mapper/wbdev oflag=direct bs=512 count=1
 
-Constructing DM-Writeboost'd device
------------------------------------
+Construct DM-Writeboost'd device
+--------------------------------
 You can construct DM-Writeboost'd device with dmsetup create command.
 
 <essential args>
@@ -88,20 +88,20 @@ dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE \
                               0 \
                               2 allow_writeback 1"
 
-When you shut down the system
------------------------------
+Shut down the system
+--------------------
 On shutting down the system, you don't need to do anything at all. The data
 and metadata is safely saved on the cache device. But, if you want to do
 deconstruct the device manually, use dmsetup remove.
 
-Resuming your device after system reboot
-----------------------------------------
+Resume after system reboot
+--------------------------
 To resume your caching device of the on-disk state, run dmsetup create command
 with the same parameter but DO NOT zero out the first sector of the cache device.
 This replays the logs on the cache device to rebuild the internal data structures.
 
-Removing cache device
----------------------
+Remove cache device
+-------------------
 If you want to detach your cache device for some reasons (you don't like
 DM-Writeboost anymore or you try to upgrade the cache device to a newly
 perchased device) the safest way to do this is clean the dirty data up from your

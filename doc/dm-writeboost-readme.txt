@@ -145,10 +145,10 @@ simultaneously. The dirty caches in the segments are sorted in ascending order
 of the destination address and then written back. Setting large value can boost
 the writeback performance.
 
-update_sup_record_interval (sec)
+update_sb_record_interval (sec)
   accepts: 0..3600
   default: 0
-Update the superblock every $update_sup_record_interval second. 0 means disabled.
+Update the superblock every $update_sb_record_interval second. 0 means disabled.
 Superblock memorizes the last segment ID that was written back.
 By enabling this, DM-Writeboost in resuming can skip segments that's already
 written back and thus can shorten the resume time.

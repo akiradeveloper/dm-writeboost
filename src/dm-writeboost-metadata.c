@@ -1279,14 +1279,14 @@ bad_writeback_modulator:
 	return r;
 }
 
-static int init_sup_record_updater(struct wb_device *wb)
+static int init_sb_record_updater(struct wb_device *wb)
 {
 	int r = 0;
-	wb->update_sup_record_interval = 0;
-	CREATE_DAEMON(sup_record_updater);
+	wb->update_sb_record_interval = 0;
+	CREATE_DAEMON(sb_record_updater);
 	return r;
 
-bad_sup_record_updater:
+bad_sb_record_updater:
 	return r;
 }
 
@@ -1339,9 +1339,9 @@ int resume_cache(struct wb_device *wb)
 		goto bad_modulator;
 	}
 
-	r = init_sup_record_updater(wb);
+	r = init_sb_record_updater(wb);
 	if (r) {
-		DMERR("init_sup_recorder failed");
+		DMERR("init_sb_recorder failed");
 		goto bad_updater;
 	}
 
@@ -1354,7 +1354,7 @@ int resume_cache(struct wb_device *wb)
 	return r;
 
 bad_synchronizer:
-	kthread_stop(wb->sup_record_updater);
+	kthread_stop(wb->sb_record_updater);
 bad_updater:
 	kthread_stop(wb->writeback_modulator);
 bad_modulator:
@@ -1380,7 +1380,7 @@ void free_cache(struct wb_device *wb)
 	 * So we don't need to wake them up by ourselves.
 	 */
 	kthread_stop(wb->data_synchronizer);
-	kthread_stop(wb->sup_record_updater);
+	kthread_stop(wb->sb_record_updater);
 	kthread_stop(wb->writeback_modulator);
 
 	cancel_work_sync(&wb->flush_barrier_work);

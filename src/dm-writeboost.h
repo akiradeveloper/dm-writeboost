@@ -404,8 +404,8 @@ struct wb_device {
 	 * Superblock Record Updater
 	 ***************************/
 
-	struct task_struct *sup_record_updater;
-	unsigned long update_sup_record_interval; /* Tunable */
+	struct task_struct *sb_record_updater;
+	unsigned long update_sb_record_interval; /* Tunable */
 
 	/*--------------------------------------------------------------------*/
 

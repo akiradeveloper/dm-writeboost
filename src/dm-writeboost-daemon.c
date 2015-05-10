@@ -466,7 +466,7 @@ static void update_superblock_record(struct wb_device *wb)
 	mempool_free(buf, wb->buf_1_pool);
 }
 
-int sup_record_updater_proc(void *data)
+int sb_record_updater_proc(void *data)
 {
 	struct wb_device *wb = data;
 
@@ -474,7 +474,7 @@ int sup_record_updater_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = ACCESS_ONCE(wb->update_sup_record_interval) * 1000;
+		intvl = ACCESS_ONCE(wb->update_sb_record_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));

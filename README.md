@@ -1,4 +1,4 @@
-# DM-WRITEBOOST
+# dm-writeboost
 Log-structured Caching for Linux
 
 ## Overview
@@ -6,6 +6,11 @@ dm-writeboost is originated from [Disk Caching Disk(DCD)](http://www.ele.uri.edu
 DCD, implemented in Solaris, is an OS-level IO controller that builds logs from in-coming writes
 (data and metadata) and then writes the logs sequentially similar to log-structured filesystem.
 As a further extension, dm-writeboost supports read-caching which also writes data sequentially.
+
+## Documents
+- doc/dm-writeboost-readme.txt  
+- [dm-writeboost-internal](https://docs.google.com/presentation/d/1mDh5ct3OR-eRxBbci3LQgaTvUFx9WTLw-kkBxNBeTD8/edit?usp=sharing)  
+- [dm-writeboost-for-admin](https://docs.google.com/presentation/d/1v-L8Ma138o7jNBFqRl0epyc1Lji3XhUH1RGj8p7DVe8/edit?usp=sharing)
 
 ## Features
 * **Durable**: Any power failure can't break consistency because each log consists of data, metadata and

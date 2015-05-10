@@ -1522,7 +1522,6 @@ static void free_core_struct(struct wb_device *wb)
 /*
  * Create a writeboost device
  *
- * <type>
  * <essential args>
  * <#optional args> <optional args>
  * <#tunable args> <tunable args>

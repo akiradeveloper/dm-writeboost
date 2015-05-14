@@ -116,8 +116,7 @@ static struct metablock *mb_at(struct wb_device *wb, u32 idx)
 {
 	u32 idx_inseg;
 	u32 seg_idx = div_u64_rem(idx, wb->nr_caches_inseg, &idx_inseg);
-	struct segment_header *seg =
-		large_array_at(wb->segment_header_array, seg_idx);
+	struct segment_header *seg = large_array_at(wb->segment_header_array, seg_idx);
 	return seg->mb_array + idx_inseg;
 }
 
@@ -139,13 +138,13 @@ static void mb_array_empty_init(struct wb_device *wb)
  */
 static sector_t calc_segment_header_start(struct wb_device *wb, u32 k)
 {
-	return (1 << 11) + (1 << wb->segment_size_order) * k;
+	return (1 << 11) + (1 << SEGMENT_SIZE_ORDER) * k;
 }
 
 static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 {
 	sector_t devsize = dm_devsize(dev);
-	return div_u64(devsize - (1 << 11), 1 << wb->segment_size_order);
+	return div_u64(devsize - (1 << 11), 1 << SEGMENT_SIZE_ORDER);
 }
 
 /*
@@ -389,13 +388,11 @@ bad_io:
 /*
  * check if the cache device is already formatted.
  *
- * @need_format (out)  : bad segment_size_order specified?
  * @allow_format (out) : is the superblock was zeroed by the user?
  *
  * returns 0 iff this routine runs without failure.
  */
-static int audit_cache_device(struct wb_device *wb,
-			      bool *need_format, bool *allow_format)
+static int audit_cache_device(struct wb_device *wb, bool *allow_format)
 {
 	int r = 0;
 	struct superblock_header_device sup;
@@ -405,20 +402,12 @@ static int audit_cache_device(struct wb_device *wb,
 		return r;
 	}
 
-	*need_format = true;
 	*allow_format = false;
 
 	if (le32_to_cpu(sup.magic) != WB_MAGIC) {
 		*allow_format = true;
 		DMERR("Superblock Header: Magic number invalid");
 		return 0;
-	}
-
-	if (sup.segment_size_order != wb->segment_size_order) {
-		DMERR("Superblock Header: segment_size_order not same %u != %u",
-		      sup.segment_size_order, wb->segment_size_order);
-	} else {
-		*need_format = false;
 	}
 
 	return r;
@@ -433,7 +422,6 @@ static int format_superblock_header(struct wb_device *wb)
 
 	struct superblock_header_device sup = {
 		.magic = cpu_to_le32(WB_MAGIC),
-		.segment_size_order = wb->segment_size_order,
 	};
 
 	void *buf = mempool_alloc(wb->buf_1_pool, GFP_KERNEL);
@@ -519,7 +507,7 @@ static int format_all_segment_headers(struct wb_device *wb)
 {
 	int r = 0;
 	struct dm_dev *dev = wb->cache_dev;
-	u32 i, nr_segments = calc_nr_segments(dev, wb);
+	u32 i;
 
 	struct format_segmd_context context;
 
@@ -529,13 +517,13 @@ static int format_all_segment_headers(struct wb_device *wb)
 	memset(buf, 0, 1 << 12);
 	check_buffer_alignment(buf);
 
-	atomic64_set(&context.count, nr_segments);
+	atomic64_set(&context.count, wb->nr_segments);
 	context.err = 0;
 
 	/*
 	 * Submit all the writes asynchronously.
 	 */
-	for (i = 0; i < nr_segments; i++) {
+	for (i = 0; i < wb->nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
 			.client = wb->io_client,
 			.bi_rw = WRITE,
@@ -600,23 +588,10 @@ static int format_cache_device(struct wb_device *wb)
 }
 
 /*
- * Setup the core info relavant to the cache geometry.
- * segment_size_order is the core factor in the cache geometry.
- */
-static void setup_geom_info(struct wb_device *wb)
-{
-	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
-	wb->nr_caches_inseg = (1 << (wb->segment_size_order - 3)) - 1;
-	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
-}
-
-/*
  * First check if the superblock and the passed arguments are consistent and
  * re-format the cache structure if they are not.
  * If you want to re-format the cache device you must zeroes out the first one
  * sector of the device.
- *
- * After this, the segment_size_order is fixed.
  *
  * @formatted (out) : Was the cache device re-formatted?
  */
@@ -624,34 +599,20 @@ static int might_format_cache_device(struct wb_device *wb, bool *formatted)
 {
 	int r = 0;
 
-	bool need_format, allow_format;
-	r = audit_cache_device(wb, &need_format, &allow_format);
+	bool allow_format;
+	r = audit_cache_device(wb, &allow_format);
 	if (r) {
 		DMERR("audit_cache_device failed");
 		return r;
 	}
 
-	if (need_format) {
-		if (allow_format) {
-			*formatted = true;
-
-			r = format_cache_device(wb);
-			if (r) {
-				DMERR("format_cache_device failed");
-				return r;
-			}
-		} else {
-			r = -EINVAL;
-			DMERR("Cache device not allowed to format");
+	if (allow_format) {
+		r = format_cache_device(wb);
+		if (r) {
+			DMERR("format_cache_device failed");
 			return r;
 		}
 	}
-
-	/*
-	 * segment_size_order is fixed and we can compute all the geometry info
-	 * that depends on the value.
-	 */
-	setup_geom_info(wb);
 
 	return r;
 }
@@ -663,21 +624,20 @@ static int init_rambuf_pool(struct wb_device *wb)
 	int r = 0;
 	size_t i;
 
-	wb->rambuf_pool = kmalloc(sizeof(struct rambuffer) * wb->nr_rambuf_pool,
-				  GFP_KERNEL);
+	wb->rambuf_pool = kmalloc(sizeof(struct rambuffer) * NR_RAMBUF_POOL, GFP_KERNEL);
 	if (!wb->rambuf_pool)
 		return -ENOMEM;
 
 	wb->rambuf_cachep = kmem_cache_create("dmwb_rambuf",
-			1 << (wb->segment_size_order + SECTOR_SHIFT),
-			1 << (wb->segment_size_order + SECTOR_SHIFT),
+			1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT),
+			1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT),
 			SLAB_RED_ZONE, NULL);
 	if (!wb->rambuf_cachep) {
 		r = -ENOMEM;
 		goto bad_cachep;
 	}
 
-	for (i = 0; i < wb->nr_rambuf_pool; i++) {
+	for (i = 0; i < NR_RAMBUF_POOL; i++) {
 		size_t j;
 		struct rambuffer *rambuf = wb->rambuf_pool + i;
 
@@ -706,7 +666,7 @@ bad_cachep:
 static void free_rambuf_pool(struct wb_device *wb)
 {
 	size_t i;
-	for (i = 0; i < wb->nr_rambuf_pool; i++) {
+	for (i = 0; i < NR_RAMBUF_POOL; i++) {
 		struct rambuffer *rambuf = wb->rambuf_pool + i;
 		kmem_cache_free(wb->rambuf_cachep, rambuf->data);
 	}
@@ -727,6 +687,7 @@ static int init_devices(struct wb_device *wb)
 
 	bool formatted = false;
 
+	// FIXME formatted isn't used
 	r = might_format_cache_device(wb, &formatted);
 	if (r)
 		return r;
@@ -799,7 +760,7 @@ static int read_whole_segment(void *buf, struct wb_device *wb,
 	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
 		.sector = seg->start_sector,
-		.count = 1 << wb->segment_size_order,
+		.count = 1 << SEGMENT_SIZE_ORDER,
 	};
 	return wb_io(&io_req, 1, &region, NULL, false);
 }
@@ -864,9 +825,10 @@ static void apply_metablock_device(struct wb_device *wb, struct segment_header *
 		prepare_overwrite(wb, mb_to_seg(wb, found), found, overwrite_fullsize);
 	}
 
+	ht_register(wb, head, mb, &key);
+
 	if (mb->dirtiness.is_dirty)
 		inc_nr_dirty_caches(wb);
-	ht_register(wb, head, mb, &key);
 }
 
 static void apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
@@ -1244,7 +1206,7 @@ static int init_writeback_daemon(struct wb_device *wb)
 	atomic_set(&wb->writeback_fail_count, 0);
 	atomic_set(&wb->writeback_io_count, 0);
 
-	nr_batch = 1 << (15 - wb->segment_size_order); /* 16MB */
+	nr_batch = 1 << (15 - SEGMENT_SIZE_ORDER); /* 16MB */
 	wb->nr_max_batched_writeback = nr_batch;
 	if (try_alloc_writeback_ios(wb, nr_batch))
 		return -ENOMEM;
@@ -1286,8 +1248,7 @@ static void init_flush_barrier_work(struct wb_device *wb)
 static int init_writeback_modulator(struct wb_device *wb)
 {
 	int r = 0;
-	wb->writeback_threshold = 70;
-	wb->enable_writeback_modulator = false;
+	wb->writeback_threshold = 0;
 	CREATE_DAEMON(writeback_modulator);
 	return r;
 
@@ -1320,6 +1281,10 @@ bad_data_synchronizer:
 int resume_cache(struct wb_device *wb)
 {
 	int r = 0;
+
+	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
+	wb->nr_caches_inseg = (1 << (SEGMENT_SIZE_ORDER - 3)) - 1;
+	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
 
 	r = init_devices(wb);
 	if (r)

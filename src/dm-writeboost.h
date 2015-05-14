@@ -71,7 +71,6 @@
 #define WB_MAGIC 0x57427374 /* Magic number "WBst" */
 struct superblock_header_device {
 	__le32 magic;
-	__u8 segment_size_order;
 } __packed;
 
 /*
@@ -256,6 +255,9 @@ enum WB_FLAG {
 	WB_DEAD = 0,
 };
 
+#define SEGMENT_SIZE_ORDER 10
+#define NR_RAMBUF_POOL 8
+
 /*
  * The context of the cache target instance.
  */
@@ -277,7 +279,6 @@ struct wb_device {
 
 	spinlock_t mb_lock;
 
-	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
 
 	struct kmem_cache *buf_1_cachep;
@@ -328,7 +329,6 @@ struct wb_device {
 	 * RAM buffer pool
 	 *****************/
 
-	u32 nr_rambuf_pool; /* Const */
 	struct kmem_cache *rambuf_cachep;
 	struct rambuffer *rambuf_pool;
 
@@ -413,7 +413,6 @@ struct wb_device {
 	 *********************/
 
 	struct task_struct *writeback_modulator;
-	int enable_writeback_modulator; /* Tunable */
 	u8 writeback_threshold; /* Tunable */
 
 	/*--------------------------------------------------------------------*/

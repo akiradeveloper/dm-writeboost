@@ -55,23 +55,14 @@ Construct dm-writeboost'd device
 You can construct dm-writeboost'd device with dmsetup create command.
 
 <essential args>
-<#optional args> <optional args>
 <#tunable args> <tunable args>
 
-- <optional args> and <tunable args> are unordered list of key-value pairs.
+- <#tunable args> is twice the length of the following list.
+- <tunable args> is unordered list of key-value pairs.
 
 <essential args>
 backing_dev        : A block device having original data (e.g. HDD)
 cache_dev          : A block device having caches (e.g. SSD)
-
-<optional_args>
-segment_size_order : Determines the size of a RAM buffer.
-                     RAM buffer size will be 1 << n (sector)
-                     accepts: 4..10
-                     default: 10
-nr_rambuf_pool     : The number of RAM buffers to allocate
-                     accepts: 1..
-                     default: 8
 
 <tunable args>
 see `Messages`
@@ -81,12 +72,7 @@ BACKING=/dev/sdb # example
 CACHE=/dev/sdc # example
 sz=`blockdev --getsize ${BACKING}`
 dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE"
-dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE \
-                              4 nr_rambuf_pool 32 segment_size_order 8 \
-                              2 allow_writeback 1"
-dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE \
-                              0 \
-                              2 allow_writeback 1"
+dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE 2 writeback_threshold 70"
 
 Shut down the system
 --------------------
@@ -113,33 +99,22 @@ dmsetup remove wbdev
 
 Messages
 --------
-Some behavior of dm-writeboost'd device can be tuned online.
+The behavior of dm-writeboost'd device can be tuned online.
 You can use dmsetup message for this purpose.
 
 (1) Tunables
 The tunables in constructor can be changed online.
-e.g. dmsetup message wbdev 0 enable_writeback_modulator 0
+e.g. dmsetup message wbdev 0 writeback_threshold 70
 
-allow_writeback (bool)
-  accepts: 0 or 1
-  default: 0
-If this flags is set 0, then it never starts writeback until there is no choice
-but to write back the oldest segment to get a new empty segment.
-
-enable_writeback_modulator (bool)
-  accepts: 0 or 1
-  default: 0
 writeback_threshold (%)
   accepts: 0..100
-  default: 70
+  default: 0 (writeback disabled)
 Writeback can be suppressed when the load of backing device is higher than
-$writeback_threshold. By setting $enable_writeback_modulator 1, background
-daemon starts to surveil the load of backing device and turns on and off
-$allow_writeback according to the value.
+$writeback_threshold.
 
 nr_max_batched_writeback
   accepts: 1..1000
-  default: 1 << (15 - segment_size_order)
+  default: 32
 As optimization, dm-writeboost writes back $nr_max_batched_writeback segments
 simultaneously. The dirty caches in the segments are sorted in ascending order
 of the destination address and then written back. Setting large value can boost
@@ -147,7 +122,7 @@ the writeback performance.
 
 update_sb_record_interval (sec)
   accepts: 0..3600
-  default: 0
+  default: 0 (disabled)
 Update the superblock every $update_sb_record_interval second. 0 means disabled.
 Superblock memorizes the last segment ID that was written back.
 By enabling this, dm-writeboost in resuming can skip segments that's already
@@ -155,12 +130,12 @@ written back and thus can shorten the resume time.
 
 sync_data_interval (sec)
   accepts: 0..3600
-  default: 0
+  default: 0 (disabled)
 Sync all the volatile data every $sync_data_interval second. 0 means disabled.
 
 read_cache_threshold (int)
   accepts: 0..127
-  default: 0
+  default: 0 (read caching disabled)
 More than $read_cache_threshold * 4KB consecutive reads won't be staged.
 
 (2) Others

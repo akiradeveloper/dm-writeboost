@@ -429,9 +429,6 @@ int writeback_modulator_proc(void *data)
 	while (!kthread_should_stop()) {
 		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
 
-		if (!ACCESS_ONCE(wb->enable_writeback_modulator))
-			goto modulator_update;
-
 		util = div_u64(100 * (new - old), 1000);
 
 		if (util < ACCESS_ONCE(wb->writeback_threshold))
@@ -439,7 +436,6 @@ int writeback_modulator_proc(void *data)
 		else
 			wb->allow_writeback = false;
 
-modulator_update:
 		old = new;
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));

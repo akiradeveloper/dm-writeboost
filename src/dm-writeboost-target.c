@@ -203,9 +203,9 @@ static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
 
-	wait_for_flushing(wb, SUB_ID(id, wb->nr_rambuf_pool));
+	wait_for_flushing(wb, SUB_ID(id, NR_RAMBUF_POOL));
 
-	div_u64_rem(id - 1, wb->nr_rambuf_pool, &tmp32);
+	div_u64_rem(id - 1, NR_RAMBUF_POOL, &tmp32);
 	next_rambuf = wb->rambuf_pool + tmp32;
 
 	wb->current_rambuf = next_rambuf;
@@ -743,6 +743,7 @@ static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio
 		might_cancel_read_cache_cell(wb, bio);
 
 	ret = prepare_new_write_pos(wb);
+
 	ht_register(wb, res.head, ret, &res.key);
 
 	mutex_unlock(&wb->io_lock);
@@ -1311,57 +1312,14 @@ bad_get_cache:
 		wb->name = tmp; \
 	 } }
 
-static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
+static int do_consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as, unsigned argc)
 {
 	int r = 0;
 	struct dm_target *ti = wb->ti;
 
 	static struct dm_arg _args[] = {
-		{0, 4, "Invalid optional argc"},
-		{4, 10, "Invalid segment_size_order"},
-		{1, UINT_MAX, "Invalid nr_rambuf_pool"},
-	};
-	unsigned tmp, argc = 0;
-
-	if (as->argc) {
-		r = dm_read_arg_group(_args, as, &argc, &ti->error);
-		if (r) {
-			DMERR("%s", ti->error);
-			return r;
-		}
-	}
-
-	while (argc) {
-		const char *key = dm_shift_arg(as);
-		argc--;
-
-		r = -EINVAL;
-
-		consume_kv(segment_size_order, 1);
-		consume_kv(nr_rambuf_pool, 2);
-
-		if (!r) {
-			argc--;
-		} else {
-			ti->error = "Invalid optional key";
-			break;
-		}
-	}
-
-	return r;
-}
-
-static int do_consume_tunable_argv(struct wb_device *wb,
-				   struct dm_arg_set *as, unsigned argc)
-{
-	int r = 0;
-	struct dm_target *ti = wb->ti;
-
-	static struct dm_arg _args[] = {
-		{0, 1, "Invalid allow_writeback"},
-		{0, 1, "Invalid enable_writeback_modulator"},
-		{1, 1000, "Invalid nr_max_batched_writeback"},
 		{0, 100, "Invalid writeback_threshold"},
+		{1, 1000, "Invalid nr_max_batched_writeback"},
 		{0, 3600, "Invalid update_sb_record_interval"},
 		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},
@@ -1374,13 +1332,11 @@ static int do_consume_tunable_argv(struct wb_device *wb,
 
 		r = -EINVAL;
 
-		consume_kv(allow_writeback, 0);
-		consume_kv(enable_writeback_modulator, 1);
-		consume_kv(nr_max_batched_writeback, 2);
-		consume_kv(writeback_threshold, 3);
-		consume_kv(update_sb_record_interval, 4);
-		consume_kv(sync_data_interval, 5);
-		consume_kv(read_cache_threshold, 6);
+		consume_kv(writeback_threshold, 0);
+		consume_kv(nr_max_batched_writeback, 1);
+		consume_kv(update_sb_record_interval, 2);
+		consume_kv(sync_data_interval, 3);
+		consume_kv(read_cache_threshold, 4);
 
 		if (!r) {
 			argc--;
@@ -1556,16 +1512,6 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_essential_argv;
 	}
 
-	/* Default values */
-	wb->segment_size_order = 10;
-	wb->nr_rambuf_pool = 8;
-
-	r = consume_optional_argv(wb, &as);
-	if (r) {
-		ti->error = "consume_optional_argv failed";
-		goto bad_optional_argv;
-	}
-
 	r = resume_cache(wb);
 	if (r) {
 		ti->error = "resume_cache failed";
@@ -1593,7 +1539,6 @@ bad_read_cache_cells:
 bad_tunable_argv:
 	free_cache(wb);
 bad_resume_cache:
-bad_optional_argv:
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->backing_dev);
 bad_essential_argv:
@@ -1680,11 +1625,7 @@ static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
 {
 	ssize_t sz = 0;
 
-	DMEMIT(" %d", 14);
-	DMEMIT(" allow_writeback %d",
-	       wb->allow_writeback ? 1 : 0);
-	DMEMIT(" enable_writeback_modulator %d",
-	       wb->enable_writeback_modulator ? 1 : 0);
+	DMEMIT(" %d", 10);
 	DMEMIT(" writeback_threshold %d",
 	       wb->writeback_threshold);
 	DMEMIT(" nr_cur_batched_writeback %u",
@@ -1736,9 +1677,6 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		DMEMIT(" %s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
-		DMEMIT(" 4 segment_size_order %u nr_rambuf_pool %u",
-		       wb->segment_size_order,
-		       wb->nr_rambuf_pool);
 		emit_tunables(wb, result + sz, maxlen - sz);
 		break;
 	}
@@ -1746,7 +1684,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {1, 0, 0},
+	.version = {2, 0, 0},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

@@ -116,7 +116,8 @@ static void mb_array_empty_init(struct wb_device *wb)
 		INIT_HLIST_NODE(&mb->ht_list);
 
 		mb->idx = i;
-		mb->dirty_bits = 0;
+		mb->dirtiness.data_bits = 0;
+		mb->dirtiness.is_dirty = false;
 	}
 }
 
@@ -814,7 +815,7 @@ void prepare_segment_header_device(void *rambuffer,
 		struct metablock_device *mbdev = dest->mbarr + i;
 
 		mbdev->sector = cpu_to_le64((u64)mb->sector);
-		mbdev->dirty_bits = mb->dirty_bits;
+		mbdev->dirty_bits = mb->dirtiness.is_dirty ? mb->dirtiness.data_bits : 0;
 	}
 
 	dest->id = cpu_to_le64(src->id);
@@ -836,7 +837,9 @@ static void apply_metablock_device(struct wb_device *wb, struct segment_header *
 	struct metablock_device *mbdev = src->mbarr + i;
 
 	mb->sector = le64_to_cpu(mbdev->sector);
-	mb->dirty_bits = mbdev->dirty_bits;
+
+	mb->dirtiness.data_bits = mbdev->dirty_bits ? mbdev->dirty_bits : 255;
+	mb->dirtiness.is_dirty = mbdev->dirty_bits ? true : false;
 
 	key = (struct lookup_key) {
 		.sector = mb->sector,
@@ -844,12 +847,12 @@ static void apply_metablock_device(struct wb_device *wb, struct segment_header *
 	head = ht_get_head(wb, &key);
 	found = ht_lookup(wb, head, &key);
 	if (found) {
-		bool overwrite_fullsize = (mb->dirty_bits == 255);
-		invalidate_previous_cache(wb, mb_to_seg(wb, found), found,
-					  overwrite_fullsize);
+		bool overwrite_fullsize = (mb->dirtiness.data_bits == 255);
+		prepare_overwrite(wb, mb_to_seg(wb, found), found, overwrite_fullsize);
 	}
 
-	inc_nr_dirty_caches(wb);
+	if (mb->dirtiness.is_dirty)
+		inc_nr_dirty_caches(wb);
 	ht_register(wb, head, mb, &key);
 }
 

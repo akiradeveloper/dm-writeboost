@@ -42,8 +42,8 @@ static void wb_io_fn(struct work_struct *work)
 }
 
 int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
-			unsigned num_regions, struct dm_io_region *regions,
-			unsigned long *err_bits, bool thread, const char *caller)
+		   unsigned num_regions, struct dm_io_region *regions,
+		   unsigned long *err_bits, bool thread, const char *caller)
 {
 	int err = 0;
 
@@ -162,7 +162,7 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 	struct metablock *mb;
 	for (i = 0; i < seg->length; i++) {
 		mb = seg->mb_array + i;
-		if (mb->dirty_bits)
+		if (mb->dirtiness.is_dirty)
 			count++;
 	}
 	return count;
@@ -341,80 +341,71 @@ void inc_nr_dirty_caches(struct wb_device *wb)
 	atomic64_inc(&wb->nr_dirty_caches);
 }
 
-static void dec_nr_dirty_caches(struct wb_device *wb)
+void dec_nr_dirty_caches(struct wb_device *wb)
 {
 	BUG_ON(!wb);
 	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
-static void increase_dirtiness(struct wb_device *wb, struct metablock *mb, struct bio *bio)
+static bool taint_mb(struct wb_device *wb, struct metablock *mb, struct bio *bio)
 {
 	unsigned long flags;
+	bool flip = false;
 
-	bool was_clean = false;
-
-	spin_lock_irqsave(&wb->lock, flags);
-	if (!mb->dirty_bits) {
-		wb->current_seg->length++;
-		BUG_ON(wb->current_seg->length > wb->nr_caches_inseg);
-		was_clean = true;
+	spin_lock_irqsave(&wb->mb_lock, flags);
+	if (!mb->dirtiness.is_dirty) {
+		mb->dirtiness.is_dirty = true;
+		flip = true;
 	}
+
 	if (likely(io_fullsize(bio))) {
-		mb->dirty_bits = 255;
+		mb->dirtiness.data_bits = 255;
 	} else {
 		u8 i;
 		u8 acc_bits = 0;
 		for (i = io_offset(bio); i < (io_offset(bio) + bio_sectors(bio)); i++)
 			acc_bits += (1 << i);
 
-		mb->dirty_bits |= acc_bits;
+		mb->dirtiness.data_bits |= acc_bits;
 	}
-	BUG_ON(!bio_sectors(bio));
-	BUG_ON(!mb->dirty_bits);
-	spin_unlock_irqrestore(&wb->lock, flags);
 
-	if (was_clean)
-		inc_nr_dirty_caches(wb);
+	BUG_ON(!bio_sectors(bio));
+	BUG_ON(!mb->dirtiness.data_bits);
+	spin_unlock_irqrestore(&wb->mb_lock, flags);
+
+	return flip;
 }
 
-/*
- * Drop the dirtiness of the on-memory metablock to 0.
- * This _only_ means the data of the metablock will never be written back and
- * omitting this dropping _only_ results in double writeback
- * which is only a matter of performance.
- */
-void cleanup_mb_if_dirty(struct wb_device *wb, struct segment_header *seg, struct metablock *mb)
+bool mark_clean_mb(struct wb_device *wb, struct metablock *mb)
 {
 	unsigned long flags;
+	bool flip = false;
 
-	bool was_dirty = false;
-
-	spin_lock_irqsave(&wb->lock, flags);
-	if (mb->dirty_bits) {
-		mb->dirty_bits = 0;
-		was_dirty = true;
+	spin_lock_irqsave(&wb->mb_lock, flags);
+	if (mb->dirtiness.is_dirty) {
+		mb->dirtiness.is_dirty = false;
+		flip = true;
 	}
-	spin_unlock_irqrestore(&wb->lock, flags);
+	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
-	if (was_dirty)
-		dec_nr_dirty_caches(wb);
+	return flip;
 }
 
 /*
  * Read the dirtiness of a metablock at the moment.
  */
-u8 read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
-		     struct metablock *mb)
+struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
+				   struct metablock *mb)
 {
 	unsigned long flags;
-	u8 val;
+	struct dirtiness retval;
 
-	spin_lock_irqsave(&wb->lock, flags);
-	val = mb->dirty_bits;
-	spin_unlock_irqrestore(&wb->lock, flags);
+	spin_lock_irqsave(&wb->mb_lock, flags);
+	retval = mb->dirtiness;
+	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
-	return val;
+	return retval;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -442,7 +433,7 @@ static void writeback_mb_complete(int read_err, unsigned long write_err, void *_
  * will be reused only after writeback daemon wrote this segment back.
  */
 static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
-			 struct metablock *mb, u8 dirty_bits, bool thread)
+			 struct metablock *mb, u8 data_bits, bool thread)
 {
 	int r = 0;
 
@@ -450,10 +441,9 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 	context.wb = wb;
 	context.err = 0;
 
-	if (!dirty_bits)
-		return;
+	BUG_ON(!data_bits);
 
-	if (dirty_bits == 255) {
+	if (data_bits == 255) {
 		struct dm_io_region src, dest;
 
 		atomic_set(&context.count, 1);
@@ -476,7 +466,7 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 
 		u8 count = 0;
 		for (i = 0; i < 8; i++)
-			if (dirty_bits & (1 << i))
+			if (data_bits & (1 << i))
 				count++;
 
 		atomic_set(&context.count, count);
@@ -484,7 +474,7 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 		for (i = 0; i < 8; i++) {
 			struct dm_io_region src, dest;
 
-			if (!(dirty_bits & (1 << i)))
+			if (!(data_bits & (1 << i)))
 				continue;
 
 			src = (struct dm_io_region) {
@@ -514,7 +504,7 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
  * There is no need to write them back with FUA flag because the cache isn't
  * flushed yet and thus isn't persistent.
  */
-static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8 dirty_bits)
+static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
 {
 	int r = 0;
 
@@ -529,7 +519,7 @@ static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8
 		void *src;
 		sector_t dest;
 
-		if (!(dirty_bits & (1 << i)))
+		if (!(data_bits & (1 << i)))
 			continue;
 
 		src = wb->current_rambuf->data + ((offset + i) << SECTOR_SHIFT);
@@ -553,33 +543,33 @@ static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8
 	mempool_free(buf, wb->buf_1_pool);
 }
 
-void invalidate_previous_cache(struct wb_device *wb, struct segment_header *seg,
-			       struct metablock *old_mb, bool overwrite_fullsize)
+void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, bool overwrite_fullsize)
 {
-	u8 dirty_bits = read_mb_dirtiness(wb, seg, old_mb);
+	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
 
 	/*
 	 * First clean up the previous cache and write back the cache if needed.
 	 */
-	bool needs_cleanup_prev_cache =
-		!overwrite_fullsize || !(dirty_bits == 255);
+	bool needs_writeback_prev_cache = !overwrite_fullsize || !(dirtiness.data_bits == 255);
 
 	/*
 	 * Writeback works in background and may have cleaned up the metablock.
 	 * If the metablock is clean we don't have to write back.
 	 */
-	if (!dirty_bits)
-		needs_cleanup_prev_cache = false;
+	if (!dirtiness.is_dirty)
+		needs_writeback_prev_cache = false;
 
 	if (overwrite_fullsize)
-		needs_cleanup_prev_cache = false;
+		needs_writeback_prev_cache = false;
 
-	if (unlikely(needs_cleanup_prev_cache)) {
+	if (unlikely(needs_writeback_prev_cache)) {
 		wait_for_flushing(wb, seg->id);
-		writeback_mb(wb, seg, old_mb, dirty_bits, true);
+		BUG_ON(!dirtiness.is_dirty);
+		writeback_mb(wb, seg, old_mb, dirtiness.data_bits, true);
 	}
 
-	cleanup_mb_if_dirty(wb, seg, old_mb);
+	if (mark_clean_mb(wb, old_mb))
+		dec_nr_dirty_caches(wb);
 
 	ht_del(wb, old_mb);
 }
@@ -605,6 +595,8 @@ static u32 advance_cursor(struct wb_device *wb)
 		wb->cursor = 0;
 	old = wb->cursor;
 	wb->cursor++;
+	wb->current_seg->length++;
+	BUG_ON(wb->current_seg->length > wb->nr_caches_inseg);
 	atomic_inc(&wb->current_seg->nr_inflight_ios);
 	return old;
 }
@@ -693,7 +685,9 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_re
 static struct metablock *prepare_new_write_pos(struct wb_device *wb)
 {
 	struct metablock *ret = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	BUG_ON(ret->dirty_bits);
+	BUG_ON(ret->dirtiness.is_dirty);
+	ret->dirtiness.data_bits = 0;
+	BUG_ON(ret->dirtiness.data_bits);
 	return ret;
 }
 
@@ -730,7 +724,7 @@ static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio
 			 * Invalidate the old cache on the cache device because
 			 * we can't overwrite cache block on the cache device.
 			 */
-			invalidate_previous_cache(wb, res.found_seg, res.found_mb, io_fullsize(bio));
+			prepare_overwrite(wb, res.found_seg, res.found_mb, io_fullsize(bio));
 			dec_inflight_ios(wb, res.found_seg);
 		}
 	} else
@@ -750,7 +744,8 @@ static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio
  */
 static int do_process_write(struct wb_device *wb, struct metablock *write_pos, struct bio *bio)
 {
-	increase_dirtiness(wb, write_pos, bio);
+	if (taint_mb(wb, write_pos, bio))
+		inc_nr_dirty_caches(wb);
 
 	write_on_rambuffer(wb, write_pos, bio);
 
@@ -778,8 +773,7 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
  * ----------------------------------
  * A cache data is placed either on RAM buffer or SSD if it was flushed.
  * To make locking easy, we simplify the rule for the dirtiness of a cache data.
- * 1) If the data is on the RAM buffer, the dirtiness (dirty_bits of metablock)
- *    only "increases".
+ * 1) If the data is on the RAM buffer, the dirtiness only "increases".
  * 2) If the data is, on the other hand, on the SSD after flushed the dirtiness
  *    only "decreases".
  *
@@ -830,7 +824,7 @@ static void reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
-	u8 dirty_bits;
+	struct dirtiness dirtiness;
 
 	mutex_lock(&wb->io_lock);
 	cache_lookup(wb, bio, &res);
@@ -843,10 +837,10 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 		return DM_MAPIO_REMAPPED;
 	}
 
-	dirty_bits = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
+	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
 	if (unlikely(res.on_buffer)) {
-		if (dirty_bits)
-			writeback_buffered_mb(wb, res.found_mb, dirty_bits);
+		if (dirtiness.is_dirty)
+			writeback_buffered_mb(wb, res.found_mb, dirtiness.data_bits);
 
 		dec_inflight_ios(wb, res.found_seg);
 		bio_remap(bio, wb->backing_dev, bi_sector(bio));
@@ -859,7 +853,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	 */
 	wait_for_flushing(wb, res.found_seg->id);
 
-	if (likely(dirty_bits == 255)) {
+	if (likely(dirtiness.data_bits == 255)) {
 		struct per_bio_data *pbd = per_bio_data(wb, bio);
 		pbd->type = PBD_READ_SEG;
 		pbd->seg = res.found_seg;
@@ -868,9 +862,10 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 			  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
 			  io_offset(bio));
 	} else {
-		writeback_mb(wb, res.found_seg, res.found_mb, dirty_bits, true);
-		cleanup_mb_if_dirty(wb, res.found_seg, res.found_mb);
-
+		if (dirtiness.is_dirty)
+			writeback_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits, true);
+		if (mark_clean_mb(wb, res.found_mb))
+			dec_nr_dirty_caches(wb);
 		dec_inflight_ios(wb, res.found_seg);
 		bio_remap(bio, wb->backing_dev, bi_sector(bio));
 	}
@@ -1074,7 +1069,6 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, int
  */
 static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell)
 {
-	unsigned long flags;
 	struct metablock *mb;
 	u32 _mb_idx_inseg;
 	struct ht_head *head;
@@ -1104,13 +1098,12 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	/* advance_cursor increments nr_inflight_ios */
 	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
 	mb = seg->mb_array + _mb_idx_inseg;
+	BUG_ON(mb->dirtiness.is_dirty);
+	mb->dirtiness.data_bits = 255;
 	/* This metablock is clean and we don't have to taint it */
 	ht_register(wb, head, mb, &key);
 	mutex_unlock(&wb->io_lock);
 
-	spin_lock_irqsave(&wb->lock, flags);
-	seg->length++;
-	spin_unlock_irqrestore(&wb->lock, flags);
 	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
 	dec_inflight_ios(wb, seg);
 }
@@ -1484,7 +1477,7 @@ static int init_core_struct(struct dm_target *ti)
 
 	mutex_init(&wb->io_lock);
 	init_waitqueue_head(&wb->inflight_ios_wq);
-	spin_lock_init(&wb->lock);
+	spin_lock_init(&wb->mb_lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
 	clear_bit(WB_DEAD, &wb->flags);
 

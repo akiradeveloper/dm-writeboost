@@ -120,10 +120,9 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 {
 	int r;
 
-	if (!writeback_io->memorized_dirtiness)
-		return;
+	BUG_ON(!writeback_io->data_bits);
 
-	if (writeback_io->memorized_dirtiness == 255) {
+	if (writeback_io->data_bits == 255) {
 		struct dm_io_request io_req_w = {
 			.client = wb->io_client,
 			.bi_rw = WRITE,
@@ -146,7 +145,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 			struct dm_io_request io_req_w;
 			struct dm_io_region region_w;
 
-			bool bit_on = writeback_io->memorized_dirtiness & (1 << i);
+			bool bit_on = writeback_io->data_bits & (1 << i);
 			if (!bit_on)
 				continue;
 
@@ -202,17 +201,14 @@ static bool compare_writeback_io(struct writeback_io *a, struct writeback_io *b)
 	return false;
 }
 
-static void inc_writeback_io_count(u8 dirty_bits, size_t *writeback_io_count)
+static void inc_writeback_io_count(u8 data_bits, size_t *writeback_io_count)
 {
-	u8 i;
-	if (!dirty_bits)
-		return;
-
-	if (dirty_bits == 255) {
+	if (data_bits == 255) {
 		(*writeback_io_count)++;
 	} else {
+		u8 i;
 		for (i = 0; i < 8; i++) {
-			if (dirty_bits & (1 << i))
+			if (data_bits & (1 << i))
 				(*writeback_io_count)++;
 		}
 	}
@@ -272,25 +268,32 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 	maybe_IO(wb_io(&io_req_r, 1, &region_r, NULL, false));
 
 	for (i = 0; i < seg->length; i++) {
-		struct metablock *mb = seg->mb_array + i;
+		struct writeback_io *writeback_io;
 
-		struct writeback_io *writeback_io = writeback_seg->ios + i;
+		struct metablock *mb = seg->mb_array + i;
+		struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, mb);
+		BUG_ON(!dirtiness.data_bits);
+		if (!dirtiness.is_dirty)
+			continue;
+
+		writeback_io = writeback_seg->ios + i;
 		writeback_io->sector = mb->sector;
 		writeback_io->id = seg->id;
 		/* writeback_io->data is already set */
-		writeback_io->memorized_dirtiness = read_mb_dirtiness(wb, seg, mb);
+		writeback_io->data_bits = dirtiness.data_bits;
 
-		inc_writeback_io_count(writeback_io->memorized_dirtiness, writeback_io_count);
+		inc_writeback_io_count(writeback_io->data_bits, writeback_io_count);
 		add_writeback_io(wb, writeback_io);
 	}
 }
 
-static void cleanup_segment(struct wb_device *wb, struct segment_header *seg)
+static void mark_clean_seg(struct wb_device *wb, struct segment_header *seg)
 {
 	u8 i;
 	for (i = 0; i < seg->length; i++) {
 		struct metablock *mb = seg->mb_array + i;
-		cleanup_mb_if_dirty(wb, seg, mb);
+		if (mark_clean_mb(wb, mb))
+			dec_nr_dirty_caches(wb);
 	}
 }
 
@@ -321,7 +324,7 @@ static void do_writeback_segs(struct wb_device *wb)
 	/* A segment after written back is clean */
 	for (k = 0; k < wb->num_writeback_segs; k++) {
 		writeback_seg = *(wb->writeback_segs + k);
-		cleanup_segment(wb, writeback_seg->seg);
+		mark_clean_seg(wb, writeback_seg->seg);
 	}
 	atomic64_add(wb->num_writeback_segs, &wb->last_writeback_segment_id);
 }

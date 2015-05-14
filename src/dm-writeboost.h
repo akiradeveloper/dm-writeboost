@@ -108,6 +108,11 @@ struct segment_header_device {
 
 /*----------------------------------------------------------------------------*/
 
+struct dirtiness {
+	bool is_dirty;
+	u8 data_bits;
+};
+
 struct metablock {
 	sector_t sector; /* The original aligned address */
 
@@ -115,7 +120,7 @@ struct metablock {
 
 	struct hlist_node ht_list; /* Linked to the hash table */
 
-	u8 dirty_bits; /* 8bit for dirtiness in sector granularity */
+	struct dirtiness dirtiness;
 };
 
 #define SZ_MAX (~(size_t)0)
@@ -178,7 +183,7 @@ struct writeback_io {
 	u64 id; /* Key */
 
 	void *data;
-	u8 memorized_dirtiness;
+	u8 data_bits;
 };
 #define writeback_io_from_node(node) \
 	rb_entry((node), struct writeback_io, rb_node)
@@ -257,7 +262,7 @@ struct wb_device {
 	 */
 	wait_queue_head_t inflight_ios_wq;
 
-	spinlock_t lock;
+	spinlock_t mb_lock;
 
 	u8 segment_size_order; /* Const */
 	u8 nr_caches_inseg; /* Const */
@@ -446,9 +451,10 @@ void acquire_new_seg(struct wb_device *, u64 id);
 void cursor_init(struct wb_device *);
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
-void cleanup_mb_if_dirty(struct wb_device *, struct segment_header *, struct metablock *);
-u8 read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
-void invalidate_previous_cache(struct wb_device *, struct segment_header *, struct metablock *old_mb, bool overwrite_fullsize);
+void dec_nr_dirty_caches(struct wb_device *);
+bool mark_clean_mb(struct wb_device *, struct metablock *);
+struct dirtiness read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
+void prepare_overwrite(struct wb_device *, struct segment_header *, struct metablock *old_mb, bool overwrite_fullsize);
 
 /*----------------------------------------------------------------------------*/
 

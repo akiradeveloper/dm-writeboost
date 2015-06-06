@@ -1,6 +1,6 @@
-DM-Writeboost
+dm-writeboost
 =============
-DM-Writeboost target provides block-level log-structured caching.
+dm-writeboost target provides block-level log-structured caching.
 All cache data, writes and reads, are written to the cache device in sequential
 manner.
 
@@ -9,39 +9,39 @@ Mechanism
 =========
 Control three layers (RAM buffer, cache device and backing device)
 ------------------------------------------------------------------
-DM-Writeboost controls three different layers - RAM buffer (rambuf), cache
+dm-writeboost controls three different layers - RAM buffer (rambuf), cache
 device (cache_dev, e.g SSD) and backing device (backing_dev, e.g. HDD).
 All data are first stored in the RAM buffer and when the RAM buffer is full,
-DM-Writeboost adds metadata block (with checksum) on the RAM buffer to create a
+dm-writeboost adds metadata block (with checksum) on the RAM buffer to create a
 "log". Afterward, the log is written to the cache device as background
 processing in sequential manner and thereafter it's written back to the backing
 device in background as well.
 
 
-DM-Writeboost vs DM-Cache or bcache
+dm-writeboost vs dm-cache or bcache
 ===================================
-How DM-Writeboost differs from other existing SSD-caching drivers?
+How dm-writeboost differs from other existing SSD-caching drivers?
 
-The most distinctive point is that DM-Writeboost writes to caching device the
+The most distinctive point is that dm-writeboost writes to caching device the
 least frequently. Because it creates a log that's contains 127 writes before
 it actually writes the log to the caching device, writing to the caching device
 happens only once in 127 writes while other caching drivers writes more often.
 Since SSD's lifetime decreases as it experiences writes, users can reduce the
 risk of SSD disorder.
 
-DM-Writeboost performs very much efficient than other caching solutions in
+dm-writeboost performs very much efficient than other caching solutions in
 small random pattern. But since it always split the requests into 4KB chunks,
 it may not be the best when the ave. I/O size is very large in your workload.
-However, if the splitting overhead aside, DM-Writeboost is always the best of
+However, if the splitting overhead aside, dm-writeboost is always the best of
 all because it caches data in sequential manner - the most efficient I/O pattern
 for the SSD cache device in terms of performance.
 
-It's known from experiments that DM-Writeboost performs no good when you create
-a DM-Writeboost'd device in virtual environment like KVM. So, keep in mind to
+It's known from experiments that dm-writeboost performs no good when you create
+a dm-writeboost'd device in virtual environment like KVM. So, keep in mind to
 use this driver in the host (or physical) machine.
 
 
-How To Use DM-Writeboost
+How To Use dm-writeboost
 ========================
 Trigger cache device reformat
 -----------------------------
@@ -50,9 +50,9 @@ cache device is zeroed out. Note that this operation should be omitted when
 you resume the cache device.
 e.g. dd if=/dev/zero of=/dev/mapper/wbdev oflag=direct bs=512 count=1
 
-Construct DM-Writeboost'd device
+Construct dm-writeboost'd device
 --------------------------------
-You can construct DM-Writeboost'd device with dmsetup create command.
+You can construct dm-writeboost'd device with dmsetup create command.
 
 <essential args>
 <#optional args> <optional args>
@@ -103,9 +103,9 @@ This replays the logs on the cache device to rebuild the internal data structure
 Remove cache device
 -------------------
 If you want to detach your cache device for some reasons (you don't like
-DM-Writeboost anymore or you try to upgrade the cache device to a newly
+dm-writeboost anymore or you try to upgrade the cache device to a newly
 perchased device) the safest way to do this is clean the dirty data up from your
-cache device first and then deconstrust the DM-Writeboost'd device.
+cache device first and then deconstrust the dm-writeboost'd device.
 You can use drop_caches message to forcibly clean up your cache device.
 e.g.
 dmsetup message wbdev 0 drop_caches
@@ -113,7 +113,7 @@ dmsetup remove wbdev
 
 Messages
 --------
-Some behavior of DM-Writeboost'd device can be tuned online.
+Some behavior of dm-writeboost'd device can be tuned online.
 You can use dmsetup message for this purpose.
 
 (1) Tunables
@@ -140,7 +140,7 @@ $allow_writeback according to the value.
 nr_max_batched_writeback
   accepts: 1..1000
   default: 1 << (15 - segment_size_order)
-As optimization, DM-Writeboost writes back $nr_max_batched_writeback segments
+As optimization, dm-writeboost writes back $nr_max_batched_writeback segments
 simultaneously. The dirty caches in the segments are sorted in ascending order
 of the destination address and then written back. Setting large value can boost
 the writeback performance.
@@ -150,7 +150,7 @@ update_sb_record_interval (sec)
   default: 0
 Update the superblock every $update_sb_record_interval second. 0 means disabled.
 Superblock memorizes the last segment ID that was written back.
-By enabling this, DM-Writeboost in resuming can skip segments that's already
+By enabling this, dm-writeboost in resuming can skip segments that's already
 written back and thus can shorten the resume time.
 
 sync_data_interval (sec)

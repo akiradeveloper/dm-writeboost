@@ -15,9 +15,11 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 ## Features
 * **Durable**: Any power failure can't break consistency because each log consists of data, metadata and
   the checksum of the log itself.  
-* **Lifetime**: Other caching softwares separates data and metadata (e.g. dm-cache) and therefore submits writes
-  to SSD too frequently. dm-writeboost, on the other hand, submits only one writes for handreds data and metadata
-  so the SSD lives longer since SSD's liftime depends how many writes are submitted.  
+* **Lifetime**: Other caching software (e.g. dm-cache) separates data and
+  metadata and therefore submits writes to SSD too frequently. dm-writeboost,
+  on the other hand, submits only one  writes for hundreds of data and
+  metadata updates so the SSD lives longer since SSD's lifetime depends on
+  how many writes are submitted.  
 * **Fast**: Since the sequential write is the best I/O pattern for every SSD and the code base is optimized for
   in-coming random writes, the write performance is the best of all caching drivers including dm-cache and
   bcache.  
@@ -26,7 +28,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 ## Usage
 - **Install**: `sudo make install` to install and `sudo make uninstall` to uninstall.
   `sudo make uninstall MODULE_VERSION=xxx` can uninstall specific version that's installed.
-  DKMS is required so please install it beforehand. (usually avaiable in package system)
+  DKMS is required so please install it beforehand. (usually available in package system)
 - **Make a device**: Make a script to build a caching device. Please read doc/dm-writeboost-readme.txt for
   the dmsetup command detail.
   You also need to rebuild the caching device after reboot. To do this, cron's @reboot
@@ -46,7 +48,6 @@ Awarded by Japanese OSS Encouragement Award. Thanks!
 
 ## License
 ```
-This file is part of dm-writeboost
 Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
 
 This program is free software; you can redistribute it and/or modify

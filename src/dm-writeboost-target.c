@@ -215,7 +215,7 @@ static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 
 /*
  * Acquire the new segment and RAM buffer for the following writes.
- * Gurantees all dirty caches in the segments are written back and
+ * Guarantees all dirty caches in the segments are written back and
  * all metablocks in it are invalidated (Linked to null head).
  */
 void acquire_new_seg(struct wb_device *wb, u64 id)

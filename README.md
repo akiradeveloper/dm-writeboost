@@ -35,6 +35,10 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   is recommended but you can use systemd or sysvinit. Note you don't need to prepare anything
   for system shutdown because dm-writeboost is even durable even against sudden power failure.
 
+## Related Projects
+* https://gitlab.com/onlyjob/writeboost: A management tool including init script  
+* https://github.com/jthornber/device-mapper-test-suite: Testing framework written in Ruby
+
 ## Related works
 * Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
   (http://www.ele.uri.edu/research/hpcl/DCD/DCD.html)  

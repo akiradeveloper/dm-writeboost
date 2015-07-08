@@ -19,6 +19,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
 #include "dm-writeboost.h"
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
@@ -588,12 +589,41 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 
 /*----------------------------------------------------------------------------*/
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
+#define bv_vec struct bio_vec
+#define bv_page(vec) vec.bv_page
+#define bv_offset(vec) vec.bv_offset
+#define bv_len(vec) vec.bv_len
+#define bv_it struct bvec_iter
+#else
+#define bv_vec struct bio_vec *
+#define bv_page(vec) vec->bv_page
+#define bv_offset(vec) vec->bv_offset
+#define bv_len(vec) vec->bv_len
+#define bv_it int
+#endif
+
+/*
+ * Incoming bio may have multiple bio vecs as a result bvec merging.
+ * We shouldn't use bio_data directly to access to whole payload but
+ * should iterate over the vector.
+ */
+static void copy_bio_payload(void *buf, struct bio *bio)
+{
+	bv_vec vec;
+	bv_it it;
+	bio_for_each_segment(vec, bio, it) {
+		size_t l = bv_len(vec);
+		memcpy(buf, page_address(bv_page(vec)) + bv_offset(vec), l);
+		buf += l;
+	}
+}
+
 static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct bio *bio)
 {
 	sector_t start_sector = ((mb_idx_inseg(wb, write_pos->idx) + 1) << 3) + io_offset(bio);
 	size_t start_byte = start_sector << SECTOR_SHIFT;
-	void *data = bio_data(bio);
-	memcpy(wb->current_rambuf->data + start_byte, data, bi_size(bio));
+	copy_bio_payload(wb->current_rambuf->data + start_byte, bio);
 }
 
 /*
@@ -1071,7 +1101,7 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, int
 		cell->cancelled = true;
 
 	if (!ACCESS_ONCE(cell->cancelled))
-		memcpy(cell->data, bio_data(bio), 1 << 12);
+		copy_bio_payload(cell->data, bio);
 
 	if (atomic_dec_and_test(&cells->ack_count))
 		queue_work(cells->wq, &wb->read_cache_work);

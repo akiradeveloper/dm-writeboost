@@ -589,7 +589,7 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 
 /*----------------------------------------------------------------------------*/
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 #define bv_vec struct bio_vec
 #define bv_page(vec) vec.bv_page
 #define bv_offset(vec) vec.bv_offset

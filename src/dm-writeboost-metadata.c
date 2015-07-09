@@ -638,20 +638,18 @@ static int init_rambuf_pool(struct wb_device *wb)
 	}
 
 	for (i = 0; i < NR_RAMBUF_POOL; i++) {
-		size_t j;
-		struct rambuffer *rambuf = wb->rambuf_pool + i;
-
-		rambuf->data = kmem_cache_alloc(wb->rambuf_cachep, GFP_KERNEL);
-		if (!rambuf->data) {
+		void *alloced = kmem_cache_alloc(wb->rambuf_cachep, GFP_KERNEL);
+		if (!alloced) {
+			size_t j;
 			DMERR("Failed to allocate rambuf->data");
 			for (j = 0; j < i; j++) {
-				rambuf = wb->rambuf_pool + j;
-				kmem_cache_free(wb->rambuf_cachep, rambuf->data);
+				kmem_cache_free(wb->rambuf_cachep, wb->rambuf_pool[j].data);
 			}
 			r = -ENOMEM;
 			goto bad_alloc_data;
 		}
-		check_buffer_alignment(rambuf->data);
+		check_buffer_alignment(alloced);
+		wb->rambuf_pool[i].data = alloced;
 	}
 
 	return r;

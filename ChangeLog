@@ -1,0 +1,23 @@
+2015-07-09  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.0.1
+	* Fix for "mkfs.xfs -m crc=1" issue.
+	  Add copy_bio_payload().
+	* Fix end_io not to ignore error.
+	* Fix bad pointer access in try_alloc_writeback_ios().
+
+2015-06-16  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.0.0
+	* Design change.
+	  Purge static optional args (nr_rambuf_pool, segment_size_order)
+	  so as to work well with Dmitry's tool.
+
+2015-05-14  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v1.0.1
+	* Fix read-caching that didn't hit at all.
+
+2015-05-10  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v1.0.0

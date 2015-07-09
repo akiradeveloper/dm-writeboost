@@ -1116,17 +1116,17 @@ int try_alloc_writeback_ios(struct wb_device *wb, size_t nr_batch)
 		return -ENOMEM;
 
 	for (i = 0; i < nr_batch; i++) {
-		struct writeback_segment **writeback_seg = writeback_segs + i;
-		*writeback_seg = alloc_writeback_segment(wb);
-		if (!writeback_seg) {
-			int j;
+		struct writeback_segment *alloced = alloc_writeback_segment(wb);
+		if (!alloced) {
+			size_t j;
 			for (j = 0; j < i; j++)
-				free_writeback_segment(wb, *(writeback_segs + j));
+				free_writeback_segment(wb, writeback_segs[j]);
 			kfree(writeback_segs);
 
 			DMERR("Failed to allocate writeback_segs");
 			return -ENOMEM;
 		}
+		writeback_segs[i] = alloced;
 	}
 
 	/*

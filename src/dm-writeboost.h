@@ -95,8 +95,6 @@ struct metablock_device {
 	__u8 padding[16 - (8 + 1)]; /* 16B */
 } __packed;
 
-#define WB_CKSUM_SEED (~(u32)0)
-
 struct segment_header_device {
 	/*
 	 * We assume 1 sector write is atomic.

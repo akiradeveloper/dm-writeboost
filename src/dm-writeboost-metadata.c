@@ -770,7 +770,7 @@ static int read_whole_segment(void *buf, struct wb_device *wb,
 u32 calc_checksum(void *rambuffer, u8 length)
 {
 	unsigned int len = (4096 - 512) + 4096 * length;
-	return crc32c(WB_CKSUM_SEED, rambuffer + 512, len);
+	return ~crc32c(0xffffffff, rambuffer + 512, len);
 }
 
 void prepare_segment_header_device(void *rambuffer,

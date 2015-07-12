@@ -36,6 +36,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   for system shutdown because dm-writeboost is even durable even against sudden power failure.
 
 ## Related Projects
+* https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  
 * https://gitlab.com/onlyjob/writeboost: A management tool including init script  
 * https://github.com/jthornber/device-mapper-test-suite: Testing framework written in Ruby
 

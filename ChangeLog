@@ -1,5 +1,6 @@
 2015-07-12  Akira Hayakawa  <ruby.wktk@gmail.com>
 
+	* v2.0.2
 	* Fix the crc32c wrapper so it complements the computed value.
 
 2015-07-09  Akira Hayakawa  <ruby.wktk@gmail.com>

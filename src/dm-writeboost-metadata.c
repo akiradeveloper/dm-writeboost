@@ -1237,10 +1237,16 @@ static int init_flusher(struct wb_device *wb)
 	return 0;
 }
 
-static void init_flush_barrier_work(struct wb_device *wb)
+static int init_flush_barrier_work(struct wb_device *wb)
 {
+	wb->barrier_wq = create_singlethread_workqueue("dmwb_barrier");
+	if (!wb->barrier_wq) {
+		DMERR("Failed to allocate barrier_wq");
+		return -ENOMEM;
+	}
 	bio_list_init(&wb->barrier_ios);
 	INIT_WORK(&wb->flush_barrier_work, flush_barrier_ios);
+	return 0;
 }
 
 static int init_writeback_modulator(struct wb_device *wb)
@@ -1310,7 +1316,11 @@ int resume_cache(struct wb_device *wb)
 		goto bad_flusher;
 	}
 
-	init_flush_barrier_work(wb);
+	r = init_flush_barrier_work(wb);
+	if (r) {
+		DMERR("init_flush_barrier_work failed");
+		goto bad_flush_barrier_work;
+	}
 
 	r = init_writeback_modulator(wb);
 	if (r) {
@@ -1337,8 +1347,8 @@ bad_synchronizer:
 bad_updater:
 	kthread_stop(wb->writeback_modulator);
 bad_modulator:
-	cancel_work_sync(&wb->flush_barrier_work);
-
+	destroy_workqueue(wb->barrier_wq);
+bad_flush_barrier_work:
 	destroy_workqueue(wb->flusher_wq);
 bad_flusher:
 bad_recover:
@@ -1362,7 +1372,7 @@ void free_cache(struct wb_device *wb)
 	kthread_stop(wb->sb_record_updater);
 	kthread_stop(wb->writeback_modulator);
 
-	cancel_work_sync(&wb->flush_barrier_work);
+	destroy_workqueue(wb->barrier_wq);
 
 	destroy_workqueue(wb->flusher_wq);
 

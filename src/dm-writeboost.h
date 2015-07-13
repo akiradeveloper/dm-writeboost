@@ -362,6 +362,11 @@ struct wb_device {
 	 * Barrier deadline worker
 	 *************************/
 
+	/*
+	 * We shouldn't use kernel-global workqueue for this worker
+	 * because it may cause timeout for the flush requests.
+	 */
+	struct workqueue_struct *barrier_wq;
 	struct work_struct flush_barrier_work;
 	struct bio_list barrier_ios; /* List of barrier requests */
 

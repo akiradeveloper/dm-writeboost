@@ -31,7 +31,11 @@ void queue_barrier_io(struct wb_device *wb, struct bio *bio)
 	bio_list_add(&wb->barrier_ios, bio);
 	mutex_unlock(&wb->io_lock);
 
-	schedule_work(&wb->flush_barrier_work);
+	/*
+	 * queue_work does nothing if the work is already in the queue.
+	 * So we don't have to care about it.
+	 */
+	queue_work(wb->barrier_wq, &wb->flush_barrier_work);
 }
 
 void flush_barrier_ios(struct work_struct *work)

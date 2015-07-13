@@ -1229,7 +1229,7 @@ static int init_flusher(struct wb_device *wb)
 {
 	wb->flusher_wq = create_singlethread_workqueue("dmwb_flusher");
 	if (!wb->flusher_wq) {
-		DMERR("Failed to allocate flusher");
+		DMERR("Failed to allocate flusher_wq");
 		return -ENOMEM;
 	}
 

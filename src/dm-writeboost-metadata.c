@@ -901,7 +901,7 @@ static int find_max_id(struct wb_device *wb, u64 *max_id)
  *   - in  : The max id found in find_max_id()
  *   - out : The last id applied in this function
  */
-static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
+static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 {
 	int r = 0;
 	struct segment_header *seg;
@@ -959,6 +959,19 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 
 	kmem_cache_free(wb->rambuf_cachep, rambuf);
 	return r;
+}
+
+static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
+{
+	/*
+	 * Fast path.
+	 * If the max_id is zero, there is obviously no valid segments.
+	 * For the fast initialization, we quit here immediately.
+	 */
+	if (!(*max_id))
+		return 0;
+
+	return do_apply_valid_segments(wb, max_id);
 }
 
 static int infer_last_writeback_id(struct wb_device *wb)

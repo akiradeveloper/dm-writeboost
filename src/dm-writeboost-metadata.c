@@ -930,6 +930,12 @@ static int apply_valid_segments(struct wb_device *wb, u64 *max_id)
 
 		header = rambuf;
 
+		/*
+		 * We can't break here.
+		 * Consider sequence of id [1,2,3,0,0,0]
+		 * The max_id is 3 and we start from the 4th segment.
+		 * If we break, the valid logs (1,2,3) are ignored.
+		 */
 		if (!le64_to_cpu(header->id))
 			continue;
 

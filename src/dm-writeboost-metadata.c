@@ -387,12 +387,9 @@ bad_io:
 
 /*
  * check if the cache device is already formatted.
- *
- * @allow_format (out) : is the superblock was zeroed by the user?
- *
  * returns 0 iff this routine runs without failure.
  */
-static int audit_cache_device(struct wb_device *wb, bool *allow_format)
+static int audit_cache_device(struct wb_device *wb)
 {
 	int r = 0;
 	struct superblock_header_device sup;
@@ -402,10 +399,9 @@ static int audit_cache_device(struct wb_device *wb, bool *allow_format)
 		return r;
 	}
 
-	*allow_format = false;
-
+	wb->do_format = false;
 	if (le32_to_cpu(sup.magic) != WB_MAGIC) {
-		*allow_format = true;
+		wb->do_format = true;
 		DMERR("Superblock Header: Magic number invalid");
 		return 0;
 	}
@@ -592,21 +588,18 @@ static int format_cache_device(struct wb_device *wb)
  * re-format the cache structure if they are not.
  * If you want to re-format the cache device you must zeroes out the first one
  * sector of the device.
- *
- * @formatted (out) : Was the cache device re-formatted?
  */
-static int might_format_cache_device(struct wb_device *wb, bool *formatted)
+static int might_format_cache_device(struct wb_device *wb)
 {
 	int r = 0;
 
-	bool allow_format;
-	r = audit_cache_device(wb, &allow_format);
+	r = audit_cache_device(wb);
 	if (r) {
 		DMERR("audit_cache_device failed");
 		return r;
 	}
 
-	if (allow_format) {
+	if (wb->do_format) {
 		r = format_cache_device(wb);
 		if (r) {
 			DMERR("format_cache_device failed");
@@ -683,10 +676,7 @@ static int init_devices(struct wb_device *wb)
 {
 	int r = 0;
 
-	bool formatted = false;
-
-	// FIXME formatted isn't used
-	r = might_format_cache_device(wb, &formatted);
+	r = might_format_cache_device(wb);
 	if (r)
 		return r;
 
@@ -863,7 +853,7 @@ static int read_segment_header(void *buf, struct wb_device *wb,
  * Find the max id from all the segment headers
  * @max_id (out) : The max id found
  */
-static int find_max_id(struct wb_device *wb, u64 *max_id)
+static int do_find_max_id(struct wb_device *wb, u64 *max_id)
 {
 	int r = 0;
 	u32 k;
@@ -889,6 +879,21 @@ static int find_max_id(struct wb_device *wb, u64 *max_id)
 	}
 	mempool_free(buf, wb->buf_8_pool);
 	return r;
+}
+
+static int find_max_id(struct wb_device *wb, u64 *max_id)
+{
+	/*
+	 * Fast path.
+	 * If it's the first creation, we don't need to look over
+	 * the segment headers to know that the max_id is zero.
+	 */
+	if (wb->do_format) {
+		*max_id = 0;
+		return 0;
+	}
+
+	return do_find_max_id(wb, max_id);
 }
 
 /*
@@ -1015,8 +1020,8 @@ static int infer_last_writeback_id(struct wb_device *wb)
 static int replay_log_on_cache(struct wb_device *wb)
 {
 	int r = 0;
-	u64 max_id;
 
+	u64 max_id;
 	r = find_max_id(wb, &max_id);
 	if (r) {
 		DMERR("find_max_id failed");

@@ -1349,7 +1349,7 @@ static int do_consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as, 
 
 	static struct dm_arg _args[] = {
 		{0, 100, "Invalid writeback_threshold"},
-		{1, 1000, "Invalid nr_max_batched_writeback"},
+		{1, 32, "Invalid nr_max_batched_writeback"},
 		{0, 3600, "Invalid update_sb_record_interval"},
 		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},

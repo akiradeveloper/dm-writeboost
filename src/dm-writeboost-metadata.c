@@ -1228,7 +1228,7 @@ static int init_writeback_daemon(struct wb_device *wb)
 	atomic_set(&wb->writeback_fail_count, 0);
 	atomic_set(&wb->writeback_io_count, 0);
 
-	nr_batch = 1 << (15 - SEGMENT_SIZE_ORDER); /* 16MB */
+	nr_batch = 8;
 	wb->nr_max_batched_writeback = nr_batch;
 	if (try_alloc_writeback_ios(wb, nr_batch))
 		return -ENOMEM;

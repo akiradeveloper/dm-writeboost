@@ -113,8 +113,8 @@ Writeback can be suppressed when the load of backing device is higher than
 $writeback_threshold.
 
 nr_max_batched_writeback
-  accepts: 1..1000
-  default: 32
+  accepts: 1..32
+  default: 8
 As optimization, dm-writeboost writes back $nr_max_batched_writeback segments
 simultaneously. The dirty caches in the segments are sorted in ascending order
 of the destination address and then written back. Setting large value can boost

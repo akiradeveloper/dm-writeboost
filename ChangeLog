@@ -1,3 +1,9 @@
+2015-07-15  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.0.4
+	* Fast-path for clean initialization
+	* Restrict the nr_max_batched_writeback
+
 2015-07-13  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.0.3

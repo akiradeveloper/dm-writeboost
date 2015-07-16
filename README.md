@@ -35,6 +35,10 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   is recommended but you can use systemd or sysvinit. Note you don't need to prepare anything
   for system shutdown because dm-writeboost is even durable even against sudden power failure.
 
+## Distribution Packages
+- Debian: [Sid](https://packages.debian.org/sid/dm-writeboost-dkms)  
+- Ubuntu: [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
+
 ## Related Projects
 * https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  
 * https://gitlab.com/onlyjob/writeboost: A management tool including init script  

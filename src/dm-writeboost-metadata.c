@@ -1072,19 +1072,19 @@ static int recover_cache(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-static struct writeback_segment *alloc_writeback_segment(struct wb_device *wb)
+static struct writeback_segment *alloc_writeback_segment(struct wb_device *wb, gfp_t gfp)
 {
 	u8 i;
 
-	struct writeback_segment *writeback_seg = kmalloc(sizeof(*writeback_seg), GFP_NOIO);
+	struct writeback_segment *writeback_seg = kmalloc(sizeof(*writeback_seg), gfp);
 	if (!writeback_seg)
 		goto bad_writeback_seg;
 
-	writeback_seg->ios = kmalloc(wb->nr_caches_inseg * sizeof(struct writeback_io), GFP_NOIO);
+	writeback_seg->ios = kmalloc(wb->nr_caches_inseg * sizeof(struct writeback_io), gfp);
 	if (!writeback_seg->ios)
 		goto bad_ios;
 
-	writeback_seg->buf = kmem_cache_alloc(wb->rambuf_cachep, GFP_NOIO);
+	writeback_seg->buf = kmem_cache_alloc(wb->rambuf_cachep, gfp);
 	if (!writeback_seg->buf)
 		goto bad_buf;
 
@@ -1129,18 +1129,18 @@ static void free_writeback_ios(struct wb_device *wb)
  * Request to allocate data structures to write back @nr_batch segments.
  * Previous structures are preserved in case of failure.
  */
-int try_alloc_writeback_ios(struct wb_device *wb, size_t nr_batch)
+int try_alloc_writeback_ios(struct wb_device *wb, size_t nr_batch, gfp_t gfp)
 {
 	int r = 0;
 	size_t i;
 
 	struct writeback_segment **writeback_segs = kzalloc(
-			nr_batch * sizeof(struct writeback_segment *), GFP_KERNEL);
+			nr_batch * sizeof(struct writeback_segment *), gfp);
 	if (!writeback_segs)
 		return -ENOMEM;
 
 	for (i = 0; i < nr_batch; i++) {
-		struct writeback_segment *alloced = alloc_writeback_segment(wb);
+		struct writeback_segment *alloced = alloc_writeback_segment(wb, gfp);
 		if (!alloced) {
 			size_t j;
 			for (j = 0; j < i; j++)
@@ -1230,7 +1230,7 @@ static int init_writeback_daemon(struct wb_device *wb)
 
 	nr_batch = 8;
 	wb->nr_max_batched_writeback = nr_batch;
-	if (try_alloc_writeback_ios(wb, nr_batch))
+	if (try_alloc_writeback_ios(wb, nr_batch, GFP_KERNEL))
 		return -ENOMEM;
 
 	init_waitqueue_head(&wb->writeback_wait_queue);

@@ -360,7 +360,7 @@ static u32 calc_nr_writeback(struct wb_device *wb)
 
 	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_writeback);
 	if (wb->nr_cur_batched_writeback != nr_max_batch)
-		try_alloc_writeback_ios(wb, nr_max_batch);
+		try_alloc_writeback_ios(wb, nr_max_batch, GFP_NOIO | __GFP_NOWARN);
 	return min(nr_writeback_candidates, wb->nr_cur_batched_writeback);
 }
 

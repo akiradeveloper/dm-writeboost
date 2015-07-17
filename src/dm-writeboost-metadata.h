@@ -53,7 +53,7 @@ u32 calc_checksum(void *rambuffer, u8 length);
 
 /*----------------------------------------------------------------------------*/
 
-int try_alloc_writeback_ios(struct wb_device *, size_t nr_batch);
+int try_alloc_writeback_ios(struct wb_device *, size_t nr_batch, gfp_t gfp);
 
 /*----------------------------------------------------------------------------*/
 

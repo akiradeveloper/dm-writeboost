@@ -23,33 +23,14 @@
 
 /*----------------------------------------------------------------------------*/
 
-struct part {
-	void *memory;
-};
-
 struct large_array {
-	struct part *parts;
 	u64 nr_elems;
 	u32 elemsize;
+	void *data;
 };
-
-#define ALLOC_SIZE (1 << 16)
-static u32 nr_elems_in_part(struct large_array *arr)
-{
-	return div_u64(ALLOC_SIZE, arr->elemsize);
-};
-
-static u64 nr_parts(struct large_array *arr)
-{
-	u64 a = arr->nr_elems;
-	u32 b = nr_elems_in_part(arr);
-	return div_u64(a + b - 1, b);
-}
 
 static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 {
-	u64 i;
-
 	struct large_array *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
 		DMERR("Failed to allocate arr");
@@ -58,53 +39,29 @@ static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 
 	arr->elemsize = elemsize;
 	arr->nr_elems = nr_elems;
-	arr->parts = kmalloc(sizeof(struct part) * nr_parts(arr), GFP_KERNEL);
-	if (!arr->parts) {
-		DMERR("Failed to allocate parts");
-		goto bad_alloc_parts;
+
+	arr->data = vmalloc(elemsize * nr_elems);
+	if (!arr->data) {
+		DMERR("Failed to allocate data");
+		goto bad_alloc_data;
 	}
 
-	for (i = 0; i < nr_parts(arr); i++) {
-		struct part *part = arr->parts + i;
-		part->memory = kmalloc(ALLOC_SIZE, GFP_KERNEL);
-		if (!part->memory) {
-			u8 j;
-
-			DMERR("Failed to allocate part->memory");
-			for (j = 0; j < i; j++) {
-				part = arr->parts + j;
-				kfree(part->memory);
-			}
-			goto bad_alloc_parts_memory;
-		}
-	}
 	return arr;
 
-bad_alloc_parts_memory:
-	kfree(arr->parts);
-bad_alloc_parts:
+bad_alloc_data:
 	kfree(arr);
 	return NULL;
 }
 
 static void large_array_free(struct large_array *arr)
 {
-	size_t i;
-	for (i = 0; i < nr_parts(arr); i++) {
-		struct part *part = arr->parts + i;
-		kfree(part->memory);
-	}
-	kfree(arr->parts);
+	vfree(arr->data);
 	kfree(arr);
 }
 
 static void *large_array_at(struct large_array *arr, u64 i)
 {
-	u32 n = nr_elems_in_part(arr);
-	u32 k;
-	u64 j = div_u64_rem(i, n, &k);
-	struct part *part = arr->parts + j;
-	return part->memory + (arr->elemsize * k);
+	return arr->data + arr->elemsize * i;
 }
 
 /*----------------------------------------------------------------------------*/

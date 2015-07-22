@@ -328,7 +328,6 @@ struct wb_device {
 	 * RAM buffer pool
 	 *****************/
 
-	struct kmem_cache *rambuf_cachep;
 	struct rambuffer *rambuf_pool;
 
 	/*--------------------------------------------------------------------*/

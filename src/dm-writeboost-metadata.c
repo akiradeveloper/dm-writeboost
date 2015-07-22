@@ -578,35 +578,23 @@ static int init_rambuf_pool(struct wb_device *wb)
 	if (!wb->rambuf_pool)
 		return -ENOMEM;
 
-	wb->rambuf_cachep = kmem_cache_create("dmwb_rambuf",
-			1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT),
-			1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT),
-			SLAB_RED_ZONE, NULL);
-	if (!wb->rambuf_cachep) {
-		r = -ENOMEM;
-		goto bad_cachep;
-	}
-
 	for (i = 0; i < NR_RAMBUF_POOL; i++) {
-		void *alloced = kmem_cache_alloc(wb->rambuf_cachep, GFP_KERNEL);
+		void *alloced = vmalloc(1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT));
 		if (!alloced) {
 			size_t j;
 			DMERR("Failed to allocate rambuf->data");
 			for (j = 0; j < i; j++) {
-				kmem_cache_free(wb->rambuf_cachep, wb->rambuf_pool[j].data);
+				vfree(wb->rambuf_pool[j].data);
 			}
 			r = -ENOMEM;
 			goto bad_alloc_data;
 		}
-		check_buffer_alignment(alloced);
 		wb->rambuf_pool[i].data = alloced;
 	}
 
 	return r;
 
 bad_alloc_data:
-	kmem_cache_destroy(wb->rambuf_cachep);
-bad_cachep:
 	kfree(wb->rambuf_pool);
 	return r;
 }
@@ -614,11 +602,8 @@ bad_cachep:
 static void free_rambuf_pool(struct wb_device *wb)
 {
 	size_t i;
-	for (i = 0; i < NR_RAMBUF_POOL; i++) {
-		struct rambuffer *rambuf = wb->rambuf_pool + i;
-		kmem_cache_free(wb->rambuf_cachep, rambuf->data);
-	}
-	kmem_cache_destroy(wb->rambuf_cachep);
+	for (i = 0; i < NR_RAMBUF_POOL; i++)
+		vfree(wb->rambuf_pool[i].data);
 	kfree(wb->rambuf_pool);
 }
 
@@ -699,7 +684,7 @@ static int read_whole_segment(void *buf, struct wb_device *wb,
 		.client = wb->io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
+		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = buf,
 	};
 	struct dm_io_region region = {
@@ -870,7 +855,7 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 	struct segment_header_device *header;
 	u32 i, start_idx;
 
-	void *rambuf = kmem_cache_alloc(wb->rambuf_cachep, GFP_KERNEL);
+	void *rambuf = vmalloc(1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT));
 	if (!rambuf)
 		return -ENOMEM;
 
@@ -919,7 +904,7 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		*max_id = le64_to_cpu(header->id);
 	}
 
-	kmem_cache_free(wb->rambuf_cachep, rambuf);
+	vfree(rambuf);
 	return r;
 }
 
@@ -1041,7 +1026,7 @@ static struct writeback_segment *alloc_writeback_segment(struct wb_device *wb, g
 	if (!writeback_seg->ios)
 		goto bad_ios;
 
-	writeback_seg->buf = kmem_cache_alloc(wb->rambuf_cachep, gfp);
+	writeback_seg->buf = vmalloc((1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT)) - (1 << 12));
 	if (!writeback_seg->buf)
 		goto bad_buf;
 
@@ -1062,7 +1047,7 @@ bad_writeback_seg:
 
 static void free_writeback_segment(struct wb_device *wb, struct writeback_segment *writeback_seg)
 {
-	kmem_cache_free(wb->rambuf_cachep, writeback_seg->buf);
+	vfree(writeback_seg->buf);
 	kfree(writeback_seg->ios);
 	kfree(writeback_seg);
 }

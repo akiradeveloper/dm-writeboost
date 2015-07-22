@@ -87,7 +87,7 @@ void flush_proc(struct work_struct *work)
 		.client = wb->io_client,
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
+		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = rambuf->data,
 	};
 	struct dm_io_region region = {
@@ -145,7 +145,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 			.bi_rw = WRITE,
 			.notify.fn = writeback_endio,
 			.notify.context = wb,
-			.mem.type = DM_IO_KMEM,
+			.mem.type = DM_IO_VMA,
 			.mem.ptr.addr = writeback_io->data,
 		};
 		struct dm_io_region region_w = {
@@ -171,7 +171,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 				.bi_rw = WRITE,
 				.notify.fn = writeback_endio,
 				.notify.context = wb,
-				.mem.type = DM_IO_KMEM,
+				.mem.type = DM_IO_VMA,
 				.mem.ptr.addr = writeback_io->data + (i << SECTOR_SHIFT),
 			};
 			region_w = (struct dm_io_region) {
@@ -269,7 +269,7 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 		.client = wb->io_client,
 		.bi_rw = READ,
 		.notify.fn = NULL,
-		.mem.type = DM_IO_KMEM,
+		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = writeback_seg->buf,
 	};
 	struct dm_io_region region_r = {

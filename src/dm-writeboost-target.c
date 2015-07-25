@@ -643,7 +643,7 @@ static u32 advance_cursor(struct wb_device *wb)
 	return old;
 }
 
-static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
+static bool needs_queue_seg(struct wb_device *wb)
 {
 	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
 	return rambuf_no_space;
@@ -652,12 +652,9 @@ static bool needs_queue_seg(struct wb_device *wb, struct bio *bio)
 /*
  * queue_current_buffer if the RAM buffer can't make space any more.
  */
-static void might_queue_current_buffer(struct wb_device *wb, struct bio *bio)
+static void might_queue_current_buffer(struct wb_device *wb)
 {
-	if (bio_data_dir(bio) == READ)
-		return;
-
-	if (needs_queue_seg(wb, bio))
+	if (needs_queue_seg(wb))
 		queue_current_buffer(wb);
 }
 
@@ -747,18 +744,10 @@ static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio
 
 	mutex_lock(&wb->io_lock);
 
-	/*
-	 * For design clarity, we insert this function here right after mutex is taken.
-	 * Making the state valid before anything else is always a good practice in the
-	 * in programming.
-	 */
-	might_queue_current_buffer(wb, bio);
-
 	cache_lookup(wb, bio, &res);
-
 	if (res.found) {
 		if (unlikely(res.on_buffer)) {
-			/* Overwrite on the buffer */
+			/* Overwrite on the ram buffer */
 			mutex_unlock(&wb->io_lock);
 			return res.found_mb;
 		} else {
@@ -772,13 +761,16 @@ static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio
 	} else
 		might_cancel_read_cache_cell(wb, bio);
 
+	/* Write on a new position on the ram buffer */
+
+	might_queue_current_buffer(wb);
+
 	ret = prepare_new_write_pos(wb);
 
 	ht_register(wb, res.head, ret, &res.key);
 
 	mutex_unlock(&wb->io_lock);
 
-	/* nr_inflight_ios is incremented */
 	return ret;
 }
 
@@ -1121,12 +1113,16 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 		.sector = cell->sector,
 	};
 
-	if (ACCESS_ONCE(cell->cancelled))
-		return;
-
 	mutex_lock(&wb->io_lock);
-	if (!mb_idx_inseg(wb, wb->cursor))
-		queue_current_buffer(wb);
+	/*
+	 * if might_cancel_read_cache_cell() on the foreground
+	 * cancelled this cell, the data is now stale.
+	 */
+	if (cell->cancelled) {
+		mutex_unlock(&wb->io_lock);
+		return;
+	}
+
 	head = ht_get_head(wb, &key);
 	mb = ht_lookup(wb, head, &key);
 	if (unlikely(mb)) {
@@ -1137,14 +1133,17 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 		mutex_unlock(&wb->io_lock);
 		return;
 	}
+
+	might_queue_current_buffer(wb);
+
 	seg = wb->current_seg;
-	/* advance_cursor increments nr_inflight_ios */
 	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
 	mb = seg->mb_array + _mb_idx_inseg;
 	BUG_ON(mb->dirtiness.is_dirty);
 	mb->dirtiness.data_bits = 255;
-	/* This metablock is clean and we don't have to taint it */
+
 	ht_register(wb, head, mb, &key);
+
 	mutex_unlock(&wb->io_lock);
 
 	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);

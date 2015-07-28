@@ -1513,9 +1513,8 @@ static void free_core_struct(struct wb_device *wb)
  * Create a writeboost device
  *
  * <essential args>
- * <#optional args> <optional args>
  * <#tunable args> <tunable args>
- * optionals are tunables are unordered lists of k-v pair.
+ * tunables are unordered lists of k-v pair.
  *
  * See doc for detail.
   */

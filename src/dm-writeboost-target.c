@@ -1092,7 +1092,11 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, int
 	if (error)
 		cell->cancelled = true;
 
-	if (!ACCESS_ONCE(cell->cancelled))
+	/*
+	 * We can omit copying if the cell is cancelled but
+	 * copying for a non-cancelled cell isn't problematic.
+	 */
+	if (!cell->cancelled)
 		copy_bio_payload(cell->data, bio);
 
 	if (atomic_dec_and_test(&cells->ack_count))

@@ -1127,13 +1127,12 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 		return;
 	}
 
+	/*
+	 * FIXME Why do we need to double-check here?
+	 */
 	head = ht_get_head(wb, &key);
 	mb = ht_lookup(wb, head, &key);
 	if (unlikely(mb)) {
-		/*
-		 * Entering here will cause calling queue_current_buffer() again in the next 
-		 * iteration but it's really rare given that the cell wasn't found cancelled.
-		 */
 		mutex_unlock(&wb->io_lock);
 		return;
 	}

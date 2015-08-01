@@ -1512,6 +1512,38 @@ static void free_core_struct(struct wb_device *wb)
 	kfree(wb);
 }
 
+static int copy_ctr_args(struct wb_device *wb, int argc, const char **argv)
+{
+	unsigned i;
+	const char **copy;
+
+	copy = kcalloc(argc, sizeof(*copy), GFP_KERNEL);
+	if (!copy)
+		return -ENOMEM;
+	for (i = 0; i < argc; i++) {
+		copy[i] = kstrdup(argv[i], GFP_KERNEL);
+		if (!copy[i]) {
+			while (i--)
+				kfree(copy[i]);
+			kfree(copy);
+			return -ENOMEM;
+		}
+	}
+
+	wb->nr_ctr_args = argc;
+	wb->ctr_args = copy;
+
+	return 0;
+}
+
+static void free_ctr_args(struct wb_device *wb)
+{
+	int i;
+	for (i = 0; i < wb->nr_ctr_args; i++)
+		kfree(wb->ctr_args[i]);
+	kfree(wb->ctr_args);
+}
+
 /*
  * Create a writeboost device
  *
@@ -1536,6 +1568,12 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		return r;
 	}
 	wb = ti->private;
+
+	r = copy_ctr_args(wb, argc - 2, (const char **)argv + 2);
+	if (r) {
+		ti->error = "copy_ctr_args failed";
+		goto bad_ctr_args;
+	}
 
 	r = consume_essential_argv(wb, &as);
 	if (r) {
@@ -1573,6 +1611,8 @@ bad_resume_cache:
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->backing_dev);
 bad_essential_argv:
+	free_ctr_args(wb);
+bad_ctr_args:
 	free_core_struct(wb);
 	ti->private = NULL;
 
@@ -1589,6 +1629,8 @@ static void writeboost_dtr(struct dm_target *ti)
 
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->backing_dev);
+
+	free_ctr_args(wb);
 
 	free_core_struct(wb);
 	ti->private = NULL;
@@ -1652,23 +1694,6 @@ static void writeboost_io_hints(struct dm_target *ti, struct queue_limits *limit
 	blk_limits_io_opt(limits, 4096);
 }
 
-static void emit_tunables(struct wb_device *wb, char *result, unsigned maxlen)
-{
-	ssize_t sz = 0;
-
-	DMEMIT(" %d", 10);
-	DMEMIT(" writeback_threshold %d",
-	       wb->writeback_threshold);
-	DMEMIT(" nr_cur_batched_writeback %u",
-	       wb->nr_cur_batched_writeback);
-	DMEMIT(" sync_data_interval %lu",
-	       wb->sync_data_interval);
-	DMEMIT(" update_sb_record_interval %lu",
-	       wb->update_sb_record_interval);
-	DMEMIT(" read_cache_threshold %u",
-	       wb->read_cache_threshold);
-}
-
 static void writeboost_status(struct dm_target *ti, status_type_t type,
 			      unsigned flags, char *result, unsigned maxlen)
 {
@@ -1700,7 +1725,18 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 			DMEMIT(" %llu", (unsigned long long) atomic64_read(v));
 		}
 		DMEMIT(" %llu", (unsigned long long) atomic64_read(&wb->count_non_full_flushed));
-		emit_tunables(wb, result + sz, maxlen - sz);
+
+		DMEMIT(" %d", 10);
+		DMEMIT(" writeback_threshold %d",
+		       wb->writeback_threshold);
+		DMEMIT(" nr_cur_batched_writeback %u",
+		       wb->nr_cur_batched_writeback);
+		DMEMIT(" sync_data_interval %lu",
+		       wb->sync_data_interval);
+		DMEMIT(" update_sb_record_interval %lu",
+		       wb->update_sb_record_interval);
+		DMEMIT(" read_cache_threshold %u",
+		       wb->read_cache_threshold);
 		break;
 
 	case STATUSTYPE_TABLE:
@@ -1708,7 +1744,9 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		DMEMIT(" %s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
-		emit_tunables(wb, result + sz, maxlen - sz);
+
+		for (i = 0; i < wb->nr_ctr_args; i++)
+			DMEMIT(" %s", wb->ctr_args[i]);
 		break;
 	}
 }

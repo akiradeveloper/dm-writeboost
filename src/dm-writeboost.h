@@ -265,6 +265,9 @@ struct wb_device {
 	struct dm_dev *backing_dev; /* Slow device (HDD) */
 	struct dm_dev *cache_dev; /* Fast device (SSD) */
 
+	unsigned nr_ctr_args;
+	const char **ctr_args;
+
 	bool do_format; /* True if it was the first creation */
 	struct mutex io_lock; /* Mutex is light-weighed */
 

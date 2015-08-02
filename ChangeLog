@@ -1,3 +1,11 @@
+2015-08-02  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.1.0
+	* Remove ACCESS_ONCE around cell->cancelled
+	* Change the type of cell->cancelled from int to bool
+	* Fix dmsetup table
+	* Add write_through_mode
+
 2015-07-28  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.0.6

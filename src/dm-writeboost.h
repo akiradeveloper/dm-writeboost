@@ -251,6 +251,7 @@ enum WB_FLAG {
 	 * damage.
 	 */
 	WB_DEAD = 0,
+	WB_CREATED = 1,
 };
 
 #define SEGMENT_SIZE_ORDER 10

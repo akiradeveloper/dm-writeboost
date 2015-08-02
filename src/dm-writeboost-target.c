@@ -1480,6 +1480,7 @@ static int init_core_struct(struct dm_target *ti)
 	spin_lock_init(&wb->mb_lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
 	clear_bit(WB_DEAD, &wb->flags);
+	clear_bit(WB_CREATED, &wb->flags);
 
 	return r;
 
@@ -1602,6 +1603,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 
 	clear_stat(wb);
 
+	set_bit(WB_CREATED, &wb->flags);
 	return r;
 
 bad_read_cache_cells:

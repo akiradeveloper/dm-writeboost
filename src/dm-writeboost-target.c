@@ -834,10 +834,33 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
  *     dec in_flight_ios
  *     bio_endio(bio)
  */
-static int process_write(struct wb_device *wb, struct bio *bio)
+static int process_write_wb(struct wb_device *wb, struct bio *bio)
 {
 	struct metablock *write_pos = prepare_write_pos(wb, bio);
 	return do_process_write(wb, write_pos, bio);
+}
+
+static int process_write_wt(struct wb_device *wb, struct bio *bio)
+{
+	struct lookup_result res;
+
+	mutex_lock(&wb->io_lock);
+	cache_lookup(wb, bio, &res);
+	if (res.found) {
+		dec_inflight_ios(wb, res.found_seg);
+		ht_del(wb, res.found_mb);
+	}
+
+	might_cancel_read_cache_cell(wb, bio);
+	mutex_unlock(&wb->io_lock);
+
+	bio_remap(bio, wb->backing_dev, bi_sector(bio));
+	return DM_MAPIO_REMAPPED;
+}
+
+static int process_write(struct wb_device *wb, struct bio *bio)
+{
+	return wb->write_through_mode ? process_write_wt(wb, bio) : process_write_wb(wb, bio);
 }
 
 enum PBD_FLAG {
@@ -1332,10 +1355,14 @@ bad_get_cache:
 	return r;
 }
 
-#define consume_kv(name, nr) { \
+#define consume_kv(name, nr, is_static) { \
 	if (!strcasecmp(key, #name)) { \
 		if (!argc) \
 			break; \
+		if (test_bit(WB_CREATED, &wb->flags) && is_static) { \
+			DMERR("%s is a static option", #name); \
+			break; \
+		} \
 		r = dm_read_arg(_args + (nr), as, &tmp, &ti->error); \
 		if (r) { \
 			DMERR("%s", ti->error); \
@@ -1344,7 +1371,7 @@ bad_get_cache:
 		wb->name = tmp; \
 	 } }
 
-static int do_consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as, unsigned argc)
+static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as, unsigned argc)
 {
 	int r = 0;
 	struct dm_target *ti = wb->ti;
@@ -1355,6 +1382,7 @@ static int do_consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as, 
 		{0, 3600, "Invalid update_sb_record_interval"},
 		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},
+		{0, 1, "Invalid write_through_mode"},
 	};
 	unsigned tmp;
 
@@ -1364,16 +1392,17 @@ static int do_consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as, 
 
 		r = -EINVAL;
 
-		consume_kv(writeback_threshold, 0);
-		consume_kv(nr_max_batched_writeback, 1);
-		consume_kv(update_sb_record_interval, 2);
-		consume_kv(sync_data_interval, 3);
-		consume_kv(read_cache_threshold, 4);
+		consume_kv(writeback_threshold, 0, false);
+		consume_kv(nr_max_batched_writeback, 1, false);
+		consume_kv(update_sb_record_interval, 2, false);
+		consume_kv(sync_data_interval, 3, false);
+		consume_kv(read_cache_threshold, 4, false);
+		consume_kv(write_through_mode, 5, true);
 
 		if (!r) {
 			argc--;
 		} else {
-			ti->error = "Invalid tunable key";
+			ti->error = "Invalid optional key";
 			break;
 		}
 	}
@@ -1381,13 +1410,13 @@ static int do_consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as, 
 	return r;
 }
 
-static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
+static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
 	int r = 0;
 	struct dm_target *ti = wb->ti;
 
 	static struct dm_arg _args[] = {
-		{0, 14, "Invalid tunable argc"},
+		{0, 12, "Invalid optional argc"},
 	};
 	unsigned argc = 0;
 
@@ -1399,7 +1428,7 @@ static int consume_tunable_argv(struct wb_device *wb, struct dm_arg_set *as)
 		}
 	}
 
-	return do_consume_tunable_argv(wb, as, argc);
+	return do_consume_optional_argv(wb, as, argc);
 }
 
 DECLARE_DM_KCOPYD_THROTTLE_WITH_MODULE_PARM(wb_copy_throttle,
@@ -1549,8 +1578,8 @@ static void free_ctr_args(struct wb_device *wb)
  * Create a writeboost device
  *
  * <essential args>
- * <#tunable args> <tunable args>
- * tunables are unordered lists of k-v pair.
+ * <#optional args> <optional args>
+ * optionals are unordered lists of k-v pair.
  *
  * See doc for detail.
   */
@@ -1589,10 +1618,10 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	}
 
 	wb->read_cache_threshold = 0; /* Default: read-caching disabled */
-	r = consume_tunable_argv(wb, &as);
+	r = consume_optional_argv(wb, &as);
 	if (r) {
-		ti->error = "consume_tunable_argv failed";
-		goto bad_tunable_argv;
+		ti->error = "consume_optional_argv failed";
+		goto bad_optional_argv;
 	}
 
 	r = init_read_cache_cells(wb);
@@ -1607,7 +1636,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	return r;
 
 bad_read_cache_cells:
-bad_tunable_argv:
+bad_optional_argv:
 	free_cache(wb);
 bad_resume_cache:
 	dm_put_device(ti, wb->cache_dev);
@@ -1674,7 +1703,7 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 		return r;
 	}
 
-	return do_consume_tunable_argv(wb, &as, 2);
+	return do_consume_optional_argv(wb, &as, 2);
 }
 
 /*

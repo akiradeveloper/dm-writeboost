@@ -55,17 +55,17 @@ Construct dm-writeboost'd device
 You can construct dm-writeboost'd device with dmsetup create command.
 
 <essential args>
-<#tunable args> <tunable args>
+<#optional args> <optional args>
 
-- <#tunable args> is twice the length of the following list.
-- <tunable args> is unordered list of key-value pairs.
+- <#optional args> is twice the length of the following list.
+- <optional args> is unordered list of key-value pairs.
 
 <essential args>
 backing_dev        : A block device having original data (e.g. HDD)
 cache_dev          : A block device having caches (e.g. SSD)
 
-<tunable args>
-see `Messages`
+<optional args>
+see `Optional args`
 
 e.g.
 BACKING=/dev/sdb # example
@@ -97,15 +97,8 @@ e.g.
 dmsetup message wbdev 0 drop_caches
 dmsetup remove wbdev
 
-Messages
---------
-The behavior of dm-writeboost'd device can be tuned online.
-You can use dmsetup message for this purpose.
-
-(1) Tunables
-The tunables in constructor can be changed online.
-e.g. dmsetup message wbdev 0 writeback_threshold 70
-
+Optional args
+-------------
 writeback_threshold (%)
   accepts: 0..100
   default: 0 (writeback disabled)
@@ -138,6 +131,24 @@ read_cache_threshold (int) [Experimental]
   default: 0 (read caching disabled)
 More than $read_cache_threshold * 4KB consecutive reads won't be staged.
 
+write_through_mode (bool)
+  accepts: 0..1
+  default: 0
+
+Messages
+--------
+You can change the behavior of dm-writeboost'd device by message.
+
+(1) Optional args
+The following optional args can be tuned online.
+e.g. dmsetup message wbdev 0 writeback_threshold 70
+
+- writeback_threshold
+- nr_max_batched_writeback
+- update_sb_record_interval
+- sync_data_interval
+- read_cache_threshold
+
 (2) Others
 drop_caches
   Wait for all dirty data on the cache device to be written back to the backing
@@ -156,4 +167,4 @@ Status
 <nr_dirty_cache_blocks>
 <stat (write?) x (hit?) x (on buffer?) x (fullsize?)>
 <nr_partial_flushed>
-<#tunable args> <tunable args>
+<#optional args> <optional args>

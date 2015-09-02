@@ -134,6 +134,8 @@ More than $read_cache_threshold * 4KB consecutive reads won't be staged.
 write_through_mode (bool)
   accepts: 0..1
   default: 0
+By enabling this, dm-writeboost never cache dirty data by writing data directly
+to the backing device.
 
 Messages
 --------

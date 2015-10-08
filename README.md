@@ -38,6 +38,8 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 ## Distribution Packages
 - Debian: [Stretch](https://packages.debian.org/testing/dm-writeboost-dkms), [Sid](https://packages.debian.org/sid/dm-writeboost-dkms)  
 - Ubuntu: [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
+- [Tanglu](http://packages.tanglu.org/ja/dasyatis/kernel/dm-writeboost-dkms)
+- Momonga
 
 ## Related Projects
 * https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  

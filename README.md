@@ -36,7 +36,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   for system shutdown because dm-writeboost is even durable even against sudden power failure.
 
 ## Distribution Packages
-- Debian: [Stretch](https://https://packages.debian.org/testing/dm-writeboost-dkms), [Sid](https://packages.debian.org/sid/dm-writeboost-dkms)  
+- Debian: [Stretch](https://packages.debian.org/testing/dm-writeboost-dkms), [Sid](https://packages.debian.org/sid/dm-writeboost-dkms)  
 - Ubuntu: [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
 
 ## Related Projects

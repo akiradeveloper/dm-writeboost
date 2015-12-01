@@ -52,7 +52,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 * G. Soundararajan et. al. -- Extending SSD Lifetimes with Disk-Based Write Caches (2010)
   (https://www.usenix.org/conference/fast-10/extending-ssd-lifetimes-disk-based-write-caches)  
 * Y. Oh -- SSD RAID as Cache (SRC) with Log-structured Approach for Performance and Reliability (2014)
-  (http://embedded.uos.ac.kr/~ysoh/DM-SRC-IBM.pdf)
+  (https://ysoh.files.wordpress.com/2009/05/dm-src-ibm.pdf)
 
 ## Award
 Awarded by Japanese OSS Encouragement Award. Thanks!

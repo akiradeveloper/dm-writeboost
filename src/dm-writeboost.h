@@ -540,4 +540,15 @@ sector_t dm_devsize(struct dm_dev *);
 
 /*----------------------------------------------------------------------------*/
 
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0))
+	#define bio_endio_compat(bio,error) { \
+		bio->bi_error = error; \
+		bio_endio(bio); \
+		}
+#else
+	#define bio_endio_compat(bio,error) \
+		bio_endio(bio, error);
+#endif
+
 #endif

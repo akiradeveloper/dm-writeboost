@@ -796,9 +796,9 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
 	}
 
 	if (is_live(wb))
-		bio_endio(bio, 0);
+		bio_endio_compat(bio, 0)
 	else
-		bio_endio(bio, -EIO);
+		bio_endio_compat(bio, -EIO)
 
 	return DM_MAPIO_SUBMITTED;
 }

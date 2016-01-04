@@ -28,6 +28,18 @@
 
 /*----------------------------------------------------------------------------*/
 
+void bio_endio_compat(struct bio *bio, int error)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio->bi_error = error;
+	bio_endio(bio);
+#else
+	bio_endio(bio, error);
+#endif
+}
+
+/*----------------------------------------------------------------------------*/
+
 void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 {
 	unsigned long addr = (unsigned long) buf;
@@ -796,9 +808,9 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
 	}
 
 	if (is_live(wb))
-		bio_endio(bio, 0);
+		bio_endio_compat(bio, 0);
 	else
-		bio_endio(bio, -EIO);
+		bio_endio_compat(bio, -EIO);
 
 	return DM_MAPIO_SUBMITTED;
 }

@@ -1,3 +1,10 @@
+2016-01-04  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.1.1
+	* Define bio_endio_compat
+	* Update copyright date
+	* Update/fix docs
+
 2015-08-02  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.1.0

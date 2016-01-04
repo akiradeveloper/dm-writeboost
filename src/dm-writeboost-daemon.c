@@ -1,6 +1,6 @@
 /*
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -66,9 +66,9 @@ static void process_deferred_barriers(struct wb_device *wb, struct flush_job *jo
 		struct bio *bio;
 		while ((bio = bio_list_pop(&job->barrier_ios))) {
 			if (is_live(wb))
-				bio_endio(bio, 0);
+				bio_endio_compat(bio, 0);
 			else
-				bio_endio(bio, -EIO);
+				bio_endio_compat(bio, -EIO);
 		}
 	}
 }

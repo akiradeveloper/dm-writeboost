@@ -1,6 +1,6 @@
 /*
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -482,6 +482,8 @@ void prepare_overwrite(struct wb_device *, struct segment_header *, struct metab
 #define check_buffer_alignment(buf) \
 	do_check_buffer_alignment(buf, #buf, __func__)
 void do_check_buffer_alignment(void *, const char *, const char *);
+
+void bio_endio_compat(struct bio *bio, int error);
 
 /*
  * dm_io wrapper

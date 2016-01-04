@@ -3,7 +3,7 @@
  * Log-structured Caching for Linux
  *
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2015 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +25,18 @@
 #include "dm-writeboost-daemon.h"
 
 #include "linux/sort.h"
+
+/*----------------------------------------------------------------------------*/
+
+void bio_endio_compat(struct bio *bio, int error)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio->bi_error = error;
+	bio_endio(bio);
+#else
+	bio_endio(bio, error);
+#endif
+}
 
 /*----------------------------------------------------------------------------*/
 
@@ -796,9 +808,9 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
 	}
 
 	if (is_live(wb))
-		bio_endio(bio, 0);
+		bio_endio_compat(bio, 0);
 	else
-		bio_endio(bio, -EIO);
+		bio_endio_compat(bio, -EIO);
 
 	return DM_MAPIO_SUBMITTED;
 }
@@ -1784,7 +1796,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 1, 0},
+	.version = {2, 1, 1},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

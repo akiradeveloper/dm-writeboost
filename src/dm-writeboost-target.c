@@ -457,11 +457,9 @@ static void writeback_mb_complete(int read_err, unsigned long write_err, void *_
  * We don't need to make the data written back persistent because this segment
  * will be reused only after writeback daemon wrote this segment back.
  */
-static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
-			 struct metablock *mb, u8 data_bits, bool thread)
+static int writeback_mb(struct wb_device *wb, struct segment_header *seg,
+			struct metablock *mb, u8 data_bits, bool thread)
 {
-	int r = 0;
-
 	struct writeback_mb_context context;
 	context.wb = wb;
 	context.err = 0;
@@ -483,9 +481,12 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 			.sector = mb->sector,
 			.count = (1 << 3),
 		};
-		maybe_IO(dm_kcopyd_copy(wb->copier, &src, 1, &dest, 0, writeback_mb_complete, &context));
-		if (r)
-			writeback_mb_complete(0, 0, &context);
+		if (dm_kcopyd_copy(wb->copier, &src, 1, &dest, 0, writeback_mb_complete, &context))
+			/*
+			 * dm_kcopyd_copy fails before actual processing
+			 * Granting this case as a write error is too much so be as a read error.
+			 */
+			writeback_mb_complete(1, 0, &context);
 	} else {
 		u8 i;
 
@@ -512,15 +513,13 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
 				.sector = mb->sector + i,
 				.count = 1,
 			};
-			maybe_IO(dm_kcopyd_copy(wb->copier, &src, 1, &dest, 0, writeback_mb_complete, &context));
-			if (r)
-				writeback_mb_complete(0, 0, &context);
+			if (dm_kcopyd_copy(wb->copier, &src, 1, &dest, 0, writeback_mb_complete, &context))
+				writeback_mb_complete(1, 0, &context);
 		}
 	}
 
 	wait_event(wb->writeback_mb_wait_queue, !atomic_read(&context.count));
-	if (context.err)
-		mark_dead(wb);
+	return context.err;
 }
 
 /*
@@ -529,7 +528,7 @@ static void writeback_mb(struct wb_device *wb, struct segment_header *seg,
  * There is no need to write them back with FUA flag because the cache isn't
  * flushed yet and thus isn't persistent.
  */
-static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
+static int writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
 {
 	int r = 0;
 
@@ -563,9 +562,10 @@ static void writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8
 			.sector = dest,
 			.count = 1,
 		};
-		maybe_IO(wb_io(&io_req, 1, &region, NULL, true));
+		r |= wb_io(&io_req, 1, &region, NULL, true);
 	}
 	mempool_free(buf, wb->buf_1_pool);
+	return r;
 }
 
 void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, bool overwrite_fullsize)
@@ -590,7 +590,7 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 	if (unlikely(needs_writeback_prev_cache)) {
 		wait_for_flushing(wb, seg->id);
 		BUG_ON(!dirtiness.is_dirty);
-		writeback_mb(wb, seg, old_mb, dirtiness.data_bits, true);
+		while (writeback_mb(wb, seg, old_mb, dirtiness.data_bits, true)) {}
 	}
 
 	if (mark_clean_mb(wb, old_mb))
@@ -807,11 +807,7 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	if (is_live(wb))
-		bio_endio_compat(bio, 0);
-	else
-		bio_endio_compat(bio, -EIO);
-
+	bio_endio_compat(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -893,6 +889,8 @@ struct per_bio_data {
 static void reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
 {
+	int io_res = 0;
+
 	struct lookup_result res;
 	struct dirtiness dirtiness;
 
@@ -910,10 +908,16 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
 	if (unlikely(res.on_buffer)) {
 		if (dirtiness.is_dirty)
-			writeback_buffered_mb(wb, res.found_mb, dirtiness.data_bits);
+			io_res = writeback_buffered_mb(wb, res.found_mb, dirtiness.data_bits);
 
 		dec_inflight_ios(wb, res.found_seg);
 		bio_remap(bio, wb->backing_dev, bi_sector(bio));
+
+		if (unlikely(io_res)) {
+			bio_io_error(bio);
+			return DM_MAPIO_SUBMITTED;
+		}
+
 		return DM_MAPIO_REMAPPED;
 	}
 
@@ -922,6 +926,8 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	 * Without this, we might read the wrong data from the cache device.
 	 */
 	wait_for_flushing(wb, res.found_seg->id);
+
+	BUG_ON(io_res);
 
 	if (likely(dirtiness.data_bits == 255)) {
 		struct per_bio_data *pbd = per_bio_data(wb, bio);
@@ -933,15 +939,18 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 			  io_offset(bio));
 	} else {
 		if (dirtiness.is_dirty)
-			writeback_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits, true);
-		if (mark_clean_mb(wb, res.found_mb))
-			dec_nr_dirty_caches(wb);
+			io_res = writeback_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits, true);
+			if (!io_res)
+				if (mark_clean_mb(wb, res.found_mb))
+					dec_nr_dirty_caches(wb);
 		dec_inflight_ios(wb, res.found_seg);
 		bio_remap(bio, wb->backing_dev, bi_sector(bio));
 	}
 
-	if (!is_live(wb))
+	if (unlikely(io_res)) {
 		bio_io_error(bio);
+		return DM_MAPIO_SUBMITTED;
+	}
 
 	return DM_MAPIO_REMAPPED;
 }
@@ -1687,10 +1696,9 @@ static void writeboost_dtr(struct dm_target *ti)
  */
 static void writeboost_postsuspend(struct dm_target *ti)
 {
-	int r = 0;
 	struct wb_device *wb = ti->private;
 	flush_current_buffer(wb);
-	maybe_IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+	blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 }
 
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)

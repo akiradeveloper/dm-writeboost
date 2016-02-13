@@ -54,29 +54,21 @@ void flush_barrier_ios(struct work_struct *work)
 
 static void process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
 {
-	int r = 0;
 	bool has_barrier = !bio_list_empty(&job->barrier_ios);
-
-	/* Make all the preceding data persistent. */
-	if (has_barrier)
-		maybe_IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
-
-	/* Ack the chained barrier requests. */
 	if (has_barrier) {
 		struct bio *bio;
-		while ((bio = bio_list_pop(&job->barrier_ios))) {
-			if (is_live(wb))
-				bio_endio_compat(bio, 0);
-			else
-				bio_endio_compat(bio, -EIO);
-		}
+
+		/* Make all the preceding data persistent. */
+		int res = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+
+		/* Ack the chained barrier requests. */
+		while ((bio = bio_list_pop(&job->barrier_ios)))
+			bio_endio_compat(bio, res);
 	}
 }
 
 void flush_proc(struct work_struct *work)
 {
-	int r = 0;
-
 	struct flush_job *job = container_of(work, struct flush_job, work);
 	struct rambuffer *rambuf = container_of(job, struct rambuffer, job);
 
@@ -96,7 +88,7 @@ void flush_proc(struct work_struct *work)
 		.count = (seg->length + 1) << 3,
 	};
 
-	maybe_IO(wb_io(&io_req, 1, &region, NULL, false));
+	while (wb_io(&io_req, 1, &region, NULL, false)) {}
 
 	/*
 	 * Deferred ACK for barrier requests
@@ -135,8 +127,6 @@ static void writeback_endio(unsigned long error, void *context)
 
 static void submit_writeback_io(struct wb_device *wb, struct writeback_io *writeback_io)
 {
-	int r;
-
 	BUG_ON(!writeback_io->data_bits);
 
 	if (writeback_io->data_bits == 255) {
@@ -153,9 +143,8 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 			.sector = writeback_io->sector,
 			.count = 1 << 3,
 		};
-		maybe_IO(wb_io(&io_req_w, 1, &region_w, NULL, false));
-		if (r)
-			writeback_endio(0, wb);
+		if (wb_io(&io_req_w, 1, &region_w, NULL, false))
+			writeback_endio(1, wb);
 	} else {
 		u8 i;
 		for (i = 0; i < 8; i++) {
@@ -179,9 +168,8 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 				.sector = writeback_io->sector + i,
 				.count = 1,
 			};
-			maybe_IO(wb_io(&io_req_w, 1, &region_w, NULL, false));
-			if (r)
-				writeback_endio(0, wb);
+			if (wb_io(&io_req_w, 1, &region_w, NULL, false))
+				writeback_endio(1, wb);
 		}
 	}
 }
@@ -254,15 +242,8 @@ static void add_writeback_io(struct wb_device *wb, struct writeback_io *writebac
 	rb_insert_color(&writeback_io->rb_node, &wb->writeback_tree);
 }
 
-/*
- * Read the data to writeback IOs and add them into the RB-tree to sort.
- */
-static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment *writeback_seg,
-				  size_t *writeback_io_count)
+static int fill_writeback_seg(struct wb_device *wb, struct writeback_segment *writeback_seg)
 {
-	int r = 0;
-	u8 i;
-
 	struct segment_header *seg = writeback_seg->seg;
 
 	struct dm_io_request io_req_r = {
@@ -282,8 +263,15 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 	 * dm_io() allows region.count = 0
 	 * so we don't need to skip here in case of seg->length = 0
 	 */
-	maybe_IO(wb_io(&io_req_r, 1, &region_r, NULL, false));
+	return wb_io(&io_req_r, 1, &region_r, NULL, false);
+}
 
+static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment *writeback_seg,
+				  size_t *writeback_io_count)
+{
+	struct segment_header *seg = writeback_seg->seg;
+
+	u8 i;
 	for (i = 0; i < seg->length; i++) {
 		struct writeback_io *writeback_io;
 
@@ -314,29 +302,43 @@ static void mark_clean_seg(struct wb_device *wb, struct segment_header *seg)
 	}
 }
 
-static void do_writeback_segs(struct wb_device *wb)
+/*
+ * Try writeback some specified segs and returns all writeback ios succeeded.
+ */
+static bool try_writeback_segs(struct wb_device *wb)
 {
-	int r;
-	size_t k;
 	struct writeback_segment *writeback_seg;
-
 	size_t writeback_io_count = 0;
+	size_t k;
 
 	/* Create RB-tree */
 	wb->writeback_tree = RB_ROOT;
 	for (k = 0; k < wb->num_writeback_segs; k++) {
 		writeback_seg = *(wb->writeback_segs + k);
+
+		if (fill_writeback_seg(wb, writeback_seg))
+			return false;
+
 		prepare_writeback_ios(wb, writeback_seg, &writeback_io_count);
 	}
+
 	atomic_set(&wb->writeback_io_count, writeback_io_count);
 	atomic_set(&wb->writeback_fail_count, 0);
 
 	/* Pop rbnodes out of the tree and submit writeback I/Os */
 	submit_writeback_ios(wb);
 	wait_event(wb->writeback_io_wait_queue, !atomic_read(&wb->writeback_io_count));
-	if (atomic_read(&wb->writeback_fail_count))
-		mark_dead(wb);
-	maybe_IO(blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL));
+
+	return atomic_read(&wb->writeback_fail_count) == 0;
+}
+
+static void do_writeback_segs(struct wb_device *wb)
+{
+	size_t k;
+	struct writeback_segment *writeback_seg;
+
+	while (!try_writeback_segs(wb)) {}
+	blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL);
 
 	/* A segment after written back is clean */
 	for (k = 0; k < wb->num_writeback_segs; k++) {
@@ -451,8 +453,6 @@ int writeback_modulator_proc(void *data)
 
 static void update_superblock_record(struct wb_device *wb)
 {
-	int r = 0;
-
 	struct superblock_record_device o;
 	void *buf;
 	struct dm_io_request io_req;
@@ -477,7 +477,7 @@ static void update_superblock_record(struct wb_device *wb)
 		.sector = (1 << 11) - 1,
 		.count = 1,
 	};
-	maybe_IO(wb_io(&io_req, 1, &region, NULL, false));
+	wb_io(&io_req, 1, &region, NULL, false);
 
 	mempool_free(buf, wb->buf_1_pool);
 }
@@ -507,8 +507,6 @@ int sb_record_updater_proc(void *data)
 
 int data_synchronizer_proc(void *data)
 {
-	int r = 0;
-
 	struct wb_device *wb = data;
 	unsigned long intvl;
 
@@ -522,7 +520,7 @@ int data_synchronizer_proc(void *data)
 		}
 
 		flush_current_buffer(wb);
-		maybe_IO(blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL));
+		blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
 	return 0;

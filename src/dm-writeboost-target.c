@@ -1202,7 +1202,7 @@ static void free_read_cache_cell_data(struct read_cache_cells *cells)
 	u32 i;
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		kfree(cell->data);
+		vfree(cell->data);
 	}
 }
 
@@ -1225,12 +1225,12 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		cell->data = kmalloc(1 << 12, GFP_KERNEL);
+		cell->data = vmalloc(1 << 12);
 		if (!cell->data) {
 			u32 j;
 			for (j = 0; j < i; j++) {
 				cell = cells->array + j;
-				kfree(cell->data);
+				vfree(cell->data);
 			}
 			goto bad_cell_data;
 		}

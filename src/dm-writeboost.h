@@ -500,46 +500,4 @@ sector_t dm_devsize(struct dm_dev *);
 
 /*----------------------------------------------------------------------------*/
 
-/*
- * Device blockup (Marking the device as dead)
- * -------------------------------------------
- *
- * I/O error on cache device blocks up the whole system.
- * After the system is blocked up, cache device is dead, all I/Os to cache
- * device are ignored as if it becomes /dev/null.
- */
-#define mark_dead(wb) set_bit(WB_DEAD, &wb->flags)
-#define is_live(wb) likely(!test_bit(WB_DEAD, &wb->flags))
-
-/*
- * This macro wraps I/Os to cache device to add context of failure.
- */
-#define maybe_IO(proc) \
-	do { \
-		r = 0; \
-		if (is_live(wb)) {\
-			r = proc; \
-		} else { \
-			r = -EIO; \
-			break; \
-		} \
-		\
-		if (r == -EIO) { \
-			mark_dead(wb); \
-			DMERR("device is marked as dead"); \
-			break; \
-		} else if (r == -ENOMEM) { \
-			DMERR("I/O failed by ENOMEM"); \
-			schedule_timeout_interruptible(msecs_to_jiffies(1000));\
-			continue; \
-		} else if (r == -EOPNOTSUPP) { \
-			break; \
-		} else if (r) { \
-			WARN_ONCE(1, "I/O failed for unknown reason err(%d)", r); \
-			break; \
-		} \
-	} while (r)
-
-/*----------------------------------------------------------------------------*/
-
 #endif

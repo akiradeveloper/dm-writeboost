@@ -1,3 +1,9 @@
+2016-03-05  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.1.2
+	* Remove blockup mechanism
+	* Use vmalloc for read_cache_cell's buffer
+
 2016-01-04  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.1.1

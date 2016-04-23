@@ -751,8 +751,37 @@ static void apply_metablock_device(struct wb_device *wb, struct segment_header *
 	head = ht_get_head(wb, &key);
 	found = ht_lookup(wb, head, &key);
 	if (found) {
-		bool overwrite_fullsize = (mb->dirtiness.data_bits == 255);
-		prepare_overwrite(wb, mb_to_seg(wb, found), found, overwrite_fullsize);
+		u8 i;
+		void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
+		BUG_ON(!buf); // FIXME
+
+		struct write_io wio = {
+			.data = buf,
+			.data_bits = 0,
+		};
+		prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+
+		for (i = 0; i < 8; i++) {
+			if (!(wio.data_bits & (1 << i)))
+				continue;
+
+			struct dm_io_request io_req = {
+				.client = wb->io_client,
+				.bi_rw = WRITE,
+				.notify.fn = NULL,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = wio.data + (i << 9),
+			};
+			struct dm_io_region region = {
+				.bdev = wb->backing_dev->bdev,
+				.sector = mb->sector + i,
+				.count = 1,
+			};
+			int err = wb_io(&io_req, 1, &region, NULL, true);
+			BUG_ON(err); // FIXME
+		}
+
+		mempool_free(buf, wb->buf_8_pool);
 	}
 
 	ht_register(wb, head, mb, &key);
@@ -900,7 +929,7 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		}
 
 		/* This segment is correct and we apply */
-		apply_segment_header_device(wb, seg, header);
+		apply_segment_header_device(wb, seg, header); // FIXME should catch error
 		*max_id = le64_to_cpu(header->id);
 	}
 

@@ -468,6 +468,11 @@ struct wb_device {
 
 /*----------------------------------------------------------------------------*/
 
+struct write_io {
+	void *data; // 4KB
+	u8 data_bits;
+};
+
 void acquire_new_seg(struct wb_device *, u64 id);
 void cursor_init(struct wb_device *);
 void flush_current_buffer(struct wb_device *);
@@ -475,7 +480,7 @@ void inc_nr_dirty_caches(struct wb_device *);
 void dec_nr_dirty_caches(struct wb_device *);
 bool mark_clean_mb(struct wb_device *, struct metablock *);
 struct dirtiness read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
-void prepare_overwrite(struct wb_device *, struct segment_header *, struct metablock *old_mb, bool overwrite_fullsize);
+void prepare_overwrite(struct wb_device *, struct segment_header *, struct metablock *old_mb, struct write_io *, u8 overwrite_bits);
 
 /*----------------------------------------------------------------------------*/
 

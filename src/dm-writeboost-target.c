@@ -1559,7 +1559,6 @@ static int init_core_struct(struct dm_target *ti)
 	init_waitqueue_head(&wb->inflight_ios_wq);
 	spin_lock_init(&wb->mb_lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
-	clear_bit(WB_DEAD, &wb->flags);
 	clear_bit(WB_CREATED, &wb->flags);
 
 	return r;

@@ -245,13 +245,7 @@ enum STATFLAG {
 #define STATLEN (1 << 4)
 
 enum WB_FLAG {
-	/*
-	 * This flag is set when either one of the underlying devices returned
-	 * EIO and we must immediately block up the whole to avoid further
-	 * damage.
-	 */
-	WB_DEAD = 0,
-	WB_CREATED = 1,
+	WB_CREATED = 0,
 };
 
 #define SEGMENT_SIZE_ORDER 10

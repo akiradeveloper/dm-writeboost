@@ -897,6 +897,11 @@ enum PBD_FLAG {
 	PBD_READ_SEG = 2,
 };
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
+#define PER_BIO_DATA_SIZE per_io_data_size
+#else
+#define PER_BIO_DATA_SIZE per_bio_data_size
+#endif
 struct per_bio_data {
 	enum PBD_FLAG type;
 	union {
@@ -904,7 +909,7 @@ struct per_bio_data {
 		struct segment_header *seg;
 	};
 };
-#define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->per_bio_data_size))
+#define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->PER_BIO_DATA_SIZE))
 
 static void reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
@@ -1500,7 +1505,7 @@ static int init_core_struct(struct dm_target *ti)
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
 	ti->discard_zeroes_data_unsupported = true;
-	ti->per_bio_data_size = sizeof(struct per_bio_data);
+	ti->PER_BIO_DATA_SIZE = sizeof(struct per_bio_data);
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {

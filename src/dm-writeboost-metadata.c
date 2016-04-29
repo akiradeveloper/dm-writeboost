@@ -732,8 +732,8 @@ void prepare_segment_header_device(void *rambuffer,
 /*
  * Apply @i-th metablock in @src to @seg
  */
-static void apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
-				   struct segment_header_device *src, u8 i)
+static int apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
+				  struct segment_header_device *src, u8 i)
 {
 	struct lookup_key key;
 	struct ht_head *head;
@@ -751,52 +751,68 @@ static void apply_metablock_device(struct wb_device *wb, struct segment_header *
 	head = ht_get_head(wb, &key);
 	found = ht_lookup(wb, head, &key);
 	if (found) {
+		int err = 0;
 		u8 i;
+		struct write_io wio;
 		void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
-		BUG_ON(!buf); // FIXME
+		if (!buf)
+			return -ENOMEM;
 
-		struct write_io wio = {
+		wio = (struct write_io) {
 			.data = buf,
 			.data_bits = 0,
 		};
 		prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
 
 		for (i = 0; i < 8; i++) {
+			struct dm_io_request io_req;
+			struct dm_io_region region;
 			if (!(wio.data_bits & (1 << i)))
 				continue;
 
-			struct dm_io_request io_req = {
+			io_req = (struct dm_io_request) {
 				.client = wb->io_client,
 				.bi_rw = WRITE,
 				.notify.fn = NULL,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = wio.data + (i << 9),
 			};
-			struct dm_io_region region = {
+			region = (struct dm_io_region) {
 				.bdev = wb->backing_dev->bdev,
 				.sector = mb->sector + i,
 				.count = 1,
 			};
-			int err = wb_io(&io_req, 1, &region, NULL, true);
-			BUG_ON(err); // FIXME
+			err = wb_io(&io_req, 1, &region, NULL, true);
+			if (err)
+				break;
 		}
 
 		mempool_free(buf, wb->buf_8_pool);
+
+		if (err)
+			return err;
 	}
 
 	ht_register(wb, head, mb, &key);
 
 	if (mb->dirtiness.is_dirty)
 		inc_nr_dirty_caches(wb);
+
+	return 0;
 }
 
-static void apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
-					struct segment_header_device *src)
+static int apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
+				       struct segment_header_device *src)
 {
+	int err = 0;
 	u8 i;
 	seg->length = src->length;
-	for (i = 0; i < src->length; i++)
-		apply_metablock_device(wb, seg, src, i);
+	for (i = 0; i < src->length; i++) {
+		err = apply_metablock_device(wb, seg, src, i);
+		if (err)
+			break;
+	}
+	return err;
 }
 
 /*
@@ -929,7 +945,10 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		}
 
 		/* This segment is correct and we apply */
-		apply_segment_header_device(wb, seg, header); // FIXME should catch error
+		r = apply_segment_header_device(wb, seg, header);
+		if (r)
+			break;
+
 		*max_id = le64_to_cpu(header->id);
 	}
 

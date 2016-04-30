@@ -453,8 +453,9 @@ static void copy_bio_payload(void *buf, struct bio *bio)
 	}
 }
 
-// if bio's offset is 0
-// buf = 512B
+/*
+ * Copy 512B buffer data to bio payload's i-th 512B area.
+ */
 static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
 {
 	size_t head = 0;
@@ -478,7 +479,9 @@ static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
 	BUG();
 }
 
-// buf = 4KB
+/*
+ * Copy 4KB buffer to bio payload with care to bio offset and copy bits.
+ */
 static void copy_to_bio_payload(struct bio *bio, void *buf, u8 copy_bits)
 {
 	u8 offset = io_offset(bio);
@@ -540,13 +543,20 @@ bad:
 	return err;
 }
 
-// no need to free
+/*
+ * Get the reference to the 4KB-aligned data in RAM buffer.
+ * Since it only takes the reference caller need not to free the pointer.
+ */
 static void *ref_buffered_mb(struct wb_device *wb, struct metablock *mb)
 {
 	sector_t offset = ((mb_idx_inseg(wb, mb->idx) + 1) << 3);
 	return wb->current_rambuf->data + (offset << 9);
 }
 
+/*
+ * Read cache block of the mb.
+ * Caller should free the returned pointer after used by mempool_alloc().
+ */
 static void *read_mb(struct wb_device *wb, struct segment_header *seg,
 		     struct metablock *mb, u8 data_bits)
 {
@@ -658,7 +668,7 @@ static int process_discard_bio(struct wb_device *wb, struct bio *bio)
  */
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 {
-	/* In device-mapper bio with REQ_FLUSH is for sure to have no data. */
+	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
 	BUG_ON(bi_size(bio));
 	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
@@ -724,7 +734,7 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 			void *buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
 			if (!buf)
 				continue;
-			// newer data should be prioritized
+			/* newer data should be prioritized */
 			memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
 			wio->data_bits |= dirtiness.data_bits;
 			mempool_free(buf, wb->buf_8_pool);
@@ -739,7 +749,7 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 }
 
 /*
- * Get new place to write.
+ * Get a new place to write.
  */
 static struct metablock *prepare_new_write_pos(struct wb_device *wb)
 {
@@ -790,8 +800,6 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 		}
 	} else
 		might_cancel_read_cache_cell(wb, bio);
-
-	/* Write on a new position on the ram buffer */
 
 	might_queue_current_buffer(wb);
 

@@ -303,7 +303,7 @@ static void mark_clean_seg(struct wb_device *wb, struct segment_header *seg)
 }
 
 /*
- * Try writeback some specified segs and returns all writeback ios succeeded.
+ * Try writeback some specified segs and returns if all writeback ios succeeded.
  */
 static bool try_writeback_segs(struct wb_device *wb)
 {

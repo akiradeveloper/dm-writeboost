@@ -463,7 +463,7 @@ struct wb_device {
 /*----------------------------------------------------------------------------*/
 
 struct write_io {
-	void *data; // 4KB
+	void *data; /* 4KB */
 	u8 data_bits;
 };
 

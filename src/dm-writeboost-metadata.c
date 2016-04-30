@@ -579,7 +579,7 @@ static int init_rambuf_pool(struct wb_device *wb)
 		return -ENOMEM;
 
 	for (i = 0; i < NR_RAMBUF_POOL; i++) {
-		void *alloced = vmalloc(1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT));
+		void *alloced = vmalloc(1 << (SEGMENT_SIZE_ORDER + 9));
 		if (!alloced) {
 			size_t j;
 			DMERR("Failed to allocate rambuf->data");
@@ -900,7 +900,7 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 	struct segment_header_device *header;
 	u32 i, start_idx;
 
-	void *rambuf = vmalloc(1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT));
+	void *rambuf = vmalloc(1 << (SEGMENT_SIZE_ORDER + 9));
 	if (!rambuf)
 		return -ENOMEM;
 
@@ -1074,7 +1074,7 @@ static struct writeback_segment *alloc_writeback_segment(struct wb_device *wb, g
 	if (!writeback_seg->ios)
 		goto bad_ios;
 
-	writeback_seg->buf = vmalloc((1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT)) - (1 << 12));
+	writeback_seg->buf = vmalloc((1 << (SEGMENT_SIZE_ORDER + 9)) - (1 << 12));
 	if (!writeback_seg->buf)
 		goto bad_buf;
 

@@ -44,7 +44,7 @@ void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 {
 	unsigned long addr = (unsigned long) buf;
 
-	if (!IS_ALIGNED(addr, 1 << SECTOR_SHIFT)) {
+	if (!IS_ALIGNED(addr, 1 << 9)) {
 		DMCRIT("@%s in %s is not sector-aligned. I/O buffer must be sector-aligned.", name, caller);
 		BUG();
 	}
@@ -116,7 +116,7 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 
 sector_t dm_devsize(struct dm_dev *dev)
 {
-	return i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT;
+	return i_size_read(dev->bdev->bd_inode) >> 9;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -1531,7 +1531,7 @@ static int init_core_struct(struct dm_target *ti)
 	}
 
 	wb->buf_1_cachep = kmem_cache_create("dmwb_buf_1",
-			1 << 9, 1 << SECTOR_SHIFT, SLAB_RED_ZONE, NULL);
+			1 << 9, 1 << 9, SLAB_RED_ZONE, NULL);
 	if (!wb->buf_1_cachep) {
 		r = -ENOMEM;
 		goto bad_buf_1_cachep;

@@ -161,7 +161,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 				.notify.fn = writeback_endio,
 				.notify.context = wb,
 				.mem.type = DM_IO_VMA,
-				.mem.ptr.addr = writeback_io->data + (i << SECTOR_SHIFT),
+				.mem.ptr.addr = writeback_io->data + (i << 9),
 			};
 			region_w = (struct dm_io_region) {
 				.bdev = wb->backing_dev->bdev,

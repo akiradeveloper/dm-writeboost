@@ -1,3 +1,13 @@
+2016-04-31  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.0
+	* Remove partial writeback in foreground. This results in writing
+	back cached data strictly from the older ones, which makes cache
+	device corruption safer
+	* Fix build error for kernel 4.6. per_bio_data_size is renamed to
+	per_io_data_size
+	* Remove SECTOR_SHIFT
+
 2016-03-05  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.1.2

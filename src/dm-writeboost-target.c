@@ -44,7 +44,7 @@ void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 {
 	unsigned long addr = (unsigned long) buf;
 
-	if (!IS_ALIGNED(addr, 1 << SECTOR_SHIFT)) {
+	if (!IS_ALIGNED(addr, 1 << 9)) {
 		DMCRIT("@%s in %s is not sector-aligned. I/O buffer must be sector-aligned.", name, caller);
 		BUG();
 	}
@@ -116,7 +116,7 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 
 sector_t dm_devsize(struct dm_dev *dev)
 {
-	return i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT;
+	return i_size_read(dev->bdev->bd_inode) >> 9;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -373,30 +373,18 @@ void dec_nr_dirty_caches(struct wb_device *wb)
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
-static bool taint_mb(struct wb_device *wb, struct metablock *mb, struct bio *bio)
+static bool taint_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
 {
 	unsigned long flags;
 	bool flip = false;
 
+	BUG_ON(data_bits == 0);
 	spin_lock_irqsave(&wb->mb_lock, flags);
 	if (!mb->dirtiness.is_dirty) {
 		mb->dirtiness.is_dirty = true;
 		flip = true;
 	}
-
-	if (likely(io_fullsize(bio))) {
-		mb->dirtiness.data_bits = 255;
-	} else {
-		u8 i;
-		u8 acc_bits = 0;
-		for (i = io_offset(bio); i < (io_offset(bio) + bio_sectors(bio)); i++)
-			acc_bits += (1 << i);
-
-		mb->dirtiness.data_bits |= acc_bits;
-	}
-
-	BUG_ON(!bio_sectors(bio));
-	BUG_ON(!mb->dirtiness.data_bits);
+	mb->dirtiness.data_bits |= data_bits;
 	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
 	return flip;
@@ -435,172 +423,6 @@ struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *
 
 /*----------------------------------------------------------------------------*/
 
-struct writeback_mb_context {
-	struct wb_device *wb;
-	atomic_t count;
-	int err;
-};
-
-static void writeback_mb_complete(int read_err, unsigned long write_err, void *__context)
-{
-	struct writeback_mb_context *context = __context;
-
-	if (read_err || write_err)
-		context->err = 1;
-
-	if (atomic_dec_and_test(&context->count))
-		wake_up_active_wq(&context->wb->writeback_mb_wait_queue);
-}
-
-/*
- * Write back a cache from cache device to the backing device.
- * We don't need to make the data written back persistent because this segment
- * will be reused only after writeback daemon wrote this segment back.
- */
-static int writeback_mb(struct wb_device *wb, struct segment_header *seg,
-			struct metablock *mb, u8 data_bits, bool thread)
-{
-	struct writeback_mb_context context;
-	context.wb = wb;
-	context.err = 0;
-
-	BUG_ON(!data_bits);
-
-	if (data_bits == 255) {
-		struct dm_io_region src, dest;
-
-		atomic_set(&context.count, 1);
-
-		src = (struct dm_io_region) {
-			.bdev = wb->cache_dev->bdev,
-			.sector = calc_mb_start_sector(wb, seg, mb->idx),
-			.count = (1 << 3),
-		};
-		dest = (struct dm_io_region) {
-			.bdev = wb->backing_dev->bdev,
-			.sector = mb->sector,
-			.count = (1 << 3),
-		};
-		if (dm_kcopyd_copy(wb->copier, &src, 1, &dest, 0, writeback_mb_complete, &context))
-			/*
-			 * dm_kcopyd_copy fails before actual processing
-			 * Granting this case as a write error is too much so be as a read error.
-			 */
-			writeback_mb_complete(1, 0, &context);
-	} else {
-		u8 i;
-
-		u8 count = 0;
-		for (i = 0; i < 8; i++)
-			if (data_bits & (1 << i))
-				count++;
-
-		atomic_set(&context.count, count);
-
-		for (i = 0; i < 8; i++) {
-			struct dm_io_region src, dest;
-
-			if (!(data_bits & (1 << i)))
-				continue;
-
-			src = (struct dm_io_region) {
-				.bdev = wb->cache_dev->bdev,
-				.sector = calc_mb_start_sector(wb, seg, mb->idx) + i,
-				.count = 1,
-			};
-			dest = (struct dm_io_region) {
-				.bdev = wb->backing_dev->bdev,
-				.sector = mb->sector + i,
-				.count = 1,
-			};
-			if (dm_kcopyd_copy(wb->copier, &src, 1, &dest, 0, writeback_mb_complete, &context))
-				writeback_mb_complete(1, 0, &context);
-		}
-	}
-
-	wait_event(wb->writeback_mb_wait_queue, !atomic_read(&context.count));
-	return context.err;
-}
-
-/*
- * Write back a cache on the RAM buffer to backing device.
- * Calling this function is really rare so the code needs not to be optimal.
- * There is no need to write them back with FUA flag because the cache isn't
- * flushed yet and thus isn't persistent.
- */
-static int writeback_buffered_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
-{
-	int r = 0;
-
-	sector_t offset = ((mb_idx_inseg(wb, mb->idx) + 1) << 3);
-	void *buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO);
-
-	u8 i;
-	for (i = 0; i < 8; i++) {
-		struct dm_io_request io_req;
-		struct dm_io_region region;
-
-		void *src;
-		sector_t dest;
-
-		if (!(data_bits & (1 << i)))
-			continue;
-
-		src = wb->current_rambuf->data + ((offset + i) << SECTOR_SHIFT);
-		dest = mb->sector + i;
-
-		memcpy(buf, src, 1 << SECTOR_SHIFT);
-		io_req = (struct dm_io_request) {
-			.client = wb->io_client,
-			.bi_rw = WRITE,
-			.notify.fn = NULL,
-			.mem.type = DM_IO_KMEM,
-			.mem.ptr.addr = buf,
-		};
-		region = (struct dm_io_region) {
-			.bdev = wb->backing_dev->bdev,
-			.sector = dest,
-			.count = 1,
-		};
-		r |= wb_io(&io_req, 1, &region, NULL, true);
-	}
-	mempool_free(buf, wb->buf_1_pool);
-	return r;
-}
-
-void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, bool overwrite_fullsize)
-{
-	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
-
-	/*
-	 * First clean up the previous cache and write back the cache if needed.
-	 */
-	bool needs_writeback_prev_cache = !overwrite_fullsize || !(dirtiness.data_bits == 255);
-
-	/*
-	 * Writeback works in background and may have cleaned up the metablock.
-	 * If the metablock is clean we don't have to write back.
-	 */
-	if (!dirtiness.is_dirty)
-		needs_writeback_prev_cache = false;
-
-	if (overwrite_fullsize)
-		needs_writeback_prev_cache = false;
-
-	if (unlikely(needs_writeback_prev_cache)) {
-		wait_for_flushing(wb, seg->id);
-		BUG_ON(!dirtiness.is_dirty);
-		while (writeback_mb(wb, seg, old_mb, dirtiness.data_bits, true)) {}
-	}
-
-	if (mark_clean_mb(wb, old_mb))
-		dec_nr_dirty_caches(wb);
-
-	ht_del(wb, old_mb);
-}
-
-/*----------------------------------------------------------------------------*/
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 #define bv_vec struct bio_vec
 #define bv_page(vec) vec.bv_page
@@ -631,11 +453,170 @@ static void copy_bio_payload(void *buf, struct bio *bio)
 	}
 }
 
-static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct bio *bio)
+/*
+ * Copy 512B buffer data to bio payload's i-th 512B area.
+ */
+static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
 {
-	sector_t start_sector = ((mb_idx_inseg(wb, write_pos->idx) + 1) << 3) + io_offset(bio);
-	size_t start_byte = start_sector << SECTOR_SHIFT;
-	copy_bio_payload(wb->current_rambuf->data + start_byte, bio);
+	size_t head = 0;
+	size_t tail = head;
+
+	bv_vec vec;
+	bv_it it;
+	bio_for_each_segment(vec, bio, it) {
+		size_t l = bv_len(vec);
+		tail += l;
+		if ((i << 9) < tail) {
+			void *p;
+			size_t offset = (i << 9) - head;
+			BUG_ON((l - offset) < (1 << 9));
+			p = page_address(bv_page(vec)) + bv_offset(vec) + offset;
+			memcpy(p, buf, 1 << 9);
+			return;
+		}
+		head += l;
+	}
+	BUG();
+}
+
+/*
+ * Copy 4KB buffer to bio payload with care to bio offset and copy bits.
+ */
+static void copy_to_bio_payload(struct bio *bio, void *buf, u8 copy_bits)
+{
+	u8 offset = io_offset(bio);
+	u8 i;
+	for (i = 0; i < bio_sectors(bio); i++) {
+		u8 i_offset = i + offset;
+		if (copy_bits & (1 << i_offset))
+			__copy_to_bio_payload(bio, buf + (i_offset << 9), i);
+	}
+}
+
+static u8 to_mask(u8 offset, u8 count)
+{
+	u8 i;
+	u8 result = 0;
+	if (count == 8) {
+		result = 255;
+	} else {
+		for (i = 0; i < count; i++)
+			result |= (1 << (i + offset));
+	}
+	return result;
+}
+
+static int fill_payload_by_backing(struct wb_device *wb, struct bio *bio)
+{
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
+	sector_t start = bi_sector(bio);
+	u8 offset = do_io_offset(start);
+	u8 len = bio_sectors(bio);
+	u8 copy_bits = to_mask(offset, len);
+
+	int err = 0;
+	void *buf = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	if (!buf)
+		return -ENOMEM;
+
+	io_req = (struct dm_io_request) {
+		.client = wb->io_client,
+		.bi_rw = READ,
+		.notify.fn = NULL,
+		.mem.type = DM_IO_KMEM,
+		.mem.ptr.addr = buf + (offset << 9),
+	};
+	region = (struct dm_io_region) {
+		.bdev = wb->backing_dev->bdev,
+		.sector = start,
+		.count = len,
+	};
+	err = wb_io(&io_req, 1, &region, NULL, true);
+	if (err)
+		goto bad;
+
+	copy_to_bio_payload(bio, buf, copy_bits);
+bad:
+	mempool_free(buf, wb->buf_8_pool);
+	return err;
+}
+
+/*
+ * Get the reference to the 4KB-aligned data in RAM buffer.
+ * Since it only takes the reference caller need not to free the pointer.
+ */
+static void *ref_buffered_mb(struct wb_device *wb, struct metablock *mb)
+{
+	sector_t offset = ((mb_idx_inseg(wb, mb->idx) + 1) << 3);
+	return wb->current_rambuf->data + (offset << 9);
+}
+
+/*
+ * Read cache block of the mb.
+ * Caller should free the returned pointer after used by mempool_alloc().
+ */
+static void *read_mb(struct wb_device *wb, struct segment_header *seg,
+		     struct metablock *mb, u8 data_bits)
+{
+	u8 i;
+	void *result = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	if (!result)
+		return NULL;
+
+	for (i = 0; i < 8; i++) {
+		int err = 0;
+		struct dm_io_request io_req;
+		struct dm_io_region region;
+
+		if (!(data_bits & (1 << i)))
+			continue;
+
+		io_req = (struct dm_io_request) {
+			.client = wb->io_client,
+			.bi_rw = READ,
+			.notify.fn = NULL,
+			.mem.type = DM_IO_KMEM,
+			.mem.ptr.addr = result + (i << 9),
+		};
+
+		region = (struct dm_io_region) {
+			.bdev = wb->cache_dev->bdev,
+			.sector = calc_mb_start_sector(wb, seg, mb->idx) + i,
+			.count = 1,
+		};
+
+		err = wb_io(&io_req, 1, &region, NULL, true);
+		if (err) {
+			mempool_free(result, wb->buf_8_pool);
+			return NULL;
+		}
+	}
+	return result;
+}
+
+static void memcpy_masked(void *to, u8 protect_bits, void *from, u8 copy_bits)
+{
+	u8 i;
+	for (i = 0; i < 8; i++) {
+		bool will_copy = copy_bits & (1 << i);
+		bool protected = protect_bits & (1 << i);
+		if (will_copy && (!protected)) {
+			size_t offset = (i << 9);
+			memcpy(to + offset, from + offset, 1 << 9);
+		}
+	}
+}
+
+static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct write_io *wio)
+{
+	size_t mb_offset = (mb_idx_inseg(wb, write_pos->idx) + 1) << 12;
+	void *mb_data = wb->current_rambuf->data + mb_offset;
+	if (wio->data_bits == 255)
+		memcpy(mb_data, wio->data, 1 << 12);
+	else
+		memcpy_masked(mb_data, 0, wio->data, wio->data_bits);
 }
 
 /*
@@ -687,7 +668,7 @@ static int process_discard_bio(struct wb_device *wb, struct bio *bio)
  */
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 {
-	/* In device-mapper bio with REQ_FLUSH is for sure to have no data. */
+	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
 	BUG_ON(bi_size(bio));
 	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
@@ -730,8 +711,45 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_re
 	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
 }
 
+void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
+{
+	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
+
+	bool needs_writeback_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
+
+	if (!dirtiness.is_dirty)
+		needs_writeback_prev_cache = false;
+
+	if (overwrite_bits == 255)
+		needs_writeback_prev_cache = false;
+
+	if (unlikely(needs_writeback_prev_cache)) {
+		bool retry;
+
+		wait_for_flushing(wb, seg->id);
+		BUG_ON(!dirtiness.is_dirty);
+
+		retry = true;
+		do {
+			void *buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
+			if (!buf)
+				continue;
+			/* newer data should be prioritized */
+			memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
+			wio->data_bits |= dirtiness.data_bits;
+			mempool_free(buf, wb->buf_8_pool);
+			retry = false;
+		} while (retry);
+	}
+
+	if (mark_clean_mb(wb, old_mb))
+		dec_nr_dirty_caches(wb);
+
+	ht_del(wb, old_mb);
+}
+
 /*
- * Get new place to write.
+ * Get a new place to write.
  */
 static struct metablock *prepare_new_write_pos(struct wb_device *wb)
 {
@@ -748,54 +766,62 @@ static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
 		wake_up_active_wq(&wb->inflight_ios_wq);
 }
 
-static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
-static struct metablock *prepare_write_pos(struct wb_device *wb, struct bio *bio)
+static void initialize_write_io(struct write_io *wio, struct bio *bio)
 {
-	struct metablock *ret;
+	u8 offset = io_offset(bio);
+	sector_t count = bio_sectors(bio);
+	copy_bio_payload(wio->data + (offset << 9), bio);
+	wio->data_bits = to_mask(offset, count);
+}
+
+static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
+static int do_process_write(struct wb_device *wb, struct bio *bio)
+{
+	struct metablock *write_pos = NULL;
 	struct lookup_result res;
+
+	struct write_io wio;
+	wio.data = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	if (!wio.data)
+		return -ENOMEM;
+	initialize_write_io(&wio, bio);
 
 	mutex_lock(&wb->io_lock);
 
 	cache_lookup(wb, bio, &res);
+
 	if (res.found) {
 		if (unlikely(res.on_buffer)) {
-			/* Overwrite on the ram buffer */
-			mutex_unlock(&wb->io_lock);
-			return res.found_mb;
+			write_pos = res.found_mb;
+			goto do_write;
 		} else {
-			/*
-			 * Invalidate the old cache on the cache device because
-			 * we can't overwrite cache block on the cache device.
-			 */
-			prepare_overwrite(wb, res.found_seg, res.found_mb, io_fullsize(bio));
+			prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
 			dec_inflight_ios(wb, res.found_seg);
 		}
 	} else
 		might_cancel_read_cache_cell(wb, bio);
 
-	/* Write on a new position on the ram buffer */
-
 	might_queue_current_buffer(wb);
 
-	ret = prepare_new_write_pos(wb);
+	write_pos = prepare_new_write_pos(wb);
 
-	ht_register(wb, res.head, ret, &res.key);
+do_write:
+	BUG_ON(write_pos == NULL);
+	write_on_rambuffer(wb, write_pos, &wio);
+	mempool_free(wio.data, wb->buf_8_pool);
+
+	if (taint_mb(wb, write_pos, wio.data_bits))
+		inc_nr_dirty_caches(wb);
+
+	ht_register(wb, res.head, write_pos, &res.key);
 
 	mutex_unlock(&wb->io_lock);
 
-	return ret;
+	return 0;
 }
 
-/*
- * Write bio data to RAM buffer.
- */
-static int do_process_write(struct wb_device *wb, struct metablock *write_pos, struct bio *bio)
+static int complete_process_write(struct wb_device *wb, struct bio *bio)
 {
-	if (taint_mb(wb, write_pos, bio))
-		inc_nr_dirty_caches(wb);
-
-	write_on_rambuffer(wb, write_pos, bio);
-
 	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
@@ -833,19 +859,21 @@ static int do_process_write(struct wb_device *wb, struct metablock *write_pos, s
  * 2) Wait for decrement outside the lock
  *
  * process_write:
- *   prepare_write_pos:
+ *   do_process_write:
  *     mutex_lock (to serialize write)
  *       inc in_flight_ios # refcount on the dst segment
  *     mutex_unlock
  *
- *   do_process_write:
+ *   complete_process_write:
  *     dec in_flight_ios
  *     bio_endio(bio)
  */
 static int process_write_wb(struct wb_device *wb, struct bio *bio)
 {
-	struct metablock *write_pos = prepare_write_pos(wb, bio);
-	return do_process_write(wb, write_pos, bio);
+	int err = do_process_write(wb, bio);
+	if (err)
+		return err;
+	return complete_process_write(wb, bio);
 }
 
 static int process_write_wt(struct wb_device *wb, struct bio *bio)
@@ -877,6 +905,11 @@ enum PBD_FLAG {
 	PBD_READ_SEG = 2,
 };
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
+#define PER_BIO_DATA_SIZE per_io_data_size
+#else
+#define PER_BIO_DATA_SIZE per_bio_data_size
+#endif
 struct per_bio_data {
 	enum PBD_FLAG type;
 	union {
@@ -884,15 +917,14 @@ struct per_bio_data {
 		struct segment_header *seg;
 	};
 };
-#define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->per_bio_data_size))
+#define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->PER_BIO_DATA_SIZE))
 
 static void reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
 {
-	int io_res = 0;
-
 	struct lookup_result res;
 	struct dirtiness dirtiness;
+	struct per_bio_data *pbd;
 
 	mutex_lock(&wb->io_lock);
 	cache_lookup(wb, bio, &res);
@@ -907,18 +939,22 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 
 	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
 	if (unlikely(res.on_buffer)) {
+		int err = fill_payload_by_backing(wb, bio);
+		if (err)
+			goto read_buffered_mb_exit;
+
 		if (dirtiness.is_dirty)
-			io_res = writeback_buffered_mb(wb, res.found_mb, dirtiness.data_bits);
+			copy_to_bio_payload(bio, ref_buffered_mb(wb, res.found_mb), dirtiness.data_bits);
 
+read_buffered_mb_exit:
 		dec_inflight_ios(wb, res.found_seg);
-		bio_remap(bio, wb->backing_dev, bi_sector(bio));
 
-		if (unlikely(io_res)) {
+		if (unlikely(err))
 			bio_io_error(bio);
-			return DM_MAPIO_SUBMITTED;
-		}
+		else
+			bio_endio_compat(bio, 0);
 
-		return DM_MAPIO_REMAPPED;
+		return DM_MAPIO_SUBMITTED;
 	}
 
 	/*
@@ -927,30 +963,37 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 	 */
 	wait_for_flushing(wb, res.found_seg->id);
 
-	BUG_ON(io_res);
+	if (unlikely(dirtiness.data_bits != 255)) {
+		int err = fill_payload_by_backing(wb, bio);
+		if (err)
+			goto read_mb_exit;
 
-	if (likely(dirtiness.data_bits == 255)) {
-		struct per_bio_data *pbd = per_bio_data(wb, bio);
-		pbd->type = PBD_READ_SEG;
-		pbd->seg = res.found_seg;
+		if (dirtiness.is_dirty) {
+			void *buf = read_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits);
+			if (!buf)
+				goto read_mb_exit;
+			copy_to_bio_payload(bio, buf, dirtiness.data_bits);
+			mempool_free(buf, wb->buf_8_pool);
+		}
 
-		bio_remap(bio, wb->cache_dev,
-			  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
-			  io_offset(bio));
-	} else {
-		if (dirtiness.is_dirty)
-			io_res = writeback_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits, true);
-			if (!io_res)
-				if (mark_clean_mb(wb, res.found_mb))
-					dec_nr_dirty_caches(wb);
+read_mb_exit:
 		dec_inflight_ios(wb, res.found_seg);
-		bio_remap(bio, wb->backing_dev, bi_sector(bio));
-	}
 
-	if (unlikely(io_res)) {
-		bio_io_error(bio);
+		if (unlikely(err))
+			bio_io_error(bio);
+		else
+			bio_endio_compat(bio, 0);
+
 		return DM_MAPIO_SUBMITTED;
 	}
+
+	pbd = per_bio_data(wb, bio);
+	pbd->type = PBD_READ_SEG;
+	pbd->seg = res.found_seg;
+
+	bio_remap(bio, wb->cache_dev,
+		  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
+		  io_offset(bio));
 
 	return DM_MAPIO_REMAPPED;
 }
@@ -1470,7 +1513,7 @@ static int init_core_struct(struct dm_target *ti)
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
 	ti->discard_zeroes_data_unsupported = true;
-	ti->per_bio_data_size = sizeof(struct per_bio_data);
+	ti->PER_BIO_DATA_SIZE = sizeof(struct per_bio_data);
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
@@ -1480,7 +1523,7 @@ static int init_core_struct(struct dm_target *ti)
 	ti->private = wb;
 	wb->ti = ti;
 
-	init_waitqueue_head(&wb->writeback_mb_wait_queue);
+	// init_waitqueue_head(&wb->writeback_mb_wait_queue);
 	wb->copier = dm_kcopyd_client_create(&dm_kcopyd_throttle);
 	if (IS_ERR(wb->copier)) {
 		r = PTR_ERR(wb->copier);
@@ -1488,7 +1531,7 @@ static int init_core_struct(struct dm_target *ti)
 	}
 
 	wb->buf_1_cachep = kmem_cache_create("dmwb_buf_1",
-			1 << 9, 1 << SECTOR_SHIFT, SLAB_RED_ZONE, NULL);
+			1 << 9, 1 << 9, SLAB_RED_ZONE, NULL);
 	if (!wb->buf_1_cachep) {
 		r = -ENOMEM;
 		goto bad_buf_1_cachep;
@@ -1529,7 +1572,6 @@ static int init_core_struct(struct dm_target *ti)
 	init_waitqueue_head(&wb->inflight_ios_wq);
 	spin_lock_init(&wb->mb_lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);
-	clear_bit(WB_DEAD, &wb->flags);
 	clear_bit(WB_CREATED, &wb->flags);
 
 	return r;
@@ -1804,7 +1846,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 1, 2},
+	.version = {2, 2, 0},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

@@ -579,7 +579,7 @@ static int init_rambuf_pool(struct wb_device *wb)
 		return -ENOMEM;
 
 	for (i = 0; i < NR_RAMBUF_POOL; i++) {
-		void *alloced = vmalloc(1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT));
+		void *alloced = vmalloc(1 << (SEGMENT_SIZE_ORDER + 9));
 		if (!alloced) {
 			size_t j;
 			DMERR("Failed to allocate rambuf->data");
@@ -732,8 +732,8 @@ void prepare_segment_header_device(void *rambuffer,
 /*
  * Apply @i-th metablock in @src to @seg
  */
-static void apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
-				   struct segment_header_device *src, u8 i)
+static int apply_metablock_device(struct wb_device *wb, struct segment_header *seg,
+				  struct segment_header_device *src, u8 i)
 {
 	struct lookup_key key;
 	struct ht_head *head;
@@ -751,23 +751,68 @@ static void apply_metablock_device(struct wb_device *wb, struct segment_header *
 	head = ht_get_head(wb, &key);
 	found = ht_lookup(wb, head, &key);
 	if (found) {
-		bool overwrite_fullsize = (mb->dirtiness.data_bits == 255);
-		prepare_overwrite(wb, mb_to_seg(wb, found), found, overwrite_fullsize);
+		int err = 0;
+		u8 i;
+		struct write_io wio;
+		void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+
+		wio = (struct write_io) {
+			.data = buf,
+			.data_bits = 0,
+		};
+		prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+
+		for (i = 0; i < 8; i++) {
+			struct dm_io_request io_req;
+			struct dm_io_region region;
+			if (!(wio.data_bits & (1 << i)))
+				continue;
+
+			io_req = (struct dm_io_request) {
+				.client = wb->io_client,
+				.bi_rw = WRITE,
+				.notify.fn = NULL,
+				.mem.type = DM_IO_KMEM,
+				.mem.ptr.addr = wio.data + (i << 9),
+			};
+			region = (struct dm_io_region) {
+				.bdev = wb->backing_dev->bdev,
+				.sector = mb->sector + i,
+				.count = 1,
+			};
+			err = wb_io(&io_req, 1, &region, NULL, true);
+			if (err)
+				break;
+		}
+
+		mempool_free(buf, wb->buf_8_pool);
+
+		if (err)
+			return err;
 	}
 
 	ht_register(wb, head, mb, &key);
 
 	if (mb->dirtiness.is_dirty)
 		inc_nr_dirty_caches(wb);
+
+	return 0;
 }
 
-static void apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
-					struct segment_header_device *src)
+static int apply_segment_header_device(struct wb_device *wb, struct segment_header *seg,
+				       struct segment_header_device *src)
 {
+	int err = 0;
 	u8 i;
 	seg->length = src->length;
-	for (i = 0; i < src->length; i++)
-		apply_metablock_device(wb, seg, src, i);
+	for (i = 0; i < src->length; i++) {
+		err = apply_metablock_device(wb, seg, src, i);
+		if (err)
+			break;
+	}
+	return err;
 }
 
 /*
@@ -855,7 +900,7 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 	struct segment_header_device *header;
 	u32 i, start_idx;
 
-	void *rambuf = vmalloc(1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT));
+	void *rambuf = vmalloc(1 << (SEGMENT_SIZE_ORDER + 9));
 	if (!rambuf)
 		return -ENOMEM;
 
@@ -900,7 +945,10 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 		}
 
 		/* This segment is correct and we apply */
-		apply_segment_header_device(wb, seg, header);
+		r = apply_segment_header_device(wb, seg, header);
+		if (r)
+			break;
+
 		*max_id = le64_to_cpu(header->id);
 	}
 
@@ -1026,7 +1074,7 @@ static struct writeback_segment *alloc_writeback_segment(struct wb_device *wb, g
 	if (!writeback_seg->ios)
 		goto bad_ios;
 
-	writeback_seg->buf = vmalloc((1 << (SEGMENT_SIZE_ORDER + SECTOR_SHIFT)) - (1 << 12));
+	writeback_seg->buf = vmalloc((1 << (SEGMENT_SIZE_ORDER + 9)) - (1 << 12));
 	if (!writeback_seg->buf)
 		goto bad_buf;
 

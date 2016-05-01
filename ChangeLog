@@ -1,4 +1,4 @@
-2016-04-31  Akira Hayakawa  <ruby.wktk@gmail.com>
+2016-05-01  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.0
 	* Remove partial writeback in foreground. This results in writing

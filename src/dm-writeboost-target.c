@@ -1228,6 +1228,14 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 
 	seg = wb->current_seg;
 	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
+
+	/*
+	 * We should copy the cell data into the rambuf with lock held
+	 * otherwise subsequent write data may be written first and then overwritten by
+	 * the old data in the cell.
+	 */
+	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
+
 	mb = seg->mb_array + _mb_idx_inseg;
 	BUG_ON(mb->dirtiness.is_dirty);
 	mb->dirtiness.data_bits = 255;
@@ -1236,7 +1244,6 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 
 	mutex_unlock(&wb->io_lock);
 
-	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
 	dec_inflight_ios(wb, seg);
 }
 

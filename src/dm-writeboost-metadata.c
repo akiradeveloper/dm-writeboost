@@ -855,15 +855,14 @@ static int do_find_max_id(struct wb_device *wb, u64 *max_id)
 		struct segment_header *seg = segment_at(wb, k);
 		struct segment_header_device *header;
 		r = read_segment_header(buf, wb, seg);
-		if (r) {
-			kfree(buf);
-			return r;
-		}
+		if (r)
+			goto out;
 
 		header = buf;
 		if (le64_to_cpu(header->id) > *max_id)
 			*max_id = le64_to_cpu(header->id);
 	}
+out:
 	mempool_free(buf, wb->buf_8_pool);
 	return r;
 }

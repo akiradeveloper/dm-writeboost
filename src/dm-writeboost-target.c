@@ -699,7 +699,7 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_re
 	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
 }
 
-void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
+int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
 {
 	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
 
@@ -712,28 +712,27 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 		needs_merge_prev_cache = false;
 
 	if (unlikely(needs_merge_prev_cache)) {
-		bool retry;
+		void *buf;
 
 		wait_for_flushing(wb, seg->id);
 		BUG_ON(!dirtiness.is_dirty);
 
-		retry = true;
-		do {
-			void *buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
-			if (!buf)
-				continue;
-			/* newer data should be prioritized */
-			memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
-			wio->data_bits |= dirtiness.data_bits;
-			mempool_free(buf, wb->buf_8_pool);
-			retry = false;
-		} while (retry);
+		buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
+		if (!buf)
+			return -EIO;
+
+		/* newer data should be prioritized */
+		memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
+		wio->data_bits |= dirtiness.data_bits;
+		mempool_free(buf, wb->buf_8_pool);
 	}
 
 	if (mark_clean_mb(wb, old_mb))
 		dec_nr_dirty_caches(wb);
 
 	ht_del(wb, old_mb);
+
+	return 0;
 }
 
 /*
@@ -785,8 +784,10 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 			write_pos = res.found_mb;
 			goto do_write;
 		} else {
-			prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
+			retval = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
 			dec_inflight_ios(wb, res.found_seg);
+			if (retval)
+				goto out;
 		}
 	} else
 		might_cancel_read_cache_cell(wb, bio);
@@ -804,10 +805,9 @@ do_write:
 
 	ht_register(wb, res.head, write_pos, &res.key);
 
+out:
 	mutex_unlock(&wb->io_lock);
-
 	mempool_free(wio.data, wb->buf_8_pool);
-
 	return retval;
 }
 

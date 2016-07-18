@@ -762,7 +762,9 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 			.data = buf,
 			.data_bits = 0,
 		};
-		prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+		err = prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+		if (err)
+			goto fail_out;
 
 		for (i = 0; i < 8; i++) {
 			struct dm_io_request io_req;
@@ -787,8 +789,8 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 				break;
 		}
 
+fail_out:
 		mempool_free(buf, wb->buf_8_pool);
-
 		if (err)
 			return err;
 	}

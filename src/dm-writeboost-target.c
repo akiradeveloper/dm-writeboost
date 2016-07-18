@@ -765,6 +765,8 @@ static void initialize_write_io(struct write_io *wio, struct bio *bio)
 static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
 static int do_process_write(struct wb_device *wb, struct bio *bio)
 {
+	int retval = 0;
+
 	struct metablock *write_pos = NULL;
 	struct lookup_result res;
 
@@ -796,7 +798,6 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 do_write:
 	BUG_ON(write_pos == NULL);
 	write_on_rambuffer(wb, write_pos, &wio);
-	mempool_free(wio.data, wb->buf_8_pool);
 
 	if (taint_mb(wb, write_pos, wio.data_bits))
 		inc_nr_dirty_caches(wb);
@@ -805,7 +806,9 @@ do_write:
 
 	mutex_unlock(&wb->io_lock);
 
-	return 0;
+	mempool_free(wio.data, wb->buf_8_pool);
+
+	return retval;
 }
 
 static int complete_process_write(struct wb_device *wb, struct bio *bio)

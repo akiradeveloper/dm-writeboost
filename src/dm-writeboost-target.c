@@ -970,8 +970,10 @@ read_buffered_mb_exit:
 
 		if (dirtiness.is_dirty) {
 			void *buf = read_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits);
-			if (!buf)
+			if (!buf) {
+				err = -EIO;
 				goto read_mb_exit;
+			}
 			copy_to_bio_payload(bio, buf, dirtiness.data_bits);
 			mempool_free(buf, wb->buf_8_pool);
 		}

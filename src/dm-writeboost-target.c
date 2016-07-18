@@ -703,15 +703,15 @@ void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct 
 {
 	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
 
-	bool needs_writeback_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
+	bool needs_merge_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
 
 	if (!dirtiness.is_dirty)
-		needs_writeback_prev_cache = false;
+		needs_merge_prev_cache = false;
 
 	if (overwrite_bits == 255)
-		needs_writeback_prev_cache = false;
+		needs_merge_prev_cache = false;
 
-	if (unlikely(needs_writeback_prev_cache)) {
+	if (unlikely(needs_merge_prev_cache)) {
 		bool retry;
 
 		wait_for_flushing(wb, seg->id);

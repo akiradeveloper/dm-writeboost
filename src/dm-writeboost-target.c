@@ -652,18 +652,6 @@ static void might_queue_current_buffer(struct wb_device *wb)
 }
 
 /*
- * Process bio with REQ_DISCARD
- * We only discard sectors on only the backing store because blocks on cache
- * device are unlikely to be discarded. As discarding blocks is likely to be
- * operated long after writing the block is likely to be written back before that.
- */
-static int process_discard_bio(struct wb_device *wb, struct bio *bio)
-{
-	bio_remap(bio, wb->backing_dev, bi_sector(bio));
-	return DM_MAPIO_REMAPPED;
-}
-
-/*
  * Process bio with REQ_FLUSH
  */
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
@@ -1011,9 +999,6 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_NONE;
-
-	if (bio->bi_rw & REQ_DISCARD)
-		return process_discard_bio(wb, bio);
 
 	if (bio->bi_rw & REQ_FLUSH)
 		return process_flush_bio(wb, bio);
@@ -1518,10 +1503,20 @@ static int init_core_struct(struct dm_target *ti)
 		return r;
 	}
 
-	ti->flush_supported = true;
 	ti->num_flush_bios = 1;
-	ti->num_discard_bios = 1;
-	ti->discard_zeroes_data_unsupported = true;
+	ti->flush_supported = true;
+
+	/*
+	 * dm-writeboost does't support TRIM
+	 *
+	 * https://github.com/akiradeveloper/dm-writeboost/issues/110
+	 * - discarding backing data only violates DRAT
+	 * - strictly discarding both cache blocks and backing data is nearly impossible
+	 *   considering cache hits may occur partially.
+	 */
+	ti->num_discard_bios = 0;
+	ti->discards_supported = false;
+
 	ti->PER_BIO_DATA_SIZE = sizeof(struct per_bio_data);
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);

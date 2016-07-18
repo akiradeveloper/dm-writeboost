@@ -652,18 +652,6 @@ static void might_queue_current_buffer(struct wb_device *wb)
 }
 
 /*
- * Process bio with REQ_DISCARD
- * We only discard sectors on only the backing store because blocks on cache
- * device are unlikely to be discarded. As discarding blocks is likely to be
- * operated long after writing the block is likely to be written back before that.
- */
-static int process_discard_bio(struct wb_device *wb, struct bio *bio)
-{
-	bio_remap(bio, wb->backing_dev, bi_sector(bio));
-	return DM_MAPIO_REMAPPED;
-}
-
-/*
  * Process bio with REQ_FLUSH
  */
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
@@ -711,41 +699,40 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_re
 	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
 }
 
-void prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
+int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
 {
 	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
 
-	bool needs_writeback_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
+	bool needs_merge_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
 
 	if (!dirtiness.is_dirty)
-		needs_writeback_prev_cache = false;
+		needs_merge_prev_cache = false;
 
 	if (overwrite_bits == 255)
-		needs_writeback_prev_cache = false;
+		needs_merge_prev_cache = false;
 
-	if (unlikely(needs_writeback_prev_cache)) {
-		bool retry;
+	if (unlikely(needs_merge_prev_cache)) {
+		void *buf;
 
 		wait_for_flushing(wb, seg->id);
 		BUG_ON(!dirtiness.is_dirty);
 
-		retry = true;
-		do {
-			void *buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
-			if (!buf)
-				continue;
-			/* newer data should be prioritized */
-			memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
-			wio->data_bits |= dirtiness.data_bits;
-			mempool_free(buf, wb->buf_8_pool);
-			retry = false;
-		} while (retry);
+		buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
+		if (!buf)
+			return -EIO;
+
+		/* newer data should be prioritized */
+		memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
+		wio->data_bits |= dirtiness.data_bits;
+		mempool_free(buf, wb->buf_8_pool);
 	}
 
 	if (mark_clean_mb(wb, old_mb))
 		dec_nr_dirty_caches(wb);
 
 	ht_del(wb, old_mb);
+
+	return 0;
 }
 
 /*
@@ -777,6 +764,8 @@ static void initialize_write_io(struct write_io *wio, struct bio *bio)
 static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
 static int do_process_write(struct wb_device *wb, struct bio *bio)
 {
+	int retval = 0;
+
 	struct metablock *write_pos = NULL;
 	struct lookup_result res;
 
@@ -795,8 +784,10 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 			write_pos = res.found_mb;
 			goto do_write;
 		} else {
-			prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
+			retval = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
 			dec_inflight_ios(wb, res.found_seg);
+			if (retval)
+				goto out;
 		}
 	} else
 		might_cancel_read_cache_cell(wb, bio);
@@ -808,16 +799,16 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 do_write:
 	BUG_ON(write_pos == NULL);
 	write_on_rambuffer(wb, write_pos, &wio);
-	mempool_free(wio.data, wb->buf_8_pool);
 
 	if (taint_mb(wb, write_pos, wio.data_bits))
 		inc_nr_dirty_caches(wb);
 
 	ht_register(wb, res.head, write_pos, &res.key);
 
+out:
 	mutex_unlock(&wb->io_lock);
-
-	return 0;
+	mempool_free(wio.data, wb->buf_8_pool);
+	return retval;
 }
 
 static int complete_process_write(struct wb_device *wb, struct bio *bio)
@@ -970,8 +961,10 @@ read_buffered_mb_exit:
 
 		if (dirtiness.is_dirty) {
 			void *buf = read_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits);
-			if (!buf)
+			if (!buf) {
+				err = -EIO;
 				goto read_mb_exit;
+			}
 			copy_to_bio_payload(bio, buf, dirtiness.data_bits);
 			mempool_free(buf, wb->buf_8_pool);
 		}
@@ -1009,9 +1002,6 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_NONE;
-
-	if (bio->bi_rw & REQ_DISCARD)
-		return process_discard_bio(wb, bio);
 
 	if (bio->bi_rw & REQ_FLUSH)
 		return process_flush_bio(wb, bio);
@@ -1228,6 +1218,14 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 
 	seg = wb->current_seg;
 	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
+
+	/*
+	 * We should copy the cell data into the rambuf with lock held
+	 * otherwise subsequent write data may be written first and then overwritten by
+	 * the old data in the cell.
+	 */
+	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
+
 	mb = seg->mb_array + _mb_idx_inseg;
 	BUG_ON(mb->dirtiness.is_dirty);
 	mb->dirtiness.data_bits = 255;
@@ -1236,7 +1234,6 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 
 	mutex_unlock(&wb->io_lock);
 
-	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
 	dec_inflight_ios(wb, seg);
 }
 
@@ -1509,10 +1506,20 @@ static int init_core_struct(struct dm_target *ti)
 		return r;
 	}
 
-	ti->flush_supported = true;
 	ti->num_flush_bios = 1;
-	ti->num_discard_bios = 1;
-	ti->discard_zeroes_data_unsupported = true;
+	ti->flush_supported = true;
+
+	/*
+	 * dm-writeboost does't support TRIM
+	 *
+	 * https://github.com/akiradeveloper/dm-writeboost/issues/110
+	 * - discarding backing data only violates DRAT
+	 * - strictly discarding both cache blocks and backing data is nearly impossible
+	 *   considering cache hits may occur partially.
+	 */
+	ti->num_discard_bios = 0;
+	ti->discards_supported = false;
+
 	ti->PER_BIO_DATA_SIZE = sizeof(struct per_bio_data);
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
@@ -1846,7 +1853,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 0},
+	.version = {2, 2, 1},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

@@ -88,7 +88,12 @@ void flush_proc(struct work_struct *work)
 		.count = (seg->length + 1) << 3,
 	};
 
-	while (wb_io(&io_req, 1, &region, NULL, false)) {}
+	int coeff = 1;
+	while (wb_io(&io_req, 1, &region, NULL, false)) {
+		unsigned long intvl = msecs_to_jiffies(coeff * 1000);
+		schedule_timeout_interruptible(intvl);
+		coeff++;
+	}
 
 	/*
 	 * Deferred ACK for barrier requests
@@ -337,7 +342,12 @@ static void do_writeback_segs(struct wb_device *wb)
 	size_t k;
 	struct writeback_segment *writeback_seg;
 
-	while (!try_writeback_segs(wb)) {}
+	int coeff = 1;
+	while (!try_writeback_segs(wb)) {
+		unsigned long intvl = msecs_to_jiffies(coeff * 1000);
+		schedule_timeout_interruptible(intvl);
+		coeff++;
+	}
 	blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL);
 
 	/* A segment after written back is clean */

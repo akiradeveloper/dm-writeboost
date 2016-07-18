@@ -1,3 +1,9 @@
+2016-07-18  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.1
+	* Unsupport TRIM
+	* Fixes (fail if partial read from caching device fails etc.)
+
 2016-05-01  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.0

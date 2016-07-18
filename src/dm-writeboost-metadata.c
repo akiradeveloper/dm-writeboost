@@ -762,7 +762,9 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 			.data = buf,
 			.data_bits = 0,
 		};
-		prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+		err = prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+		if (err)
+			goto fail_out;
 
 		for (i = 0; i < 8; i++) {
 			struct dm_io_request io_req;
@@ -787,8 +789,8 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 				break;
 		}
 
+fail_out:
 		mempool_free(buf, wb->buf_8_pool);
-
 		if (err)
 			return err;
 	}
@@ -855,15 +857,14 @@ static int do_find_max_id(struct wb_device *wb, u64 *max_id)
 		struct segment_header *seg = segment_at(wb, k);
 		struct segment_header_device *header;
 		r = read_segment_header(buf, wb, seg);
-		if (r) {
-			kfree(buf);
-			return r;
-		}
+		if (r)
+			goto out;
 
 		header = buf;
 		if (le64_to_cpu(header->id) > *max_id)
 			*max_id = le64_to_cpu(header->id);
 	}
+out:
 	mempool_free(buf, wb->buf_8_pool);
 	return r;
 }

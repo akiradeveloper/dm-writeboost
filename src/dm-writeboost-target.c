@@ -447,8 +447,10 @@ static void copy_bio_payload(void *buf, struct bio *bio)
 	bv_vec vec;
 	bv_it it;
 	bio_for_each_segment(vec, bio, it) {
+		void *dst = kmap_atomic(bv_page(vec));
 		size_t l = bv_len(vec);
-		memcpy(buf, page_address(bv_page(vec)) + bv_offset(vec), l);
+		memcpy(buf, dst + bv_offset(vec), l);
+		kunmap_atomic(dst);
 		buf += l;
 	}
 }
@@ -467,11 +469,11 @@ static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
 		size_t l = bv_len(vec);
 		tail += l;
 		if ((i << 9) < tail) {
-			void *p;
+			void *dst = kmap_atomic(bv_page(vec));
 			size_t offset = (i << 9) - head;
 			BUG_ON((l - offset) < (1 << 9));
-			p = page_address(bv_page(vec)) + bv_offset(vec) + offset;
-			memcpy(p, buf, 1 << 9);
+			memcpy(dst + bv_offset(vec) + offset, buf, 1 << 9);
+			kunmap_atomic(dst);
 			return;
 		}
 		head += l;

@@ -444,6 +444,7 @@ struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *
  */
 static void copy_bio_payload(void *buf, struct bio *bio)
 {
+	size_t sum = 0;
 	bv_vec vec;
 	bv_it it;
 	bio_for_each_segment(vec, bio, it) {
@@ -452,7 +453,9 @@ static void copy_bio_payload(void *buf, struct bio *bio)
 		memcpy(buf, dst + bv_offset(vec), l);
 		kunmap_atomic(dst);
 		buf += l;
+		sum += l;
 	}
+	BUG_ON(sum != bi_size(bio));
 }
 
 /*

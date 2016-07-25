@@ -1196,12 +1196,12 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 {
 	struct metablock *mb;
 	u32 _mb_idx_inseg;
-	struct ht_head *head;
 	struct segment_header *seg;
 
 	struct lookup_key key = {
 		.sector = cell->sector,
 	};
+	struct ht_head *head = ht_get_head(wb, &key);
 
 	mutex_lock(&wb->io_lock);
 	/*
@@ -1209,16 +1209,6 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	 * cancelled this cell, the data is now stale.
 	 */
 	if (cell->cancelled) {
-		mutex_unlock(&wb->io_lock);
-		return;
-	}
-
-	/*
-	 * FIXME Why do we need to double-check here?
-	 */
-	head = ht_get_head(wb, &key);
-	mb = ht_lookup(wb, head, &key);
-	if (unlikely(mb)) {
 		mutex_unlock(&wb->io_lock);
 		return;
 	}

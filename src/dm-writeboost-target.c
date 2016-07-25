@@ -211,7 +211,7 @@ static void init_rambuffer(struct wb_device *wb)
 /*
  * Acquire a new RAM buffer for the new segment.
  */
-static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
+static void __acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
@@ -226,12 +226,7 @@ static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 	init_rambuffer(wb);
 }
 
-/*
- * Acquire the new segment and RAM buffer for the following writes.
- * Guarantees all dirty caches in the segments are written back and
- * all metablocks in it are invalidated (Linked to null head).
- */
-void acquire_new_seg(struct wb_device *wb, u64 id)
+static void __acquire_new_seg(struct wb_device *wb, u64 id)
 {
 	struct segment_header *new_seg = get_segment_header_by_id(wb, id);
 
@@ -256,8 +251,17 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	 */
 	new_seg->id = id;
 	wb->current_seg = new_seg;
+}
 
-	acquire_new_rambuffer(wb, id);
+/*
+ * Acquire the new segment and RAM buffer for the following writes.
+ * Guarantees all dirty caches in the segments are written back and
+ * all metablocks in it are invalidated (Linked to null head).
+ */
+void acquire_new_seg(struct wb_device *wb, u64 id)
+{
+	__acquire_new_rambuffer(wb, id);
+	__acquire_new_seg(wb, id);
 }
 
 static void prepare_new_seg(struct wb_device *wb)

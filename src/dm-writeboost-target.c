@@ -211,7 +211,7 @@ static void init_rambuffer(struct wb_device *wb)
 /*
  * Acquire a new RAM buffer for the new segment.
  */
-static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
+static void __acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {
 	struct rambuffer *next_rambuf;
 	u32 tmp32;
@@ -226,12 +226,7 @@ static void acquire_new_rambuffer(struct wb_device *wb, u64 id)
 	init_rambuffer(wb);
 }
 
-/*
- * Acquire the new segment and RAM buffer for the following writes.
- * Guarantees all dirty caches in the segments are written back and
- * all metablocks in it are invalidated (Linked to null head).
- */
-void acquire_new_seg(struct wb_device *wb, u64 id)
+static void __acquire_new_seg(struct wb_device *wb, u64 id)
 {
 	struct segment_header *new_seg = get_segment_header_by_id(wb, id);
 
@@ -256,8 +251,17 @@ void acquire_new_seg(struct wb_device *wb, u64 id)
 	 */
 	new_seg->id = id;
 	wb->current_seg = new_seg;
+}
 
-	acquire_new_rambuffer(wb, id);
+/*
+ * Acquire the new segment and RAM buffer for the following writes.
+ * Guarantees all dirty caches in the segments are written back and
+ * all metablocks in it are invalidated (Linked to null head).
+ */
+void acquire_new_seg(struct wb_device *wb, u64 id)
+{
+	__acquire_new_rambuffer(wb, id);
+	__acquire_new_seg(wb, id);
 }
 
 static void prepare_new_seg(struct wb_device *wb)
@@ -444,13 +448,18 @@ struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *
  */
 static void copy_bio_payload(void *buf, struct bio *bio)
 {
+	size_t sum = 0;
 	bv_vec vec;
 	bv_it it;
 	bio_for_each_segment(vec, bio, it) {
+		void *dst = kmap_atomic(bv_page(vec));
 		size_t l = bv_len(vec);
-		memcpy(buf, page_address(bv_page(vec)) + bv_offset(vec), l);
+		memcpy(buf, dst + bv_offset(vec), l);
+		kunmap_atomic(dst);
 		buf += l;
+		sum += l;
 	}
+	BUG_ON(sum != bi_size(bio));
 }
 
 /*
@@ -467,11 +476,11 @@ static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
 		size_t l = bv_len(vec);
 		tail += l;
 		if ((i << 9) < tail) {
-			void *p;
+			void *dst = kmap_atomic(bv_page(vec));
 			size_t offset = (i << 9) - head;
 			BUG_ON((l - offset) < (1 << 9));
-			p = page_address(bv_page(vec)) + bv_offset(vec) + offset;
-			memcpy(p, buf, 1 << 9);
+			memcpy(dst + bv_offset(vec) + offset, buf, 1 << 9);
+			kunmap_atomic(dst);
 			return;
 		}
 		head += l;
@@ -1187,12 +1196,12 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 {
 	struct metablock *mb;
 	u32 _mb_idx_inseg;
-	struct ht_head *head;
 	struct segment_header *seg;
 
 	struct lookup_key key = {
 		.sector = cell->sector,
 	};
+	struct ht_head *head = ht_get_head(wb, &key);
 
 	mutex_lock(&wb->io_lock);
 	/*
@@ -1200,16 +1209,6 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	 * cancelled this cell, the data is now stale.
 	 */
 	if (cell->cancelled) {
-		mutex_unlock(&wb->io_lock);
-		return;
-	}
-
-	/*
-	 * FIXME Why do we need to double-check here?
-	 */
-	head = ht_get_head(wb, &key);
-	mb = ht_lookup(wb, head, &key);
-	if (unlikely(mb)) {
 		mutex_unlock(&wb->io_lock);
 		return;
 	}
@@ -1853,7 +1852,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 1},
+	.version = {2, 2, 2},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

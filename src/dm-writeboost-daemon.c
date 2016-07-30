@@ -89,6 +89,12 @@ void flush_proc(struct work_struct *work)
 	};
 
 	int coeff = 1;
+
+	if (seg->id != (atomic64_read(&wb->last_flushed_segment_id) + 1)) {
+		DMCRIT("Some flush job was skipped due to some unknown error");
+		return;
+	}
+
 	while (wb_io(&io_req, 1, &region, NULL, false)) {
 		unsigned long intvl = msecs_to_jiffies(coeff * 1000);
 		schedule_timeout_interruptible(intvl);

@@ -155,7 +155,7 @@ e.g. dmsetup message wbdev 0 writeback_threshold 70
 drop_caches
   Wait for all dirty data on the cache device to be written back to the backing
   device. This is interruptible.
-clear_stats
+clear_stat
   Clear the statistic info (see `Status`).
 
 Status

@@ -1,3 +1,9 @@
+2016-07-30  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.2
+	* Use kmap_atomic() to access the bio payload
+	* Fix doc (clear_stat)
+
 2016-07-18  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.1

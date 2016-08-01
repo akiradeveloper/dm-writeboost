@@ -260,7 +260,7 @@ struct wb_device {
 	struct dm_dev *backing_dev; /* Slow device (HDD) */
 	struct dm_dev *cache_dev; /* Fast device (SSD) */
 
-	bool write_through_mode;
+	bool write_around_mode;
 
 	unsigned nr_ctr_args;
 	const char **ctr_args;

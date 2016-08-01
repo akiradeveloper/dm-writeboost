@@ -876,7 +876,7 @@ static int process_write_wb(struct wb_device *wb, struct bio *bio)
 	return complete_process_write(wb, bio);
 }
 
-static int process_write_wt(struct wb_device *wb, struct bio *bio)
+static int process_write_wa(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
 
@@ -896,7 +896,7 @@ static int process_write_wt(struct wb_device *wb, struct bio *bio)
 
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
-	return wb->write_through_mode ? process_write_wt(wb, bio) : process_write_wb(wb, bio);
+	return wb->write_around_mode ? process_write_wa(wb, bio) : process_write_wb(wb, bio);
 }
 
 enum PBD_FLAG {
@@ -1442,7 +1442,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		{0, 3600, "Invalid update_sb_record_interval"},
 		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},
-		{0, 1, "Invalid write_through_mode"},
+		{0, 1, "Invalid write_around_mode"},
 	};
 	unsigned tmp;
 
@@ -1457,7 +1457,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		consume_kv(update_sb_record_interval, 2, false);
 		consume_kv(sync_data_interval, 3, false);
 		consume_kv(read_cache_threshold, 4, false);
-		consume_kv(write_through_mode, 5, true);
+		consume_kv(write_around_mode, 5, true);
 
 		if (!r) {
 			argc--;

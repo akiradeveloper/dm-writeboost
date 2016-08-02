@@ -357,7 +357,8 @@ static int audit_cache_device(struct wb_device *wb)
 	}
 
 	wb->do_format = false;
-	if (le32_to_cpu(sup.magic) != WB_MAGIC) {
+	if (le32_to_cpu(sup.magic) != WB_MAGIC ||
+	    wb->write_around_mode) { // write-around mode should discard all caches
 		wb->do_format = true;
 		DMERR("Superblock Header: Magic number invalid");
 		return 0;

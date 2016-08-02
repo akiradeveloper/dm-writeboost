@@ -876,7 +876,7 @@ static int process_write_wb(struct wb_device *wb, struct bio *bio)
 	return complete_process_write(wb, bio);
 }
 
-static int process_write_wt(struct wb_device *wb, struct bio *bio)
+static int process_write_wa(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
 
@@ -896,7 +896,7 @@ static int process_write_wt(struct wb_device *wb, struct bio *bio)
 
 static int process_write(struct wb_device *wb, struct bio *bio)
 {
-	return wb->write_through_mode ? process_write_wt(wb, bio) : process_write_wb(wb, bio);
+	return wb->write_around_mode ? process_write_wa(wb, bio) : process_write_wb(wb, bio);
 }
 
 enum PBD_FLAG {
@@ -1442,7 +1442,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		{0, 3600, "Invalid update_sb_record_interval"},
 		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},
-		{0, 1, "Invalid write_through_mode"},
+		{0, 1, "Invalid write_around_mode"},
 	};
 	unsigned tmp;
 
@@ -1457,7 +1457,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		consume_kv(update_sb_record_interval, 2, false);
 		consume_kv(sync_data_interval, 3, false);
 		consume_kv(read_cache_threshold, 4, false);
-		consume_kv(write_through_mode, 5, true);
+		consume_kv(write_around_mode, 5, true);
 
 		if (!r) {
 			argc--;
@@ -1643,6 +1643,9 @@ static void free_ctr_args(struct wb_device *wb)
 	kfree(wb->ctr_args);
 }
 
+#define save_arg(name) wb->name##_copied = wb->name
+#define restore_arg(name) if (wb->name##_copied) { wb->name = wb->name##_copied; }
+
 /*
  * Create a writeboost device
  *
@@ -1680,17 +1683,22 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_essential_argv;
 	}
 
-	r = resume_cache(wb);
-	if (r) {
-		ti->error = "resume_cache failed";
-		goto bad_resume_cache;
-	}
-
-	wb->read_cache_threshold = 0; /* Default: read-caching disabled */
 	r = consume_optional_argv(wb, &as);
 	if (r) {
 		ti->error = "consume_optional_argv failed";
 		goto bad_optional_argv;
+	}
+
+	save_arg(writeback_threshold);
+	save_arg(nr_max_batched_writeback);
+	save_arg(update_sb_record_interval);
+	save_arg(sync_data_interval);
+	save_arg(read_cache_threshold);
+
+	r = resume_cache(wb);
+	if (r) {
+		ti->error = "resume_cache failed";
+		goto bad_resume_cache;
 	}
 
 	r = init_read_cache_cells(wb);
@@ -1702,14 +1710,21 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	clear_stat(wb);
 
 	set_bit(WB_CREATED, &wb->flags);
+
+	restore_arg(writeback_threshold);
+	restore_arg(nr_max_batched_writeback);
+	restore_arg(update_sb_record_interval);
+	restore_arg(sync_data_interval);
+	restore_arg(read_cache_threshold);
+
 	return r;
 
 bad_read_cache_cells:
-bad_optional_argv:
 	free_cache(wb);
 bad_resume_cache:
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->backing_dev);
+bad_optional_argv:
 bad_essential_argv:
 	free_ctr_args(wb);
 bad_ctr_args:
@@ -1852,7 +1867,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 2},
+	.version = {2, 2, 3},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

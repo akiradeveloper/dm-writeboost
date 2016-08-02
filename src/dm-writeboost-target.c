@@ -1643,6 +1643,9 @@ static void free_ctr_args(struct wb_device *wb)
 	kfree(wb->ctr_args);
 }
 
+#define save_arg(name) wb->name##_copied = wb->name
+#define restore_arg(name) if (wb->name##_copied) { wb->name = wb->name##_copied; }
+
 /*
  * Create a writeboost device
  *
@@ -1680,17 +1683,22 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_essential_argv;
 	}
 
-	r = resume_cache(wb);
-	if (r) {
-		ti->error = "resume_cache failed";
-		goto bad_resume_cache;
-	}
-
-	wb->read_cache_threshold = 0; /* Default: read-caching disabled */
 	r = consume_optional_argv(wb, &as);
 	if (r) {
 		ti->error = "consume_optional_argv failed";
 		goto bad_optional_argv;
+	}
+
+	save_arg(writeback_threshold);
+	save_arg(nr_max_batched_writeback);
+	save_arg(update_sb_record_interval);
+	save_arg(sync_data_interval);
+	save_arg(read_cache_threshold);
+
+	r = resume_cache(wb);
+	if (r) {
+		ti->error = "resume_cache failed";
+		goto bad_resume_cache;
 	}
 
 	r = init_read_cache_cells(wb);
@@ -1702,14 +1710,21 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	clear_stat(wb);
 
 	set_bit(WB_CREATED, &wb->flags);
+
+	restore_arg(writeback_threshold);
+	restore_arg(nr_max_batched_writeback);
+	restore_arg(update_sb_record_interval);
+	restore_arg(sync_data_interval);
+	restore_arg(read_cache_threshold);
+
 	return r;
 
 bad_read_cache_cells:
-bad_optional_argv:
 	free_cache(wb);
 bad_resume_cache:
 	dm_put_device(ti, wb->cache_dev);
 	dm_put_device(ti, wb->backing_dev);
+bad_optional_argv:
 bad_essential_argv:
 	free_ctr_args(wb);
 bad_ctr_args:

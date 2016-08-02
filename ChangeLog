@@ -1,3 +1,10 @@
+2016-08-02  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.3
+	* Rename write_through_mode to write_around_mode because it's more
+	precise
+	* Reformat the caching device when it's write_around_mode
+
 2016-07-30  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.2

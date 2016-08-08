@@ -446,6 +446,8 @@ struct wb_device {
 	 * Read Caching
 	 **************/
 
+	u32 nr_read_cache_cells;
+	u32 nr_read_cache_cells_copied;
 	struct work_struct read_cache_work;
 	struct read_cache_cells *read_cache_cells;
 	u32 read_cache_threshold; /* Tunable */

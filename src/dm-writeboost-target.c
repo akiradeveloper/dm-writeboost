@@ -1379,7 +1379,7 @@ static int init_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells;
 	INIT_WORK(&wb->read_cache_work, read_cache_proc);
-	cells = alloc_read_cache_cells(wb, 2048); /* 8MB */
+	cells = alloc_read_cache_cells(wb, wb->nr_read_cache_cells);
 	if (!cells)
 		return -ENOMEM;
 	wb->read_cache_cells = cells;
@@ -1443,6 +1443,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		{0, 3600, "Invalid sync_data_interval"},
 		{0, 127, "Invalid read_cache_threshold"},
 		{0, 1, "Invalid write_around_mode"},
+		{1, 2048, "Invalid nr_read_cache_cells"},
 	};
 	unsigned tmp;
 
@@ -1458,6 +1459,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		consume_kv(sync_data_interval, 3, false);
 		consume_kv(read_cache_threshold, 4, false);
 		consume_kv(write_around_mode, 5, true);
+		consume_kv(nr_read_cache_cells, 6, true);
 
 		if (!r) {
 			argc--;
@@ -1476,7 +1478,7 @@ static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 	struct dm_target *ti = wb->ti;
 
 	static struct dm_arg _args[] = {
-		{0, 12, "Invalid optional argc"},
+		{0, 14, "Invalid optional argc"},
 	};
 	unsigned argc = 0;
 
@@ -1694,6 +1696,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	save_arg(update_sb_record_interval);
 	save_arg(sync_data_interval);
 	save_arg(read_cache_threshold);
+	save_arg(nr_read_cache_cells);
 
 	r = resume_cache(wb);
 	if (r) {
@@ -1701,6 +1704,8 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad_resume_cache;
 	}
 
+	wb->nr_read_cache_cells = 2048; /* 8MB */
+	restore_arg(nr_read_cache_cells);
 	r = init_read_cache_cells(wb);
 	if (r) {
 		ti->error = "init_read_cache_cells failed";

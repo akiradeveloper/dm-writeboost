@@ -980,8 +980,7 @@ static int infer_last_writeback_id(struct wb_device *wb)
 		return r;
 
 	atomic64_set(&wb->last_writeback_segment_id,
-		atomic64_read(&wb->last_flushed_segment_id) > wb->nr_segments ?
-		atomic64_read(&wb->last_flushed_segment_id) - wb->nr_segments : 0);
+		SUB_ID(atomic64_read(&wb->last_flushed_segment_id), wb->nr_segments));
 
 	/*
 	 * If last_writeback_id is recorded on the super block

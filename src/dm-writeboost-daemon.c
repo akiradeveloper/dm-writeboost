@@ -303,7 +303,7 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 	}
 }
 
-static void mark_clean_seg(struct wb_device *wb, struct segment_header *seg)
+void mark_clean_seg(struct wb_device *wb, struct segment_header *seg)
 {
 	u8 i;
 	for (i = 0; i < seg->length; i++) {

@@ -973,14 +973,16 @@ static int infer_last_writeback_id(struct wb_device *wb)
 {
 	int r = 0;
 
+	u64 inferred_last_writeback_id;
 	u64 record_id;
+
 	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, wb);
 	if (r)
 		return r;
 
-	atomic64_set(&wb->last_writeback_segment_id,
-		SUB_ID(atomic64_read(&wb->last_flushed_segment_id), wb->nr_segments));
+	inferred_last_writeback_id =
+		SUB_ID(atomic64_read(&wb->last_flushed_segment_id), wb->nr_segments);
 
 	/*
 	 * If last_writeback_id is recorded on the super block
@@ -988,9 +990,14 @@ static int infer_last_writeback_id(struct wb_device *wb)
 	 * written back before.
 	 */
 	record_id = le64_to_cpu(record.last_writeback_segment_id);
-	if (record_id > atomic64_read(&wb->last_writeback_segment_id))
-		atomic64_set(&wb->last_writeback_segment_id, record_id);
+	if (record_id > inferred_last_writeback_id) {
+		u64 id;
+		for (id = inferred_last_writeback_id + 1; id <= record_id; id++)
+			mark_clean_seg(wb, get_segment_header_by_id(wb, id));
+		inferred_last_writeback_id = record_id;
+	}
 
+	atomic64_set(&wb->last_writeback_segment_id, inferred_last_writeback_id);
 	return r;
 }
 

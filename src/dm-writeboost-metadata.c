@@ -506,7 +506,10 @@ static int format_all_segment_headers(struct wb_device *wb)
 	if (context.err) {
 		DMERR("I/O failed");
 		r = -EIO;
+		goto bad;
 	}
+
+	r = blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
 
 bad:
 	mempool_free(buf, wb->buf_8_pool);
@@ -518,17 +521,9 @@ bad:
  */
 static int format_cache_device(struct wb_device *wb)
 {
-	int r = 0;
-	struct dm_dev *dev = wb->cache_dev;
-
-	r = zeroing_full_superblock(wb);
+	int r = zeroing_full_superblock(wb);
 	if (r) {
 		DMERR("zeroing_full_superblock failed");
-		return r;
-	}
-	r = format_superblock_header(wb); /* First 512B */
-	if (r) {
-		DMERR("format_superblock_header failed");
 		return r;
 	}
 	r = format_all_segment_headers(wb);
@@ -536,9 +531,12 @@ static int format_cache_device(struct wb_device *wb)
 		DMERR("format_all_segment_headers failed");
 		return r;
 	}
-	r = blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
-
-	return r;
+	r = format_superblock_header(wb); /* First 512B */
+	if (r) {
+		DMERR("format_superblock_header failed");
+		return r;
+	}
+	return 0;
 }
 
 /*

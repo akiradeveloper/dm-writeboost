@@ -32,6 +32,7 @@ void flush_barrier_ios(struct work_struct *);
 
 /*----------------------------------------------------------------------------*/
 
+void update_nr_empty_segs(struct wb_device *);
 int writeback_daemon_proc(void *);
 void wait_for_writeback(struct wb_device *, u64 id);
 void mark_clean_seg(struct wb_device *, struct segment_header *seg);

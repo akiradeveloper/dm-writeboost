@@ -401,14 +401,15 @@ struct wb_device {
 	atomic_t writeback_io_count;
 	atomic_t writeback_fail_count;
 
-	u32 nr_cur_batched_writeback;
 	u32 nr_max_batched_writeback; /* Tunable */
 	u32 nr_max_batched_writeback_copied;
 
 	struct rb_root writeback_tree;
 
-	u32 num_writeback_segs; /* Number of segments to write back */
+	u32 nr_writeback_segs;
 	struct writeback_segment **writeback_segs;
+	u32 nr_cur_batched_writeback; /* Number of segments to be written back */
+	u32 nr_empty_segs;
 
 	/*--------------------------------------------------------------------*/
 

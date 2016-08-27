@@ -324,7 +324,7 @@ static bool try_writeback_segs(struct wb_device *wb)
 
 	/* Create RB-tree */
 	wb->writeback_tree = RB_ROOT;
-	for (k = 0; k < wb->num_writeback_segs; k++) {
+	for (k = 0; k < wb->nr_cur_batched_writeback; k++) {
 		writeback_seg = *(wb->writeback_segs + k);
 
 		if (fill_writeback_seg(wb, writeback_seg))
@@ -357,29 +357,33 @@ static void do_writeback_segs(struct wb_device *wb)
 	blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL);
 
 	/* A segment after written back is clean */
-	for (k = 0; k < wb->num_writeback_segs; k++) {
+	for (k = 0; k < wb->nr_cur_batched_writeback; k++) {
 		writeback_seg = *(wb->writeback_segs + k);
 		mark_clean_seg(wb, writeback_seg->seg);
 	}
-	atomic64_add(wb->num_writeback_segs, &wb->last_writeback_segment_id);
+	atomic64_add(wb->nr_cur_batched_writeback, &wb->last_writeback_segment_id);
 }
 
 /*
  * Calculate the number of segments to write back.
  */
+void update_nr_empty_segs(struct wb_device *wb)
+{
+	wb->nr_empty_segs =
+		atomic64_read(&wb->last_writeback_segment_id) + wb->nr_segments
+		- wb->current_seg->id;
+}
 static u32 calc_nr_writeback(struct wb_device *wb)
 {
-	u32 nr_writeback_candidates, nr_max_batch;
+	u32 nr_writeback_candidates =
+		atomic64_read(&wb->last_flushed_segment_id)
+		- atomic64_read(&wb->last_writeback_segment_id);
 
-	nr_writeback_candidates = atomic64_read(&wb->last_flushed_segment_id) -
-				  atomic64_read(&wb->last_writeback_segment_id);
-	if (!nr_writeback_candidates)
-		return 0;
-
-	nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_writeback);
-	if (wb->nr_cur_batched_writeback != nr_max_batch)
+	u32 nr_max_batch = ACCESS_ONCE(wb->nr_max_batched_writeback);
+	if (wb->nr_writeback_segs != nr_max_batch)
 		try_alloc_writeback_ios(wb, nr_max_batch, GFP_NOIO | __GFP_NOWARN);
-	return min(nr_writeback_candidates, wb->nr_cur_batched_writeback);
+
+	return min3(nr_writeback_candidates, wb->nr_writeback_segs, wb->nr_empty_segs + 1);
 }
 
 static bool should_writeback(struct wb_device *wb)
@@ -391,26 +395,26 @@ static bool should_writeback(struct wb_device *wb)
 
 static void do_writeback_proc(struct wb_device *wb)
 {
-	u32 k, nr_writeback;
+	u32 k, nr_writeback_tbd;
 
 	if (!should_writeback(wb)) {
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		return;
 	}
 
-	nr_writeback = calc_nr_writeback(wb);
-	if (!nr_writeback) {
+	nr_writeback_tbd = calc_nr_writeback(wb);
+	if (!nr_writeback_tbd) {
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
 		return;
 	}
 
 	/* Store segments into writeback_segs */
-	for (k = 0; k < nr_writeback; k++) {
+	for (k = 0; k < nr_writeback_tbd; k++) {
 		struct writeback_segment *writeback_seg = *(wb->writeback_segs + k);
 		writeback_seg->seg = get_segment_header_by_id(wb,
 			atomic64_read(&wb->last_writeback_segment_id) + 1 + k);
 	}
-	wb->num_writeback_segs = nr_writeback;
+	wb->nr_cur_batched_writeback = nr_writeback_tbd;
 
 	do_writeback_segs(wb);
 
@@ -459,6 +463,8 @@ int writeback_modulator_proc(void *data)
 			wb->allow_writeback = false;
 
 		old = new;
+
+		update_nr_empty_segs(wb);
 
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}

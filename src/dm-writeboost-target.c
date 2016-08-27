@@ -656,8 +656,10 @@ static bool needs_queue_seg(struct wb_device *wb)
  */
 static void might_queue_current_buffer(struct wb_device *wb)
 {
-	if (needs_queue_seg(wb))
+	if (needs_queue_seg(wb)) {
+		update_nr_empty_segs(wb);
 		queue_current_buffer(wb);
+	}
 }
 
 /*

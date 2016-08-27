@@ -1158,7 +1158,7 @@ int try_alloc_writeback_ios(struct wb_device *wb, size_t nr_batch, gfp_t gfp)
 
 	/* And then swap by new values */
 	wb->writeback_segs = writeback_segs;
-	wb->nr_cur_batched_writeback = nr_batch;
+	wb->nr_writeback_segs = nr_batch;
 
 	return r;
 }

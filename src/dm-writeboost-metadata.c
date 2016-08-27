@@ -249,7 +249,7 @@ static void free_ht(struct wb_device *wb)
 struct ht_head *ht_get_head(struct wb_device *wb, struct lookup_key *key)
 {
 	u32 idx;
-	div_u64_rem(key->sector, wb->htsize, &idx);
+	div_u64_rem(key->sector >> 3, wb->htsize, &idx);
 	return large_array_at(wb->htable, idx);
 }
 

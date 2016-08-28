@@ -1,3 +1,11 @@
+2016-08-28  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.4
+	* Fix update_sb_record_interval
+	* Throttle writeback when there are only few empty segments in the
+	caching device
+	* Remove experimental from read-caching
+
 2016-08-02  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.3

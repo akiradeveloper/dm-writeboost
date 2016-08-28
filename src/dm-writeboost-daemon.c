@@ -106,7 +106,6 @@ void flush_proc(struct work_struct *work)
 	 * To serialize barrier ACK in logging we wait for the previous segment
 	 * to be persistently written (if needed).
 	 */
-	wait_for_flushing(wb, SUB_ID(seg->id, 1));
 	process_deferred_barriers(wb, job);
 
 	/*

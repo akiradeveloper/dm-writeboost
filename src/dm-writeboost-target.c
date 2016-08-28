@@ -1647,8 +1647,8 @@ static void free_ctr_args(struct wb_device *wb)
 	kfree(wb->ctr_args);
 }
 
-#define save_arg(name) wb->name##_copied = wb->name
-#define restore_arg(name) if (wb->name##_copied) { wb->name = wb->name##_copied; }
+#define save_arg(name) wb->name##_saved = wb->name
+#define restore_arg(name) if (wb->name##_saved) { wb->name = wb->name##_saved; }
 
 /*
  * Create a writeboost device

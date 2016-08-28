@@ -402,7 +402,7 @@ struct wb_device {
 	atomic_t writeback_fail_count;
 
 	u32 nr_max_batched_writeback; /* Tunable */
-	u32 nr_max_batched_writeback_copied;
+	u32 nr_max_batched_writeback_saved;
 
 	struct rb_root writeback_tree;
 
@@ -419,7 +419,7 @@ struct wb_device {
 
 	struct task_struct *writeback_modulator;
 	u8 writeback_threshold; /* Tunable */
-	u8 writeback_threshold_copied;
+	u8 writeback_threshold_saved;
 
 	/*--------------------------------------------------------------------*/
 
@@ -429,7 +429,7 @@ struct wb_device {
 
 	struct task_struct *sb_record_updater;
 	unsigned long update_sb_record_interval; /* Tunable */
-	unsigned long update_sb_record_interval_copied;
+	unsigned long update_sb_record_interval_saved;
 
 	/*--------------------------------------------------------------------*/
 
@@ -439,7 +439,7 @@ struct wb_device {
 
 	struct task_struct *data_synchronizer;
 	unsigned long sync_data_interval; /* Tunable */
-	unsigned long sync_data_interval_copied;
+	unsigned long sync_data_interval_saved;
 
 	/*--------------------------------------------------------------------*/
 
@@ -448,11 +448,11 @@ struct wb_device {
 	 **************/
 
 	u32 nr_read_cache_cells;
-	u32 nr_read_cache_cells_copied;
+	u32 nr_read_cache_cells_saved;
 	struct work_struct read_cache_work;
 	struct read_cache_cells *read_cache_cells;
 	u32 read_cache_threshold; /* Tunable */
-	u32 read_cache_threshold_copied;
+	u32 read_cache_threshold_saved;
 
 	/*--------------------------------------------------------------------*/
 

@@ -126,7 +126,7 @@ sync_data_interval (sec)
   default: 0 (disabled)
 Sync all the volatile data every $sync_data_interval second. 0 means disabled.
 
-read_cache_threshold (int) [Experimental]
+read_cache_threshold (int)
   accepts: 0..127
   default: 0 (read caching disabled)
 More than $read_cache_threshold * 4KB consecutive reads won't be staged.

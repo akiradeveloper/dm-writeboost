@@ -249,7 +249,7 @@ static void free_ht(struct wb_device *wb)
 struct ht_head *ht_get_head(struct wb_device *wb, struct lookup_key *key)
 {
 	u32 idx;
-	div_u64_rem(key->sector, wb->htsize, &idx);
+	div_u64_rem(key->sector >> 3, wb->htsize, &idx);
 	return large_array_at(wb->htable, idx);
 }
 
@@ -506,7 +506,10 @@ static int format_all_segment_headers(struct wb_device *wb)
 	if (context.err) {
 		DMERR("I/O failed");
 		r = -EIO;
+		goto bad;
 	}
+
+	r = blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
 
 bad:
 	mempool_free(buf, wb->buf_8_pool);
@@ -518,17 +521,9 @@ bad:
  */
 static int format_cache_device(struct wb_device *wb)
 {
-	int r = 0;
-	struct dm_dev *dev = wb->cache_dev;
-
-	r = zeroing_full_superblock(wb);
+	int r = zeroing_full_superblock(wb);
 	if (r) {
 		DMERR("zeroing_full_superblock failed");
-		return r;
-	}
-	r = format_superblock_header(wb); /* First 512B */
-	if (r) {
-		DMERR("format_superblock_header failed");
 		return r;
 	}
 	r = format_all_segment_headers(wb);
@@ -536,9 +531,12 @@ static int format_cache_device(struct wb_device *wb)
 		DMERR("format_all_segment_headers failed");
 		return r;
 	}
-	r = blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
-
-	return r;
+	r = format_superblock_header(wb); /* First 512B */
+	if (r) {
+		DMERR("format_superblock_header failed");
+		return r;
+	}
+	return 0;
 }
 
 /*
@@ -975,15 +973,16 @@ static int infer_last_writeback_id(struct wb_device *wb)
 {
 	int r = 0;
 
+	u64 inferred_last_writeback_id;
 	u64 record_id;
+
 	struct superblock_record_device uninitialized_var(record);
 	r = read_superblock_record(&record, wb);
 	if (r)
 		return r;
 
-	atomic64_set(&wb->last_writeback_segment_id,
-		atomic64_read(&wb->last_flushed_segment_id) > wb->nr_segments ?
-		atomic64_read(&wb->last_flushed_segment_id) - wb->nr_segments : 0);
+	inferred_last_writeback_id =
+		SUB_ID(atomic64_read(&wb->last_flushed_segment_id), wb->nr_segments);
 
 	/*
 	 * If last_writeback_id is recorded on the super block
@@ -991,9 +990,14 @@ static int infer_last_writeback_id(struct wb_device *wb)
 	 * written back before.
 	 */
 	record_id = le64_to_cpu(record.last_writeback_segment_id);
-	if (record_id > atomic64_read(&wb->last_writeback_segment_id))
-		atomic64_set(&wb->last_writeback_segment_id, record_id);
+	if (record_id > inferred_last_writeback_id) {
+		u64 id;
+		for (id = inferred_last_writeback_id + 1; id <= record_id; id++)
+			mark_clean_seg(wb, get_segment_header_by_id(wb, id));
+		inferred_last_writeback_id = record_id;
+	}
 
+	atomic64_set(&wb->last_writeback_segment_id, inferred_last_writeback_id);
 	return r;
 }
 
@@ -1154,7 +1158,7 @@ int try_alloc_writeback_ios(struct wb_device *wb, size_t nr_batch, gfp_t gfp)
 
 	/* And then swap by new values */
 	wb->writeback_segs = writeback_segs;
-	wb->nr_cur_batched_writeback = nr_batch;
+	wb->nr_writeback_segs = nr_batch;
 
 	return r;
 }
@@ -1220,7 +1224,7 @@ static int init_writeback_daemon(struct wb_device *wb)
 	atomic_set(&wb->writeback_fail_count, 0);
 	atomic_set(&wb->writeback_io_count, 0);
 
-	nr_batch = 8;
+	nr_batch = 32;
 	wb->nr_max_batched_writeback = nr_batch;
 	if (try_alloc_writeback_ios(wb, nr_batch, GFP_KERNEL))
 		return -ENOMEM;

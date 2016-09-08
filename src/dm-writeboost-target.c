@@ -921,22 +921,100 @@ struct per_bio_data {
 };
 #define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->PER_BIO_DATA_SIZE))
 
-static void reserve_read_cache_cell(struct wb_device *, struct bio *);
+struct read_backing_async_context {
+	struct wb_device *wb;
+	struct bio *bio;
+};
+static void read_cache_cell_copy_data(struct wb_device *, struct bio*, unsigned long error);
+static void read_backing_async_callback_onstack(unsigned long error, struct read_backing_async_context *ctx)
+{
+	BUG_ON(!io_fullsize(ctx->bio));
+
+	read_cache_cell_copy_data(ctx->wb, ctx->bio, error);
+
+	if (error)
+		bio_io_error(ctx->bio);
+	else
+		bio_endio_compat(ctx->bio, 0);
+}
+static void read_backing_async_callback(unsigned long error, void *context)
+{
+	struct read_backing_async_context *ctx = context;
+	read_backing_async_callback_onstack(error, ctx);
+	kfree(ctx);
+}
+static int read_backing_async(struct wb_device *wb, struct bio *bio)
+{
+	int err = 0;
+
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
+	struct read_backing_async_context *ctx = kmalloc(sizeof(struct read_backing_async_context), GFP_NOIO);
+	if (!ctx)
+		return -ENOMEM;
+
+	ctx->wb = wb;
+	ctx->bio = bio;
+
+	BUG_ON(!io_fullsize(bio));
+
+	io_req = (struct dm_io_request) {
+		.client = wb->io_client,
+		.bi_rw = READ,
+		.mem.type = DM_IO_BIO,
+		.mem.ptr.bio = bio,
+		.notify.fn = read_backing_async_callback,
+		.notify.context = ctx
+	};
+	region = (struct dm_io_region) {
+		.bdev = wb->backing_dev->bdev,
+		.sector = bi_sector(bio),
+		.count = 8
+	};
+
+	err = wb_io(&io_req, 1, &region, NULL, false);
+	if (err)
+		kfree(ctx);
+
+	return err;
+}
+
+static bool reserve_read_cache_cell(struct wb_device *, struct bio *);
 static int process_read(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
 	struct dirtiness dirtiness;
 	struct per_bio_data *pbd;
 
+	bool reserved = false;
+
 	mutex_lock(&wb->io_lock);
 	cache_lookup(wb, bio, &res);
 	if (!res.found)
-		reserve_read_cache_cell(wb, bio);
+		reserved = reserve_read_cache_cell(wb, bio);
 	mutex_unlock(&wb->io_lock);
 
 	if (!res.found) {
-		bio_remap(bio, wb->backing_dev, bi_sector(bio));
-		return DM_MAPIO_REMAPPED;
+		if (reserved) {
+			/*
+			 * Remapping clone bio to the backing store leads to
+			 * empty payload in clone_endio().
+			 * To avoid caching junk data, we need this workaround
+			 * to call dm_io() to certainly fill the bio payload.
+			 */
+			if (read_backing_async(wb, bio)) {
+				struct read_backing_async_context ctx = {
+					.wb = wb,
+					.bio = bio
+				};
+				read_backing_async_callback_onstack(1, &ctx);
+			}
+			return DM_MAPIO_SUBMITTED;
+		} else {
+			bio_remap(bio, wb->backing_dev, bi_sector(bio));
+			return DM_MAPIO_REMAPPED;
+		}
 	}
 
 	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
@@ -1020,7 +1098,6 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
-static void read_cache_cell_copy_data(struct wb_device *, struct bio*, int error);
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 {
 	struct wb_device *wb = ti->private;
@@ -1028,9 +1105,7 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 
 	switch (pbd->type) {
 	case PBD_NONE:
-		return 0;
 	case PBD_WILL_CACHE:
-		read_cache_cell_copy_data(wb, bio, error);
 		return 0;
 	case PBD_READ_SEG:
 		dec_inflight_ios(wb, pbd->seg);
@@ -1119,7 +1194,7 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 	cells->last_sector = new_cell->sector;
 }
 
-static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
+static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 {
 	struct per_bio_data *pbd;
 	struct read_cache_cells *cells = wb->read_cache_cells;
@@ -1128,10 +1203,10 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	BUG_ON(!cells->threshold);
 
 	if (!ACCESS_ONCE(wb->read_cache_threshold))
-		return;
+		return false;
 
 	if (!cells->cursor)
-		return;
+		return false;
 
 	/*
 	 * We only cache 4KB read data for following reasons:
@@ -1139,7 +1214,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	 * 2) Caching partial data makes the read-caching mechanism very hard.
 	 */
 	if (!io_fullsize(bio))
-		return;
+		return false;
 
 	/*
 	 * We don't need to reserve the same address twice
@@ -1147,7 +1222,7 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	 */
 	found = lookup_read_cache_cell(wb, bi_sector(bio));
 	if (found)
-		return;
+		return false;
 
 	cells->cursor--;
 	new_cell = cells->array + cells->cursor;
@@ -1160,6 +1235,8 @@ static void reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 
 	/* Cancel the new_cell if needed */
 	read_cache_cancel_foreground(cells, new_cell);
+
+	return true;
 }
 
 static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
@@ -1170,11 +1247,13 @@ static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 		found->cancelled = true;
 }
 
-static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, int error)
+static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, unsigned long error)
 {
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
+
+	BUG_ON(pbd->type != PBD_WILL_CACHE);
 
 	/* Data can be broken. So don't stage. */
 	if (error)

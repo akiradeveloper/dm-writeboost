@@ -297,7 +297,6 @@ static void queue_flush_job(struct wb_device *wb)
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
 	init_flush_job(job, wb);
-	INIT_WORK(&job->work, flush_proc);
 	queue_work(wb->flusher_wq, &job->work);
 }
 

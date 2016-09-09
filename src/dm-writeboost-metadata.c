@@ -590,6 +590,7 @@ static int init_rambuf_pool(struct wb_device *wb)
 			goto bad_alloc_data;
 		}
 		wb->rambuf_pool[i].data = alloced;
+		INIT_WORK(&wb->rambuf_pool[i].job.work, flush_proc);
 	}
 
 	return r;

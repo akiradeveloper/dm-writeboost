@@ -277,6 +277,7 @@ void ht_register(struct wb_device *wb, struct ht_head *head,
 	hlist_del(&mb->ht_list);
 	hlist_add_head(&mb->ht_list, &head->ht_list);
 
+	BUG_ON(key->sector & 7); // should be 4KB aligned
 	mb->sector = key->sector;
 };
 

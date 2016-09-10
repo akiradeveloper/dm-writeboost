@@ -78,7 +78,7 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 			.regions = regions,
 			.num_regions = num_regions,
 		};
-		BUG_ON(io_req->notify.fn);
+		ASSERT(io_req->notify.fn == NULL);
 
 		INIT_WORK_ONSTACK(&io.work, wb_io_fn);
 		queue_work(wb->io_wq, &io.work);
@@ -361,13 +361,13 @@ static void clear_stat(struct wb_device *wb)
 
 void inc_nr_dirty_caches(struct wb_device *wb)
 {
-	BUG_ON(!wb);
+	ASSERT(wb);
 	atomic64_inc(&wb->nr_dirty_caches);
 }
 
 void dec_nr_dirty_caches(struct wb_device *wb)
 {
-	BUG_ON(!wb);
+	ASSERT(wb);
 	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
@@ -377,7 +377,7 @@ static bool taint_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
 	unsigned long flags;
 	bool flip = false;
 
-	BUG_ON(data_bits == 0);
+	ASSERT(data_bits > 0);
 	spin_lock_irqsave(&wb->mb_lock, flags);
 	if (!mb->dirtiness.is_dirty) {
 		mb->dirtiness.is_dirty = true;
@@ -454,7 +454,7 @@ static void copy_bio_payload(void *buf, struct bio *bio)
 		buf += l;
 		sum += l;
 	}
-	BUG_ON(sum != (bio_sectors(bio) << 9));
+	ASSERT(sum == (bio_sectors(bio) << 9));
 }
 
 /*
@@ -663,7 +663,7 @@ static void might_queue_current_buffer(struct wb_device *wb)
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 {
 	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
-	BUG_ON(bio_sectors(bio));
+	ASSERT(bio_sectors(bio) == 0);
 	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
 }
@@ -721,7 +721,7 @@ int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct m
 		void *buf;
 
 		wait_for_flushing(wb, seg->id);
-		BUG_ON(!dirtiness.is_dirty);
+		ASSERT(dirtiness.is_dirty);
 
 		buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
 		if (!buf)
@@ -747,9 +747,8 @@ int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct m
 static struct metablock *prepare_new_write_pos(struct wb_device *wb)
 {
 	struct metablock *ret = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	BUG_ON(ret->dirtiness.is_dirty);
+	ASSERT(!ret->dirtiness.is_dirty);
 	ret->dirtiness.data_bits = 0;
-	BUG_ON(ret->dirtiness.data_bits);
 	return ret;
 }
 
@@ -803,7 +802,7 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 	write_pos = prepare_new_write_pos(wb);
 
 do_write:
-	BUG_ON(write_pos == NULL);
+	ASSERT(write_pos);
 	write_on_rambuffer(wb, write_pos, &wio);
 
 	if (taint_mb(wb, write_pos, wio.data_bits))
@@ -923,7 +922,7 @@ struct read_backing_async_context {
 static void read_cache_cell_copy_data(struct wb_device *, struct bio*, unsigned long error);
 static void read_backing_async_callback_onstack(unsigned long error, struct read_backing_async_context *ctx)
 {
-	BUG_ON(!io_fullsize(ctx->bio));
+	ASSERT(io_fullsize(ctx->bio));
 
 	read_cache_cell_copy_data(ctx->wb, ctx->bio, error);
 
@@ -952,7 +951,7 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 	ctx->wb = wb;
 	ctx->bio = bio;
 
-	BUG_ON(!io_fullsize(bio));
+	ASSERT(io_fullsize(bio));
 
 	io_req = (struct dm_io_request) {
 		.client = wb->io_client,
@@ -1195,7 +1194,7 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *found, *new_cell;
 
-	BUG_ON(!cells->threshold);
+	ASSERT(cells->threshold > 0);
 
 	if (!ACCESS_ONCE(wb->read_cache_threshold))
 		return false;
@@ -1248,7 +1247,7 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, uns
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
 
-	BUG_ON(pbd->type != PBD_WILL_CACHE);
+	ASSERT(pbd->type == PBD_WILL_CACHE);
 
 	/* Data can be broken. So don't stage. */
 	if (error)
@@ -1302,7 +1301,7 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
 
 	mb = seg->mb_array + _mb_idx_inseg;
-	BUG_ON(mb->dirtiness.is_dirty);
+	ASSERT(!mb->dirtiness.is_dirty);
 	mb->dirtiness.data_bits = 255;
 
 	ht_register(wb, head, mb, &key);

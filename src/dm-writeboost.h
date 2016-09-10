@@ -486,6 +486,8 @@ int prepare_overwrite(struct wb_device *, struct segment_header *, struct metabl
 
 /*----------------------------------------------------------------------------*/
 
+#define ASSERT(cond) BUG_ON(!(cond))
+
 #define check_buffer_alignment(buf) \
 	do_check_buffer_alignment(buf, #buf, __func__)
 void do_check_buffer_alignment(void *, const char *, const char *);

@@ -713,7 +713,7 @@ void prepare_segment_header_device(void *rambuffer,
 	struct segment_header_device *dest = rambuffer;
 	u32 i;
 
-	BUG_ON((src->length) != (wb->cursor - src->start_idx));
+	ASSERT((src->length) == (wb->cursor - src->start_idx));
 
 	for (i = 0; i < src->length; i++) {
 		struct metablock *mb = src->mb_array + i;

@@ -123,10 +123,8 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
 #define bi_sector(bio) (bio)->bi_sector
-#define bi_size(bio) (bio)->bi_size
 #else
 #define bi_sector(bio) (bio)->bi_iter.bi_sector
-#define bi_size(bio) (bio)->bi_iter.bi_size
 #endif
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
@@ -458,7 +456,7 @@ static void copy_bio_payload(void *buf, struct bio *bio)
 		buf += l;
 		sum += l;
 	}
-	BUG_ON(sum != bi_size(bio));
+	BUG_ON(sum != (bio_sectors(bio) << 9));
 }
 
 /*
@@ -667,7 +665,7 @@ static void might_queue_current_buffer(struct wb_device *wb)
 static int process_flush_bio(struct wb_device *wb, struct bio *bio)
 {
 	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
-	BUG_ON(bi_size(bio));
+	BUG_ON(bio_sectors(bio));
 	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
 }

@@ -28,18 +28,6 @@
 
 /*----------------------------------------------------------------------------*/
 
-void bio_endio_compat(struct bio *bio, int error)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
-	bio->bi_error = error;
-	bio_endio(bio);
-#else
-	bio_endio(bio, error);
-#endif
-}
-
-/*----------------------------------------------------------------------------*/
-
 void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 {
 	unsigned long addr = (unsigned long) buf;
@@ -49,6 +37,8 @@ void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
 		BUG();
 	}
 }
+
+/*----------------------------------------------------------------------------*/
 
 struct wb_io {
 	struct work_struct work;
@@ -121,6 +111,16 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 /*----------------------------------------------------------------------------*/
 
+void bio_endio_compat(struct bio *bio, int error)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio->bi_error = error;
+	bio_endio(bio);
+#else
+	bio_endio(bio, error);
+#endif
+}
+
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
 #define bi_sector(bio) (bio)->bi_sector
 #else
@@ -190,6 +190,100 @@ static u8 count_dirty_caches_remained(struct segment_header *seg)
 	}
 	return count;
 }
+
+void inc_nr_dirty_caches(struct wb_device *wb)
+{
+	ASSERT(wb);
+	atomic64_inc(&wb->nr_dirty_caches);
+}
+
+void dec_nr_dirty_caches(struct wb_device *wb)
+{
+	ASSERT(wb);
+	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
+		wake_up_interruptible(&wb->wait_drop_caches);
+}
+
+static bool taint_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
+{
+	unsigned long flags;
+	bool flip = false;
+
+	ASSERT(data_bits > 0);
+	spin_lock_irqsave(&wb->mb_lock, flags);
+	if (!mb->dirtiness.is_dirty) {
+		mb->dirtiness.is_dirty = true;
+		flip = true;
+	}
+	mb->dirtiness.data_bits |= data_bits;
+	spin_unlock_irqrestore(&wb->mb_lock, flags);
+
+	return flip;
+}
+
+bool mark_clean_mb(struct wb_device *wb, struct metablock *mb)
+{
+	unsigned long flags;
+	bool flip = false;
+
+	spin_lock_irqsave(&wb->mb_lock, flags);
+	if (mb->dirtiness.is_dirty) {
+		mb->dirtiness.is_dirty = false;
+		flip = true;
+	}
+	spin_unlock_irqrestore(&wb->mb_lock, flags);
+
+	return flip;
+}
+
+/*
+ * Read the dirtiness of a metablock at the moment.
+ */
+struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
+				   struct metablock *mb)
+{
+	unsigned long flags;
+	struct dirtiness retval;
+
+	spin_lock_irqsave(&wb->mb_lock, flags);
+	retval = mb->dirtiness;
+	spin_unlock_irqrestore(&wb->mb_lock, flags);
+
+	return retval;
+}
+
+/*----------------------------------------------------------------------------*/
+
+void cursor_init(struct wb_device *wb)
+{
+	wb->cursor = wb->current_seg->start_idx;
+	wb->current_seg->length = 0;
+}
+
+/*
+ * Advance the cursor and return the old cursor.
+ * After returned, nr_inflight_ios is incremented to wait for this write to complete.
+ */
+static u32 advance_cursor(struct wb_device *wb)
+{
+	u32 old;
+	if (wb->cursor == wb->nr_caches)
+		wb->cursor = 0;
+	old = wb->cursor;
+	wb->cursor++;
+	wb->current_seg->length++;
+	BUG_ON(wb->current_seg->length > wb->nr_caches_inseg);
+	atomic_inc(&wb->current_seg->nr_inflight_ios);
+	return old;
+}
+
+static bool needs_queue_seg(struct wb_device *wb)
+{
+	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
+	return rambuf_no_space;
+}
+
+/*----------------------------------------------------------------------------*/
 
 /*
  * Prepare the RAM buffer for segment write.
@@ -304,10 +398,15 @@ static void queue_current_buffer(struct wb_device *wb)
 	prepare_new_seg(wb);
 }
 
-void cursor_init(struct wb_device *wb)
+/*
+ * queue_current_buffer if the RAM buffer can't make space any more.
+ */
+static void might_queue_current_buffer(struct wb_device *wb)
 {
-	wb->cursor = wb->current_seg->start_idx;
-	wb->current_seg->length = 0;
+	if (needs_queue_seg(wb)) {
+		update_nr_empty_segs(wb);
+		queue_current_buffer(wb);
+	}
 }
 
 /*
@@ -355,69 +454,6 @@ static void clear_stat(struct wb_device *wb)
 		atomic64_set(v, 0);
 	}
 	atomic64_set(&wb->count_non_full_flushed, 0);
-}
-
-/*----------------------------------------------------------------------------*/
-
-void inc_nr_dirty_caches(struct wb_device *wb)
-{
-	ASSERT(wb);
-	atomic64_inc(&wb->nr_dirty_caches);
-}
-
-void dec_nr_dirty_caches(struct wb_device *wb)
-{
-	ASSERT(wb);
-	if (atomic64_dec_and_test(&wb->nr_dirty_caches))
-		wake_up_interruptible(&wb->wait_drop_caches);
-}
-
-static bool taint_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
-{
-	unsigned long flags;
-	bool flip = false;
-
-	ASSERT(data_bits > 0);
-	spin_lock_irqsave(&wb->mb_lock, flags);
-	if (!mb->dirtiness.is_dirty) {
-		mb->dirtiness.is_dirty = true;
-		flip = true;
-	}
-	mb->dirtiness.data_bits |= data_bits;
-	spin_unlock_irqrestore(&wb->mb_lock, flags);
-
-	return flip;
-}
-
-bool mark_clean_mb(struct wb_device *wb, struct metablock *mb)
-{
-	unsigned long flags;
-	bool flip = false;
-
-	spin_lock_irqsave(&wb->mb_lock, flags);
-	if (mb->dirtiness.is_dirty) {
-		mb->dirtiness.is_dirty = false;
-		flip = true;
-	}
-	spin_unlock_irqrestore(&wb->mb_lock, flags);
-
-	return flip;
-}
-
-/*
- * Read the dirtiness of a metablock at the moment.
- */
-struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
-				   struct metablock *mb)
-{
-	unsigned long flags;
-	struct dirtiness retval;
-
-	spin_lock_irqsave(&wb->mb_lock, flags);
-	retval = mb->dirtiness;
-	spin_unlock_irqrestore(&wb->mb_lock, flags);
-
-	return retval;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -496,6 +532,53 @@ static void copy_to_bio_payload(struct bio *bio, void *buf, u8 copy_bits)
 			__copy_to_bio_payload(bio, buf + (i_offset << 9), i);
 	}
 }
+
+/*----------------------------------------------------------------------------*/
+
+struct lookup_result {
+	struct ht_head *head; /* Lookup head used */
+	struct lookup_key key; /* Lookup key used */
+
+	struct segment_header *found_seg;
+	struct metablock *found_mb;
+
+	bool found; /* Cache hit? */
+	bool on_buffer; /* Is the metablock found on the RAM buffer? */
+};
+
+/*
+ * Lookup a bio relevant cache data.
+ * In case of cache hit, nr_inflight_ios is incremented.
+ */
+static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_result *res)
+{
+	res->key = (struct lookup_key) {
+		.sector = calc_cache_alignment(bi_sector(bio)),
+	};
+	res->head = ht_get_head(wb, &res->key);
+
+	res->found_mb = ht_lookup(wb, res->head, &res->key);
+	if (res->found_mb) {
+		res->found_seg = mb_to_seg(wb, res->found_mb);
+		atomic_inc(&res->found_seg->nr_inflight_ios);
+	}
+
+	res->found = (res->found_mb != NULL);
+
+	res->on_buffer = false;
+	if (res->found)
+		res->on_buffer = is_on_buffer(wb, res->found_mb->idx);
+
+	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
+}
+
+static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
+{
+	if (atomic_dec_and_test(&seg->nr_inflight_ios))
+		wake_up_active_wq(&wb->inflight_ios_wq);
+}
+
+/*----------------------------------------------------------------------------*/
 
 static u8 to_mask(u8 offset, u8 count)
 {
@@ -600,300 +683,7 @@ static void *read_mb(struct wb_device *wb, struct segment_header *seg,
 	return result;
 }
 
-static void memcpy_masked(void *to, u8 protect_bits, void *from, u8 copy_bits)
-{
-	u8 i;
-	for (i = 0; i < 8; i++) {
-		bool will_copy = copy_bits & (1 << i);
-		bool protected = protect_bits & (1 << i);
-		if (will_copy && (!protected)) {
-			size_t offset = (i << 9);
-			memcpy(to + offset, from + offset, 1 << 9);
-		}
-	}
-}
-
-static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct write_io *wio)
-{
-	size_t mb_offset = (mb_idx_inseg(wb, write_pos->idx) + 1) << 12;
-	void *mb_data = wb->current_rambuf->data + mb_offset;
-	if (wio->data_bits == 255)
-		memcpy(mb_data, wio->data, 1 << 12);
-	else
-		memcpy_masked(mb_data, 0, wio->data, wio->data_bits);
-}
-
-/*
- * Advance the cursor and return the old cursor.
- * After returned, nr_inflight_ios is incremented to wait for this write to complete.
- */
-static u32 advance_cursor(struct wb_device *wb)
-{
-	u32 old;
-	if (wb->cursor == wb->nr_caches)
-		wb->cursor = 0;
-	old = wb->cursor;
-	wb->cursor++;
-	wb->current_seg->length++;
-	BUG_ON(wb->current_seg->length > wb->nr_caches_inseg);
-	atomic_inc(&wb->current_seg->nr_inflight_ios);
-	return old;
-}
-
-static bool needs_queue_seg(struct wb_device *wb)
-{
-	bool rambuf_no_space = !mb_idx_inseg(wb, wb->cursor);
-	return rambuf_no_space;
-}
-
-/*
- * queue_current_buffer if the RAM buffer can't make space any more.
- */
-static void might_queue_current_buffer(struct wb_device *wb)
-{
-	if (needs_queue_seg(wb)) {
-		update_nr_empty_segs(wb);
-		queue_current_buffer(wb);
-	}
-}
-
-/*
- * Process bio with REQ_FLUSH
- */
-static int process_flush_bio(struct wb_device *wb, struct bio *bio)
-{
-	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
-	ASSERT(bio_sectors(bio) == 0);
-	queue_barrier_io(wb, bio);
-	return DM_MAPIO_SUBMITTED;
-}
-
-struct lookup_result {
-	struct ht_head *head; /* Lookup head used */
-	struct lookup_key key; /* Lookup key used */
-
-	struct segment_header *found_seg;
-	struct metablock *found_mb;
-
-	bool found; /* Cache hit? */
-	bool on_buffer; /* Is the metablock found on the RAM buffer? */
-};
-
-/*
- * Lookup a bio relevant cache data.
- * In case of cache hit, nr_inflight_ios is incremented.
- */
-static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_result *res)
-{
-	res->key = (struct lookup_key) {
-		.sector = calc_cache_alignment(bi_sector(bio)),
-	};
-	res->head = ht_get_head(wb, &res->key);
-
-	res->found_mb = ht_lookup(wb, res->head, &res->key);
-	if (res->found_mb) {
-		res->found_seg = mb_to_seg(wb, res->found_mb);
-		atomic_inc(&res->found_seg->nr_inflight_ios);
-	}
-
-	res->found = (res->found_mb != NULL);
-
-	res->on_buffer = false;
-	if (res->found)
-		res->on_buffer = is_on_buffer(wb, res->found_mb->idx);
-
-	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
-}
-
-int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
-{
-	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
-
-	bool needs_merge_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
-
-	if (!dirtiness.is_dirty)
-		needs_merge_prev_cache = false;
-
-	if (overwrite_bits == 255)
-		needs_merge_prev_cache = false;
-
-	if (unlikely(needs_merge_prev_cache)) {
-		void *buf;
-
-		wait_for_flushing(wb, seg->id);
-		ASSERT(dirtiness.is_dirty);
-
-		buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
-		if (!buf)
-			return -EIO;
-
-		/* newer data should be prioritized */
-		memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
-		wio->data_bits |= dirtiness.data_bits;
-		mempool_free(buf, wb->buf_8_pool);
-	}
-
-	if (mark_clean_mb(wb, old_mb))
-		dec_nr_dirty_caches(wb);
-
-	ht_del(wb, old_mb);
-
-	return 0;
-}
-
-/*
- * Get a new place to write.
- */
-static struct metablock *prepare_new_write_pos(struct wb_device *wb)
-{
-	struct metablock *ret = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	ASSERT(!ret->dirtiness.is_dirty);
-	ret->dirtiness.data_bits = 0;
-	return ret;
-}
-
-static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
-{
-	if (atomic_dec_and_test(&seg->nr_inflight_ios))
-		wake_up_active_wq(&wb->inflight_ios_wq);
-}
-
-static void initialize_write_io(struct write_io *wio, struct bio *bio)
-{
-	u8 offset = io_offset(bio);
-	sector_t count = bio_sectors(bio);
-	copy_bio_payload(wio->data + (offset << 9), bio);
-	wio->data_bits = to_mask(offset, count);
-}
-
-static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
-static int do_process_write(struct wb_device *wb, struct bio *bio)
-{
-	int retval = 0;
-
-	struct metablock *write_pos = NULL;
-	struct lookup_result res;
-
-	struct write_io wio;
-	wio.data = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
-	if (!wio.data)
-		return -ENOMEM;
-	initialize_write_io(&wio, bio);
-
-	mutex_lock(&wb->io_lock);
-
-	cache_lookup(wb, bio, &res);
-
-	if (res.found) {
-		if (unlikely(res.on_buffer)) {
-			write_pos = res.found_mb;
-			goto do_write;
-		} else {
-			retval = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
-			dec_inflight_ios(wb, res.found_seg);
-			if (retval)
-				goto out;
-		}
-	} else
-		might_cancel_read_cache_cell(wb, bio);
-
-	might_queue_current_buffer(wb);
-
-	write_pos = prepare_new_write_pos(wb);
-
-do_write:
-	ASSERT(write_pos);
-	write_on_rambuffer(wb, write_pos, &wio);
-
-	if (taint_mb(wb, write_pos, wio.data_bits))
-		inc_nr_dirty_caches(wb);
-
-	ht_register(wb, res.head, write_pos, &res.key);
-
-out:
-	mutex_unlock(&wb->io_lock);
-	mempool_free(wio.data, wb->buf_8_pool);
-	return retval;
-}
-
-static int complete_process_write(struct wb_device *wb, struct bio *bio)
-{
-	dec_inflight_ios(wb, wb->current_seg);
-
-	/*
-	 * bio with REQ_FUA has data.
-	 * For such bio, we first treat it like a normal bio and then as a REQ_FLUSH bio.
-	 */
-	if (bio->bi_rw & REQ_FUA) {
-		queue_barrier_io(wb, bio);
-		return DM_MAPIO_SUBMITTED;
-	}
-
-	bio_endio_compat(bio, 0);
-	return DM_MAPIO_SUBMITTED;
-}
-
-/*
- * (Locking) Dirtiness of a metablock
- * ----------------------------------
- * A cache data is placed either on RAM buffer or SSD if it was flushed.
- * To make locking easy, we simplify the rule for the dirtiness of a cache data.
- * 1) If the data is on the RAM buffer, the dirtiness only "increases".
- * 2) If the data is, on the other hand, on the SSD after flushed the dirtiness
- *    only "decreases".
- *
- * These simple rules can remove the possibility of dirtiness fluctuate on the
- * RAM buffer.
- */
-
-/*
- * (Locking) Refcount (in_flight_*)
- * --------------------------------
- *
- * The basic common idea is
- * 1) Increment the refcount inside lock
- * 2) Wait for decrement outside the lock
- *
- * process_write:
- *   do_process_write:
- *     mutex_lock (to serialize write)
- *       inc in_flight_ios # refcount on the dst segment
- *     mutex_unlock
- *
- *   complete_process_write:
- *     dec in_flight_ios
- *     bio_endio(bio)
- */
-static int process_write_wb(struct wb_device *wb, struct bio *bio)
-{
-	int err = do_process_write(wb, bio);
-	if (err)
-		return err;
-	return complete_process_write(wb, bio);
-}
-
-static int process_write_wa(struct wb_device *wb, struct bio *bio)
-{
-	struct lookup_result res;
-
-	mutex_lock(&wb->io_lock);
-	cache_lookup(wb, bio, &res);
-	if (res.found) {
-		dec_inflight_ios(wb, res.found_seg);
-		ht_del(wb, res.found_mb);
-	}
-
-	might_cancel_read_cache_cell(wb, bio);
-	mutex_unlock(&wb->io_lock);
-
-	bio_remap(bio, wb->backing_dev, bi_sector(bio));
-	return DM_MAPIO_REMAPPED;
-}
-
-static int process_write(struct wb_device *wb, struct bio *bio)
-{
-	return wb->write_around_mode ? process_write_wa(wb, bio) : process_write_wb(wb, bio);
-}
+/*----------------------------------------------------------------------------*/
 
 enum PBD_FLAG {
 	PBD_NONE = 0,
@@ -914,200 +704,6 @@ struct per_bio_data {
 	};
 };
 #define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->PER_BIO_DATA_SIZE))
-
-struct read_backing_async_context {
-	struct wb_device *wb;
-	struct bio *bio;
-};
-static void read_cache_cell_copy_data(struct wb_device *, struct bio*, unsigned long error);
-static void read_backing_async_callback_onstack(unsigned long error, struct read_backing_async_context *ctx)
-{
-	ASSERT(io_fullsize(ctx->bio));
-
-	read_cache_cell_copy_data(ctx->wb, ctx->bio, error);
-
-	if (error)
-		bio_io_error(ctx->bio);
-	else
-		bio_endio_compat(ctx->bio, 0);
-}
-static void read_backing_async_callback(unsigned long error, void *context)
-{
-	struct read_backing_async_context *ctx = context;
-	read_backing_async_callback_onstack(error, ctx);
-	kfree(ctx);
-}
-static int read_backing_async(struct wb_device *wb, struct bio *bio)
-{
-	int err = 0;
-
-	struct dm_io_request io_req;
-	struct dm_io_region region;
-
-	struct read_backing_async_context *ctx = kmalloc(sizeof(struct read_backing_async_context), GFP_NOIO);
-	if (!ctx)
-		return -ENOMEM;
-
-	ctx->wb = wb;
-	ctx->bio = bio;
-
-	ASSERT(io_fullsize(bio));
-
-	io_req = (struct dm_io_request) {
-		.client = wb->io_client,
-		.bi_rw = READ,
-		.mem.type = DM_IO_BIO,
-		.mem.ptr.bio = bio,
-		.notify.fn = read_backing_async_callback,
-		.notify.context = ctx
-	};
-	region = (struct dm_io_region) {
-		.bdev = wb->backing_dev->bdev,
-		.sector = bi_sector(bio),
-		.count = 8
-	};
-
-	err = wb_io(&io_req, 1, &region, NULL, false);
-	if (err)
-		kfree(ctx);
-
-	return err;
-}
-
-static bool reserve_read_cache_cell(struct wb_device *, struct bio *);
-static int process_read(struct wb_device *wb, struct bio *bio)
-{
-	struct lookup_result res;
-	struct dirtiness dirtiness;
-	struct per_bio_data *pbd;
-
-	bool reserved = false;
-
-	mutex_lock(&wb->io_lock);
-	cache_lookup(wb, bio, &res);
-	if (!res.found)
-		reserved = reserve_read_cache_cell(wb, bio);
-	mutex_unlock(&wb->io_lock);
-
-	if (!res.found) {
-		if (reserved) {
-			/*
-			 * Remapping clone bio to the backing store leads to
-			 * empty payload in clone_endio().
-			 * To avoid caching junk data, we need this workaround
-			 * to call dm_io() to certainly fill the bio payload.
-			 */
-			if (read_backing_async(wb, bio)) {
-				struct read_backing_async_context ctx = {
-					.wb = wb,
-					.bio = bio
-				};
-				read_backing_async_callback_onstack(1, &ctx);
-			}
-			return DM_MAPIO_SUBMITTED;
-		} else {
-			bio_remap(bio, wb->backing_dev, bi_sector(bio));
-			return DM_MAPIO_REMAPPED;
-		}
-	}
-
-	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
-	if (unlikely(res.on_buffer)) {
-		int err = fill_payload_by_backing(wb, bio);
-		if (err)
-			goto read_buffered_mb_exit;
-
-		if (dirtiness.is_dirty)
-			copy_to_bio_payload(bio, ref_buffered_mb(wb, res.found_mb), dirtiness.data_bits);
-
-read_buffered_mb_exit:
-		dec_inflight_ios(wb, res.found_seg);
-
-		if (unlikely(err))
-			bio_io_error(bio);
-		else
-			bio_endio_compat(bio, 0);
-
-		return DM_MAPIO_SUBMITTED;
-	}
-
-	/*
-	 * We need to wait for the segment to be flushed to the cache device.
-	 * Without this, we might read the wrong data from the cache device.
-	 */
-	wait_for_flushing(wb, res.found_seg->id);
-
-	if (unlikely(dirtiness.data_bits != 255)) {
-		int err = fill_payload_by_backing(wb, bio);
-		if (err)
-			goto read_mb_exit;
-
-		if (dirtiness.is_dirty) {
-			void *buf = read_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits);
-			if (!buf) {
-				err = -EIO;
-				goto read_mb_exit;
-			}
-			copy_to_bio_payload(bio, buf, dirtiness.data_bits);
-			mempool_free(buf, wb->buf_8_pool);
-		}
-
-read_mb_exit:
-		dec_inflight_ios(wb, res.found_seg);
-
-		if (unlikely(err))
-			bio_io_error(bio);
-		else
-			bio_endio_compat(bio, 0);
-
-		return DM_MAPIO_SUBMITTED;
-	}
-
-	pbd = per_bio_data(wb, bio);
-	pbd->type = PBD_READ_SEG;
-	pbd->seg = res.found_seg;
-
-	bio_remap(bio, wb->cache_dev,
-		  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
-		  io_offset(bio));
-
-	return DM_MAPIO_REMAPPED;
-}
-
-static int process_bio(struct wb_device *wb, struct bio *bio)
-{
-	return io_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
-}
-
-static int writeboost_map(struct dm_target *ti, struct bio *bio)
-{
-	struct wb_device *wb = ti->private;
-
-	struct per_bio_data *pbd = per_bio_data(wb, bio);
-	pbd->type = PBD_NONE;
-
-	if (bio->bi_rw & REQ_FLUSH)
-		return process_flush_bio(wb, bio);
-
-	return process_bio(wb, bio);
-}
-
-static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
-{
-	struct wb_device *wb = ti->private;
-	struct per_bio_data *pbd = per_bio_data(wb, bio);
-
-	switch (pbd->type) {
-	case PBD_NONE:
-	case PBD_WILL_CACHE:
-		return 0;
-	case PBD_READ_SEG:
-		dec_inflight_ios(wb, pbd->seg);
-		return 0;
-	default:
-		BUG();
-	}
-}
 
 /*----------------------------------------------------------------------------*/
 
@@ -1463,6 +1059,416 @@ static int init_read_cache_cells(struct wb_device *wb)
 }
 
 /*----------------------------------------------------------------------------*/
+
+static void initialize_write_io(struct write_io *wio, struct bio *bio)
+{
+	u8 offset = io_offset(bio);
+	sector_t count = bio_sectors(bio);
+	copy_bio_payload(wio->data + (offset << 9), bio);
+	wio->data_bits = to_mask(offset, count);
+}
+
+static void memcpy_masked(void *to, u8 protect_bits, void *from, u8 copy_bits)
+{
+	u8 i;
+	for (i = 0; i < 8; i++) {
+		bool will_copy = copy_bits & (1 << i);
+		bool protected = protect_bits & (1 << i);
+		if (will_copy && (!protected)) {
+			size_t offset = (i << 9);
+			memcpy(to + offset, from + offset, 1 << 9);
+		}
+	}
+}
+
+int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
+{
+	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
+
+	bool needs_merge_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
+
+	if (!dirtiness.is_dirty)
+		needs_merge_prev_cache = false;
+
+	if (overwrite_bits == 255)
+		needs_merge_prev_cache = false;
+
+	if (unlikely(needs_merge_prev_cache)) {
+		void *buf;
+
+		wait_for_flushing(wb, seg->id);
+		ASSERT(dirtiness.is_dirty);
+
+		buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
+		if (!buf)
+			return -EIO;
+
+		/* newer data should be prioritized */
+		memcpy_masked(wio->data, wio->data_bits, buf, dirtiness.data_bits);
+		wio->data_bits |= dirtiness.data_bits;
+		mempool_free(buf, wb->buf_8_pool);
+	}
+
+	if (mark_clean_mb(wb, old_mb))
+		dec_nr_dirty_caches(wb);
+
+	ht_del(wb, old_mb);
+
+	return 0;
+}
+
+/*
+ * Get a new place to write.
+ */
+static struct metablock *prepare_new_write_pos(struct wb_device *wb)
+{
+	struct metablock *ret = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
+	ASSERT(!ret->dirtiness.is_dirty);
+	ret->dirtiness.data_bits = 0;
+	return ret;
+}
+
+static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct write_io *wio)
+{
+	size_t mb_offset = (mb_idx_inseg(wb, write_pos->idx) + 1) << 12;
+	void *mb_data = wb->current_rambuf->data + mb_offset;
+	if (wio->data_bits == 255)
+		memcpy(mb_data, wio->data, 1 << 12);
+	else
+		memcpy_masked(mb_data, 0, wio->data, wio->data_bits);
+}
+
+// static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
+static int do_process_write(struct wb_device *wb, struct bio *bio)
+{
+	int retval = 0;
+
+	struct metablock *write_pos = NULL;
+	struct lookup_result res;
+
+	struct write_io wio;
+	wio.data = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	if (!wio.data)
+		return -ENOMEM;
+	initialize_write_io(&wio, bio);
+
+	mutex_lock(&wb->io_lock);
+
+	cache_lookup(wb, bio, &res);
+
+	if (res.found) {
+		if (unlikely(res.on_buffer)) {
+			write_pos = res.found_mb;
+			goto do_write;
+		} else {
+			retval = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
+			dec_inflight_ios(wb, res.found_seg);
+			if (retval)
+				goto out;
+		}
+	} else
+		might_cancel_read_cache_cell(wb, bio);
+
+	might_queue_current_buffer(wb);
+
+	write_pos = prepare_new_write_pos(wb);
+
+do_write:
+	ASSERT(write_pos);
+	write_on_rambuffer(wb, write_pos, &wio);
+
+	if (taint_mb(wb, write_pos, wio.data_bits))
+		inc_nr_dirty_caches(wb);
+
+	ht_register(wb, res.head, write_pos, &res.key);
+
+out:
+	mutex_unlock(&wb->io_lock);
+	mempool_free(wio.data, wb->buf_8_pool);
+	return retval;
+}
+
+static int complete_process_write(struct wb_device *wb, struct bio *bio)
+{
+	dec_inflight_ios(wb, wb->current_seg);
+
+	/*
+	 * bio with REQ_FUA has data.
+	 * For such bio, we first treat it like a normal bio and then as a REQ_FLUSH bio.
+	 */
+	if (bio->bi_rw & REQ_FUA) {
+		queue_barrier_io(wb, bio);
+		return DM_MAPIO_SUBMITTED;
+	}
+
+	bio_endio_compat(bio, 0);
+	return DM_MAPIO_SUBMITTED;
+}
+
+/*
+ * (Locking) Dirtiness of a metablock
+ * ----------------------------------
+ * A cache data is placed either on RAM buffer or SSD if it was flushed.
+ * To make locking easy, we simplify the rule for the dirtiness of a cache data.
+ * 1) If the data is on the RAM buffer, the dirtiness only "increases".
+ * 2) If the data is, on the other hand, on the SSD after flushed the dirtiness
+ *    only "decreases".
+ *
+ * These simple rules can remove the possibility of dirtiness fluctuate on the
+ * RAM buffer.
+ */
+
+/*
+ * (Locking) Refcount (in_flight_*)
+ * --------------------------------
+ *
+ * The basic common idea is
+ * 1) Increment the refcount inside lock
+ * 2) Wait for decrement outside the lock
+ *
+ * process_write:
+ *   do_process_write:
+ *     mutex_lock (to serialize write)
+ *       inc in_flight_ios # refcount on the dst segment
+ *     mutex_unlock
+ *
+ *   complete_process_write:
+ *     dec in_flight_ios
+ *     bio_endio(bio)
+ */
+static int process_write_wb(struct wb_device *wb, struct bio *bio)
+{
+	int err = do_process_write(wb, bio);
+	if (err)
+		return err;
+	return complete_process_write(wb, bio);
+}
+
+static int process_write_wa(struct wb_device *wb, struct bio *bio)
+{
+	struct lookup_result res;
+
+	mutex_lock(&wb->io_lock);
+	cache_lookup(wb, bio, &res);
+	if (res.found) {
+		dec_inflight_ios(wb, res.found_seg);
+		ht_del(wb, res.found_mb);
+	}
+
+	might_cancel_read_cache_cell(wb, bio);
+	mutex_unlock(&wb->io_lock);
+
+	bio_remap(bio, wb->backing_dev, bi_sector(bio));
+	return DM_MAPIO_REMAPPED;
+}
+
+static int process_write(struct wb_device *wb, struct bio *bio)
+{
+	return wb->write_around_mode ? process_write_wa(wb, bio) : process_write_wb(wb, bio);
+}
+
+struct read_backing_async_context {
+	struct wb_device *wb;
+	struct bio *bio;
+};
+static void read_backing_async_callback_onstack(unsigned long error, struct read_backing_async_context *ctx)
+{
+	ASSERT(io_fullsize(ctx->bio));
+
+	read_cache_cell_copy_data(ctx->wb, ctx->bio, error);
+
+	if (error)
+		bio_io_error(ctx->bio);
+	else
+		bio_endio_compat(ctx->bio, 0);
+}
+static void read_backing_async_callback(unsigned long error, void *context)
+{
+	struct read_backing_async_context *ctx = context;
+	read_backing_async_callback_onstack(error, ctx);
+	kfree(ctx);
+}
+static int read_backing_async(struct wb_device *wb, struct bio *bio)
+{
+	int err = 0;
+
+	struct dm_io_request io_req;
+	struct dm_io_region region;
+
+	struct read_backing_async_context *ctx = kmalloc(sizeof(struct read_backing_async_context), GFP_NOIO);
+	if (!ctx)
+		return -ENOMEM;
+
+	ctx->wb = wb;
+	ctx->bio = bio;
+
+	ASSERT(io_fullsize(bio));
+
+	io_req = (struct dm_io_request) {
+		.client = wb->io_client,
+		.bi_rw = READ,
+		.mem.type = DM_IO_BIO,
+		.mem.ptr.bio = bio,
+		.notify.fn = read_backing_async_callback,
+		.notify.context = ctx
+	};
+	region = (struct dm_io_region) {
+		.bdev = wb->backing_dev->bdev,
+		.sector = bi_sector(bio),
+		.count = 8
+	};
+
+	err = wb_io(&io_req, 1, &region, NULL, false);
+	if (err)
+		kfree(ctx);
+
+	return err;
+}
+
+static int process_read(struct wb_device *wb, struct bio *bio)
+{
+	struct lookup_result res;
+	struct dirtiness dirtiness;
+	struct per_bio_data *pbd;
+
+	bool reserved = false;
+
+	mutex_lock(&wb->io_lock);
+	cache_lookup(wb, bio, &res);
+	if (!res.found)
+		reserved = reserve_read_cache_cell(wb, bio);
+	mutex_unlock(&wb->io_lock);
+
+	if (!res.found) {
+		if (reserved) {
+			/*
+			 * Remapping clone bio to the backing store leads to
+			 * empty payload in clone_endio().
+			 * To avoid caching junk data, we need this workaround
+			 * to call dm_io() to certainly fill the bio payload.
+			 */
+			if (read_backing_async(wb, bio)) {
+				struct read_backing_async_context ctx = {
+					.wb = wb,
+					.bio = bio
+				};
+				read_backing_async_callback_onstack(1, &ctx);
+			}
+			return DM_MAPIO_SUBMITTED;
+		} else {
+			bio_remap(bio, wb->backing_dev, bi_sector(bio));
+			return DM_MAPIO_REMAPPED;
+		}
+	}
+
+	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
+	if (unlikely(res.on_buffer)) {
+		int err = fill_payload_by_backing(wb, bio);
+		if (err)
+			goto read_buffered_mb_exit;
+
+		if (dirtiness.is_dirty)
+			copy_to_bio_payload(bio, ref_buffered_mb(wb, res.found_mb), dirtiness.data_bits);
+
+read_buffered_mb_exit:
+		dec_inflight_ios(wb, res.found_seg);
+
+		if (unlikely(err))
+			bio_io_error(bio);
+		else
+			bio_endio_compat(bio, 0);
+
+		return DM_MAPIO_SUBMITTED;
+	}
+
+	/*
+	 * We need to wait for the segment to be flushed to the cache device.
+	 * Without this, we might read the wrong data from the cache device.
+	 */
+	wait_for_flushing(wb, res.found_seg->id);
+
+	if (unlikely(dirtiness.data_bits != 255)) {
+		int err = fill_payload_by_backing(wb, bio);
+		if (err)
+			goto read_mb_exit;
+
+		if (dirtiness.is_dirty) {
+			void *buf = read_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits);
+			if (!buf) {
+				err = -EIO;
+				goto read_mb_exit;
+			}
+			copy_to_bio_payload(bio, buf, dirtiness.data_bits);
+			mempool_free(buf, wb->buf_8_pool);
+		}
+
+read_mb_exit:
+		dec_inflight_ios(wb, res.found_seg);
+
+		if (unlikely(err))
+			bio_io_error(bio);
+		else
+			bio_endio_compat(bio, 0);
+
+		return DM_MAPIO_SUBMITTED;
+	}
+
+	pbd = per_bio_data(wb, bio);
+	pbd->type = PBD_READ_SEG;
+	pbd->seg = res.found_seg;
+
+	bio_remap(bio, wb->cache_dev,
+		  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
+		  io_offset(bio));
+
+	return DM_MAPIO_REMAPPED;
+}
+
+static int process_bio(struct wb_device *wb, struct bio *bio)
+{
+	return io_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
+}
+
+/*
+ * Process bio with REQ_FLUSH
+ */
+static int process_flush_bio(struct wb_device *wb, struct bio *bio)
+{
+	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
+	ASSERT(bio_sectors(bio) == 0);
+	queue_barrier_io(wb, bio);
+	return DM_MAPIO_SUBMITTED;
+}
+
+static int writeboost_map(struct dm_target *ti, struct bio *bio)
+{
+	struct wb_device *wb = ti->private;
+
+	struct per_bio_data *pbd = per_bio_data(wb, bio);
+	pbd->type = PBD_NONE;
+
+	if (bio->bi_rw & REQ_FLUSH)
+		return process_flush_bio(wb, bio);
+
+	return process_bio(wb, bio);
+}
+
+static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
+{
+	struct wb_device *wb = ti->private;
+	struct per_bio_data *pbd = per_bio_data(wb, bio);
+
+	switch (pbd->type) {
+	case PBD_NONE:
+	case PBD_WILL_CACHE:
+		return 0;
+	case PBD_READ_SEG:
+		dec_inflight_ios(wb, pbd->seg);
+		return 0;
+	default:
+		BUG();
+	}
+}
 
 static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 {

@@ -321,8 +321,6 @@ void flush_current_buffer(struct wb_device *wb)
 	old_seg = wb->current_seg;
 
 	queue_current_buffer(wb);
-
-	cursor_init(wb); /* FIXME this looks dup call */
 	mutex_unlock(&wb->io_lock);
 
 	wait_for_flushing(wb, old_seg->id);

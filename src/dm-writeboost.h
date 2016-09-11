@@ -104,7 +104,6 @@ struct segment_header_device {
 	 */
 	/* - FROM ------------------------------------ */
 	__le64 id;
-	/* TODO Add timestamp? */
 	__le32 checksum;
 	/*
 	 * The number of metablocks in this segment header to be considered in
@@ -336,7 +335,6 @@ struct wb_device {
 	 * One-shot Writeback
 	 ********************/
 
-	wait_queue_head_t writeback_mb_wait_queue;
 	struct dm_kcopyd_client *copier;
 
 	/*--------------------------------------------------------------------*/

@@ -359,7 +359,7 @@ static int audit_cache_device(struct wb_device *wb)
 
 	wb->do_format = false;
 	if (le32_to_cpu(sup.magic) != WB_MAGIC ||
-	    wb->write_around_mode) { // write-around mode should discard all caches
+	    wb->write_around_mode) { /* write-around mode should discard all caches */
 		wb->do_format = true;
 		DMERR("Superblock Header: Magic number invalid");
 		return 0;
@@ -475,9 +475,7 @@ static int format_all_segment_headers(struct wb_device *wb)
 	atomic64_set(&context.count, wb->nr_segments);
 	context.err = 0;
 
-	/*
-	 * Submit all the writes asynchronously.
-	 */
+	/* Submit all the writes asynchronously. */
 	for (i = 0; i < wb->nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
 			.client = wb->io_client,

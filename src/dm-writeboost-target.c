@@ -82,9 +82,7 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 		err = dm_io(io_req, num_regions, regions, err_bits);
 	}
 
-	/*
-	 * err_bits can be NULL.
-	 */
+	/* err_bits can be NULL. */
 	if (err || (err_bits && *err_bits)) {
 		char buf[BDEVNAME_SIZE];
 		dev_t dev = regions->bdev->bd_dev;
@@ -133,24 +131,24 @@ static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 	bi_sector(bio) = sector;
 }
 
-static u8 do_io_offset(sector_t sector)
+static u8 calc_offset(sector_t sector)
 {
 	u32 tmp32;
 	div_u64_rem(sector, 1 << 3, &tmp32);
 	return tmp32;
 }
 
-static u8 io_offset(struct bio *bio)
+static u8 bio_calc_offset(struct bio *bio)
 {
-	return do_io_offset(bi_sector(bio));
+	return calc_offset(bi_sector(bio));
 }
 
-static bool io_fullsize(struct bio *bio)
+static bool bio_is_fullsize(struct bio *bio)
 {
 	return bio_sectors(bio) == (1 << 3);
 }
 
-static bool io_write(struct bio *bio)
+static bool bio_is_write(struct bio *bio)
 {
 	return bio_data_dir(bio) == WRITE;
 }
@@ -524,7 +522,7 @@ static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
  */
 static void copy_to_bio_payload(struct bio *bio, void *buf, u8 copy_bits)
 {
-	u8 offset = io_offset(bio);
+	u8 offset = bio_calc_offset(bio);
 	u8 i;
 	for (i = 0; i < bio_sectors(bio); i++) {
 		u8 i_offset = i + offset;
@@ -569,7 +567,7 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_re
 	if (res->found)
 		res->on_buffer = is_on_buffer(wb, res->found_mb->idx);
 
-	inc_stat(wb, io_write(bio), res->found, res->on_buffer, io_fullsize(bio));
+	inc_stat(wb, bio_is_write(bio), res->found, res->on_buffer, bio_is_fullsize(bio));
 }
 
 static void dec_inflight_ios(struct wb_device *wb, struct segment_header *seg)
@@ -599,7 +597,7 @@ static int fill_payload_by_backing(struct wb_device *wb, struct bio *bio)
 	struct dm_io_region region;
 
 	sector_t start = bi_sector(bio);
-	u8 offset = do_io_offset(start);
+	u8 offset = calc_offset(start);
 	u8 len = bio_sectors(bio);
 	u8 copy_bits = to_mask(offset, len);
 
@@ -803,7 +801,7 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	 * 1) Caching partial data (< 4KB) is likely meaningless.
 	 * 2) Caching partial data makes the read-caching mechanism very hard.
 	 */
-	if (!io_fullsize(bio))
+	if (!bio_is_fullsize(bio))
 		return false;
 
 	/*
@@ -1062,7 +1060,7 @@ static int init_read_cache_cells(struct wb_device *wb)
 
 static void initialize_write_io(struct write_io *wio, struct bio *bio)
 {
-	u8 offset = io_offset(bio);
+	u8 offset = bio_calc_offset(bio);
 	sector_t count = bio_sectors(bio);
 	copy_bio_payload(wio->data + (offset << 9), bio);
 	wio->data_bits = to_mask(offset, count);
@@ -1138,7 +1136,6 @@ static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos
 		memcpy_masked(mb_data, 0, wio->data, wio->data_bits);
 }
 
-// static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
 static int do_process_write(struct wb_device *wb, struct bio *bio)
 {
 	int err = 0;
@@ -1271,9 +1268,10 @@ struct read_backing_async_context {
 	struct wb_device *wb;
 	struct bio *bio;
 };
+
 static void read_backing_async_callback_onstack(unsigned long error, struct read_backing_async_context *ctx)
 {
-	ASSERT(io_fullsize(ctx->bio));
+	ASSERT(bio_is_fullsize(ctx->bio));
 
 	read_cache_cell_copy_data(ctx->wb, ctx->bio, error);
 
@@ -1282,12 +1280,14 @@ static void read_backing_async_callback_onstack(unsigned long error, struct read
 	else
 		bio_endio_compat(ctx->bio, 0);
 }
+
 static void read_backing_async_callback(unsigned long error, void *context)
 {
 	struct read_backing_async_context *ctx = context;
 	read_backing_async_callback_onstack(error, ctx);
 	kfree(ctx);
 }
+
 static int read_backing_async(struct wb_device *wb, struct bio *bio)
 {
 	int err = 0;
@@ -1302,7 +1302,7 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 	ctx->wb = wb;
 	ctx->bio = bio;
 
-	ASSERT(io_fullsize(bio));
+	ASSERT(bio_is_fullsize(bio));
 
 	io_req = (struct dm_io_request) {
 		.client = wb->io_client,
@@ -1419,14 +1419,14 @@ read_mb_exit:
 
 	bio_remap(bio, wb->cache_dev,
 		  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
-		  io_offset(bio));
+		  bio_calc_offset(bio));
 
 	return DM_MAPIO_REMAPPED;
 }
 
 static int process_bio(struct wb_device *wb, struct bio *bio)
 {
-	return io_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
+	return bio_is_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
 }
 
 /*
@@ -1612,7 +1612,6 @@ static int init_core_struct(struct dm_target *ti)
 	ti->private = wb;
 	wb->ti = ti;
 
-	// init_waitqueue_head(&wb->writeback_mb_wait_queue);
 	wb->copier = dm_kcopyd_client_create(&dm_kcopyd_throttle);
 	if (IS_ERR(wb->copier)) {
 		err = PTR_ERR(wb->copier);

@@ -207,33 +207,33 @@ void dec_nr_dirty_caches(struct wb_device *wb)
 static bool taint_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
 {
 	unsigned long flags;
-	bool flip = false;
+	bool flipped = false;
 
 	ASSERT(data_bits > 0);
 	spin_lock_irqsave(&wb->mb_lock, flags);
 	if (!mb->dirtiness.is_dirty) {
 		mb->dirtiness.is_dirty = true;
-		flip = true;
+		flipped = true;
 	}
 	mb->dirtiness.data_bits |= data_bits;
 	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
-	return flip;
+	return flipped;
 }
 
 bool mark_clean_mb(struct wb_device *wb, struct metablock *mb)
 {
 	unsigned long flags;
-	bool flip = false;
+	bool flipped = false;
 
 	spin_lock_irqsave(&wb->mb_lock, flags);
 	if (mb->dirtiness.is_dirty) {
 		mb->dirtiness.is_dirty = false;
-		flip = true;
+		flipped = true;
 	}
 	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
-	return flip;
+	return flipped;
 }
 
 /*

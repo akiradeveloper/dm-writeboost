@@ -1141,7 +1141,7 @@ static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos
 // static void might_cancel_read_cache_cell(struct wb_device *, struct bio *);
 static int do_process_write(struct wb_device *wb, struct bio *bio)
 {
-	int retval = 0;
+	int err = 0;
 
 	struct metablock *write_pos = NULL;
 	struct lookup_result res;
@@ -1161,9 +1161,9 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 			write_pos = res.found_mb;
 			goto do_write;
 		} else {
-			retval = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
+			err = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
 			dec_inflight_ios(wb, res.found_seg);
-			if (retval)
+			if (err)
 				goto out;
 		}
 	} else
@@ -1185,7 +1185,7 @@ do_write:
 out:
 	mutex_unlock(&wb->io_lock);
 	mempool_free(wio.data, wb->buf_8_pool);
-	return retval;
+	return err;
 }
 
 static int complete_process_write(struct wb_device *wb, struct bio *bio)
@@ -1472,28 +1472,28 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 
 static int consume_essential_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
-	int r = 0;
+	int err = 0;
 	struct dm_target *ti = wb->ti;
 
-	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
-			  &wb->backing_dev);
-	if (r) {
+	err = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
+			    &wb->backing_dev);
+	if (err) {
 		DMERR("Failed to get backing_dev");
-		return r;
+		return err;
 	}
 
-	r = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
-			  &wb->cache_dev);
-	if (r) {
+	err = dm_get_device(ti, dm_shift_arg(as), dm_table_get_mode(ti->table),
+			    &wb->cache_dev);
+	if (err) {
 		DMERR("Failed to get cache_dev");
 		goto bad_get_cache;
 	}
 
-	return r;
+	return err;
 
 bad_get_cache:
 	dm_put_device(ti, wb->backing_dev);
-	return r;
+	return err;
 }
 
 #define consume_kv(name, nr, is_static) { \
@@ -1504,8 +1504,8 @@ bad_get_cache:
 			DMERR("%s is a static option", #name); \
 			break; \
 		} \
-		r = dm_read_arg(_args + (nr), as, &tmp, &ti->error); \
-		if (r) { \
+		err = dm_read_arg(_args + (nr), as, &tmp, &ti->error); \
+		if (err) { \
 			DMERR("%s", ti->error); \
 			break; \
 		} \
@@ -1514,7 +1514,7 @@ bad_get_cache:
 
 static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as, unsigned argc)
 {
-	int r = 0;
+	int err = 0;
 	struct dm_target *ti = wb->ti;
 
 	static struct dm_arg _args[] = {
@@ -1532,7 +1532,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		const char *key = dm_shift_arg(as);
 		argc--;
 
-		r = -EINVAL;
+		err = -EINVAL;
 
 		consume_kv(writeback_threshold, 0, false);
 		consume_kv(nr_max_batched_writeback, 1, false);
@@ -1542,7 +1542,7 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		consume_kv(write_around_mode, 5, true);
 		consume_kv(nr_read_cache_cells, 6, true);
 
-		if (!r) {
+		if (!err) {
 			argc--;
 		} else {
 			ti->error = "Invalid optional key";
@@ -1550,12 +1550,12 @@ static int do_consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as,
 		}
 	}
 
-	return r;
+	return err;
 }
 
 static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 {
-	int r = 0;
+	int err = 0;
 	struct dm_target *ti = wb->ti;
 
 	static struct dm_arg _args[] = {
@@ -1564,10 +1564,10 @@ static int consume_optional_argv(struct wb_device *wb, struct dm_arg_set *as)
 	unsigned argc = 0;
 
 	if (as->argc) {
-		r = dm_read_arg_group(_args, as, &argc, &ti->error);
-		if (r) {
+		err = dm_read_arg_group(_args, as, &argc, &ti->error);
+		if (err) {
 			DMERR("%s", ti->error);
-			return r;
+			return err;
 		}
 	}
 
@@ -1579,13 +1579,13 @@ DECLARE_DM_KCOPYD_THROTTLE_WITH_MODULE_PARM(wb_copy_throttle,
 
 static int init_core_struct(struct dm_target *ti)
 {
-	int r = 0;
+	int err = 0;
 	struct wb_device *wb;
 
-	r = dm_set_target_max_io_len(ti, 1 << 3);
-	if (r) {
+	err = dm_set_target_max_io_len(ti, 1 << 3);
+	if (err) {
 		DMERR("Failed to set max_io_len");
-		return r;
+		return err;
 	}
 
 	ti->num_flush_bios = 1;
@@ -1615,45 +1615,45 @@ static int init_core_struct(struct dm_target *ti)
 	// init_waitqueue_head(&wb->writeback_mb_wait_queue);
 	wb->copier = dm_kcopyd_client_create(&dm_kcopyd_throttle);
 	if (IS_ERR(wb->copier)) {
-		r = PTR_ERR(wb->copier);
+		err = PTR_ERR(wb->copier);
 		goto bad_kcopyd_client;
 	}
 
 	wb->buf_1_cachep = kmem_cache_create("dmwb_buf_1",
 			1 << 9, 1 << 9, SLAB_RED_ZONE, NULL);
 	if (!wb->buf_1_cachep) {
-		r = -ENOMEM;
+		err = -ENOMEM;
 		goto bad_buf_1_cachep;
 	}
 	wb->buf_1_pool = mempool_create_slab_pool(16, wb->buf_1_cachep);
 	if (!wb->buf_1_pool) {
-		r = -ENOMEM;
+		err = -ENOMEM;
 		goto bad_buf_1_pool;
 	}
 
 	wb->buf_8_cachep = kmem_cache_create("dmwb_buf_8",
 			1 << 12, 1 << 12, SLAB_RED_ZONE, NULL);
 	if (!wb->buf_8_cachep) {
-		r = -ENOMEM;
+		err = -ENOMEM;
 		goto bad_buf_8_cachep;
 	}
 	wb->buf_8_pool = mempool_create_slab_pool(16, wb->buf_8_cachep);
 	if (!wb->buf_8_pool) {
-		r = -ENOMEM;
+		err = -ENOMEM;
 		goto bad_buf_8_pool;
 	}
 
 	wb->io_wq = create_singlethread_workqueue("dmwb_io");
 	if (!wb->io_wq) {
 		DMERR("Failed to allocate io_wq");
-		r = -ENOMEM;
+		err = -ENOMEM;
 		goto bad_io_wq;
 	}
 
 	wb->io_client = dm_io_client_create();
 	if (IS_ERR(wb->io_client)) {
 		DMERR("Failed to allocate io_client");
-		r = PTR_ERR(wb->io_client);
+		err = PTR_ERR(wb->io_client);
 		goto bad_io_client;
 	}
 
@@ -1663,7 +1663,7 @@ static int init_core_struct(struct dm_target *ti)
 	atomic64_set(&wb->nr_dirty_caches, 0);
 	clear_bit(WB_CREATED, &wb->flags);
 
-	return r;
+	return err;
 
 bad_io_client:
 	destroy_workqueue(wb->io_wq);
@@ -1679,7 +1679,7 @@ bad_buf_1_cachep:
 	dm_kcopyd_client_destroy(wb->copier);
 bad_kcopyd_client:
 	kfree(wb);
-	return r;
+	return err;
 }
 
 static void free_core_struct(struct wb_device *wb)
@@ -1740,34 +1740,34 @@ static void free_ctr_args(struct wb_device *wb)
   */
 static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 {
-	int r = 0;
+	int err = 0;
 	struct wb_device *wb;
 
 	struct dm_arg_set as;
 	as.argc = argc;
 	as.argv = argv;
 
-	r = init_core_struct(ti);
-	if (r) {
+	err = init_core_struct(ti);
+	if (err) {
 		ti->error = "init_core_struct failed";
-		return r;
+		return err;
 	}
 	wb = ti->private;
 
-	r = copy_ctr_args(wb, argc - 2, (const char **)argv + 2);
-	if (r) {
+	err = copy_ctr_args(wb, argc - 2, (const char **)argv + 2);
+	if (err) {
 		ti->error = "copy_ctr_args failed";
 		goto bad_ctr_args;
 	}
 
-	r = consume_essential_argv(wb, &as);
-	if (r) {
+	err = consume_essential_argv(wb, &as);
+	if (err) {
 		ti->error = "consume_essential_argv failed";
 		goto bad_essential_argv;
 	}
 
-	r = consume_optional_argv(wb, &as);
-	if (r) {
+	err = consume_optional_argv(wb, &as);
+	if (err) {
 		ti->error = "consume_optional_argv failed";
 		goto bad_optional_argv;
 	}
@@ -1779,16 +1779,16 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	save_arg(read_cache_threshold);
 	save_arg(nr_read_cache_cells);
 
-	r = resume_cache(wb);
-	if (r) {
+	err = resume_cache(wb);
+	if (err) {
 		ti->error = "resume_cache failed";
 		goto bad_resume_cache;
 	}
 
 	wb->nr_read_cache_cells = 2048; /* 8MB */
 	restore_arg(nr_read_cache_cells);
-	r = init_read_cache_cells(wb);
-	if (r) {
+	err = init_read_cache_cells(wb);
+	if (err) {
 		ti->error = "init_read_cache_cells failed";
 		goto bad_read_cache_cells;
 	}
@@ -1803,7 +1803,7 @@ static int writeboost_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	restore_arg(sync_data_interval);
 	restore_arg(read_cache_threshold);
 
-	return r;
+	return err;
 
 bad_read_cache_cells:
 	free_cache(wb);
@@ -1817,7 +1817,7 @@ bad_ctr_args:
 	free_core_struct(wb);
 	ti->private = NULL;
 
-	return r;
+	return err;
 }
 
 static void writeboost_dtr(struct dm_target *ti)
@@ -1864,12 +1864,12 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	if (!strcasecmp(argv[0], "drop_caches")) {
-		int r = 0;
+		int err = 0;
 		wb->force_drop = true;
-		r = wait_event_interruptible(wb->wait_drop_caches,
-			     !atomic64_read(&wb->nr_dirty_caches));
+		err = wait_event_interruptible(wb->wait_drop_caches,
+			!atomic64_read(&wb->nr_dirty_caches));
 		wb->force_drop = false;
-		return r;
+		return err;
 	}
 
 	return do_consume_optional_argv(wb, &as, 2);
@@ -1968,15 +1968,15 @@ static struct target_type writeboost_target = {
 
 static int __init writeboost_module_init(void)
 {
-	int r = 0;
+	int err = 0;
 
-	r = dm_register_target(&writeboost_target);
-	if (r < 0) {
+	err = dm_register_target(&writeboost_target);
+	if (err < 0) {
 		DMERR("Failed to register target");
-		return r;
+		return err;
 	}
 
-	return r;
+	return err;
 }
 
 static void __exit writeboost_module_exit(void)

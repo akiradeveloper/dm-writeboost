@@ -59,11 +59,11 @@ static void process_deferred_barriers(struct wb_device *wb, struct flush_job *jo
 		struct bio *bio;
 
 		/* Make all the preceding data persistent. */
-		int res = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+		int err = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 
 		/* Ack the chained barrier requests. */
 		while ((bio = bio_list_pop(&job->barrier_ios)))
-			bio_endio_compat(bio, res);
+			bio_endio_compat(bio, err);
 	}
 }
 

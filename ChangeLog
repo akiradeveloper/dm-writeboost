@@ -1,3 +1,10 @@
+2016-09-12  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.5
+	* Fix read-caching data corruption issue
+	* Insert memory barriers
+	* Code cleanup
+
 2016-08-28  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.4

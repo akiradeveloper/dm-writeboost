@@ -112,6 +112,7 @@ void flush_proc(struct work_struct *work)
 	 * We can count up the last_flushed_segment_id only after segment
 	 * is written persistently. Counting up the id is serialized.
 	 */
+	smp_mb();
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
 }
@@ -360,6 +361,8 @@ static void do_writeback_segs(struct wb_device *wb)
 		writeback_seg = *(wb->writeback_segs + k);
 		mark_clean_seg(wb, writeback_seg->seg);
 	}
+
+	smp_mb();
 	atomic64_add(wb->nr_cur_batched_writeback, &wb->last_writeback_segment_id);
 }
 

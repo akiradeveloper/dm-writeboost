@@ -854,8 +854,10 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, uns
 	if (!cell->cancelled)
 		copy_bio_payload(cell->data, bio);
 
-	if (atomic_dec_and_test(&cells->ack_count))
+	if (atomic_dec_and_test(&cells->ack_count)) {
+		smp_mb();
 		queue_work(cells->wq, &wb->read_cache_work);
+	}
 }
 
 /*
@@ -976,7 +978,10 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 		struct read_cache_cell *cell = cells->array + i;
 		cell->cancelled = false;
 	}
+
 	atomic_set(&cells->ack_count, cells->size);
+
+	smp_mb();
 
 	mutex_lock(&wb->io_lock);
 	cells->rb_root = RB_ROOT;

@@ -59,11 +59,11 @@ static void process_deferred_barriers(struct wb_device *wb, struct flush_job *jo
 		struct bio *bio;
 
 		/* Make all the preceding data persistent. */
-		int res = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+		int err = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 
 		/* Ack the chained barrier requests. */
 		while ((bio = bio_list_pop(&job->barrier_ios)))
-			bio_endio_compat(bio, res);
+			bio_endio_compat(bio, err);
 	}
 }
 
@@ -112,6 +112,7 @@ void flush_proc(struct work_struct *work)
 	 * We can count up the last_flushed_segment_id only after segment
 	 * is written persistently. Counting up the id is serialized.
 	 */
+	smp_mb();
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
 }
@@ -137,7 +138,7 @@ static void writeback_endio(unsigned long error, void *context)
 
 static void submit_writeback_io(struct wb_device *wb, struct writeback_io *writeback_io)
 {
-	BUG_ON(!writeback_io->data_bits);
+	ASSERT(writeback_io->data_bits > 0);
 
 	if (writeback_io->data_bits == 255) {
 		struct dm_io_request io_req_w = {
@@ -207,8 +208,8 @@ static void submit_writeback_ios(struct wb_device *wb)
  */
 static bool compare_writeback_io(struct writeback_io *a, struct writeback_io *b)
 {
-	BUG_ON(!a);
-	BUG_ON(!b);
+	ASSERT(a);
+	ASSERT(b);
 	if (a->sector < b->sector)
 		return true;
 	if (a->id < b->id)
@@ -287,7 +288,7 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 
 		struct metablock *mb = seg->mb_array + i;
 		struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, mb);
-		BUG_ON(!dirtiness.data_bits);
+		ASSERT(dirtiness.data_bits > 0);
 		if (!dirtiness.is_dirty)
 			continue;
 
@@ -360,6 +361,8 @@ static void do_writeback_segs(struct wb_device *wb)
 		writeback_seg = *(wb->writeback_segs + k);
 		mark_clean_seg(wb, writeback_seg->seg);
 	}
+
+	smp_mb();
 	atomic64_add(wb->nr_cur_batched_writeback, &wb->last_writeback_segment_id);
 }
 

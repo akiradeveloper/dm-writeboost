@@ -1292,8 +1292,13 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 	io_req = (struct dm_io_request) {
 		.client = wb->io_client,
 		.bi_rw = READ,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 		.mem.type = DM_IO_BIO,
 		.mem.ptr.bio = bio,
+#else
+		.mem.type = DM_IO_BVEC,
+		.mem.ptr.bvec = bio->bi_io_vec + bio->bi_idx,
+#endif
 		.notify.fn = read_backing_async_callback,
 		.notify.context = ctx
 	};

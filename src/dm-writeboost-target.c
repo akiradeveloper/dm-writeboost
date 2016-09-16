@@ -283,14 +283,20 @@ static bool needs_queue_seg(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-/*
- * Prepare the RAM buffer for segment write.
- */
+static void copy_barrier_requests(struct rambuffer *rambuf, struct wb_device *wb)
+{
+	bio_list_init(&rambuf->barrier_ios);
+	bio_list_merge(&rambuf->barrier_ios, &wb->barrier_ios);
+	bio_list_init(&wb->barrier_ios);
+}
+
 static void prepare_rambuffer(struct rambuffer *rambuf,
 			      struct wb_device *wb,
 			      struct segment_header *seg)
 {
+	rambuf->seg = seg;
 	prepare_segment_header_device(rambuf->data, wb, seg);
+	copy_barrier_requests(rambuf, wb);
 }
 
 static void init_rambuffer(struct wb_device *wb)
@@ -303,15 +309,9 @@ static void init_rambuffer(struct wb_device *wb)
  */
 static void __acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {
-	struct rambuffer *next_rambuf;
-	u32 tmp32;
-
 	wait_for_flushing(wb, SUB_ID(id, NR_RAMBUF_POOL));
 
-	div_u64_rem(id - 1, NR_RAMBUF_POOL, &tmp32);
-	next_rambuf = wb->rambuf_pool + tmp32;
-
-	wb->current_rambuf = next_rambuf;
+	wb->current_rambuf = get_rambuffer_by_id(wb, id);
 
 	init_rambuffer(wb);
 }
@@ -363,31 +363,15 @@ static void prepare_new_seg(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-static void copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
-{
-	bio_list_init(&job->barrier_ios);
-	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
-	bio_list_init(&wb->barrier_ios);
-}
-
-static void init_flush_job(struct flush_job *job, struct wb_device *wb)
-{
-	job->wb = wb;
-	job->seg = wb->current_seg;
-
-	copy_barrier_requests(job, wb);
-}
-
 static void queue_flush_job(struct wb_device *wb)
 {
-	struct flush_job *job = &wb->current_rambuf->job;
-
 	wait_event(wb->inflight_ios_wq, !atomic_read(&wb->current_seg->nr_inflight_ios));
 
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
-	init_flush_job(job, wb);
-	queue_work(wb->flusher_wq, &job->work);
+	smp_mb();
+	atomic64_inc(&wb->last_queued_segment_id);
+	wake_up_process(wb->flush_daemon);
 }
 
 static void queue_current_buffer(struct wb_device *wb)

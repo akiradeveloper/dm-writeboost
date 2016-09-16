@@ -52,9 +52,9 @@ void flush_barrier_ios(struct work_struct *work)
 
 /*----------------------------------------------------------------------------*/
 
-static void process_deferred_barriers(struct wb_device *wb, struct flush_job *job)
+static void process_deferred_barriers(struct wb_device *wb, struct rambuffer *rambuf)
 {
-	bool has_barrier = !bio_list_empty(&job->barrier_ios);
+	bool has_barrier = !bio_list_empty(&rambuf->barrier_ios);
 	if (has_barrier) {
 		struct bio *bio;
 
@@ -62,51 +62,59 @@ static void process_deferred_barriers(struct wb_device *wb, struct flush_job *jo
 		int err = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 
 		/* Ack the chained barrier requests. */
-		while ((bio = bio_list_pop(&job->barrier_ios)))
+		while ((bio = bio_list_pop(&rambuf->barrier_ios)))
 			bio_endio_compat(bio, err);
 	}
 }
 
-void flush_proc(struct work_struct *work)
+static bool should_flush(struct wb_device *wb)
 {
-	struct flush_job *job = container_of(work, struct flush_job, work);
-	struct rambuffer *rambuf = container_of(job, struct rambuffer, job);
+	return atomic64_read(&wb->last_queued_segment_id) >
+	       atomic64_read(&wb->last_flushed_segment_id);
+}
 
-	struct wb_device *wb = job->wb;
-	struct segment_header *seg = job->seg;
+static void do_flush_proc(struct wb_device *wb)
+{
+	struct segment_header *seg;
+	struct rambuffer *rambuf;
+	u64 id;
+	struct dm_io_request io_req;
+	struct dm_io_region region;
 
-	struct dm_io_request io_req = {
+	if (!should_flush(wb)) {
+		schedule_timeout_interruptible(msecs_to_jiffies(1000));
+		return;
+	}
+
+	id = atomic64_read(&wb->last_flushed_segment_id) + 1;
+
+	smp_rmb();
+
+	rambuf = get_rambuffer_by_id(wb, id);
+	seg = rambuf->seg;
+
+	io_req = (struct dm_io_request) {
 		.client = wb->io_client,
 		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = rambuf->data,
 	};
-	struct dm_io_region region = {
+	region = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
 		.sector = seg->start_sector,
 		.count = (seg->length + 1) << 3,
 	};
 
-	int coeff = 1;
-
-	if (seg->id != (atomic64_read(&wb->last_flushed_segment_id) + 1)) {
-		DMCRIT("Some flush job was skipped due to some unknown error");
+	if (wb_io(&io_req, 1, &region, NULL, false))
 		return;
-	}
-
-	while (wb_io(&io_req, 1, &region, NULL, false)) {
-		unsigned long intvl = msecs_to_jiffies(coeff * 1000);
-		schedule_timeout_interruptible(intvl);
-		coeff++;
-	}
 
 	/*
 	 * Deferred ACK for barrier requests
 	 * To serialize barrier ACK in logging we wait for the previous segment
 	 * to be persistently written (if needed).
 	 */
-	process_deferred_barriers(wb, job);
+	process_deferred_barriers(wb, rambuf);
 
 	/*
 	 * We can count up the last_flushed_segment_id only after segment
@@ -115,6 +123,14 @@ void flush_proc(struct work_struct *work)
 	smp_mb();
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
+}
+
+int flush_daemon_proc(void *data)
+{
+	struct wb_device *wb = data;
+	while (!kthread_should_stop())
+		do_flush_proc(wb);
+	return 0;
 }
 
 void wait_for_flushing(struct wb_device *wb, u64 id)
@@ -320,7 +336,7 @@ static bool try_writeback_segs(struct wb_device *wb)
 {
 	struct writeback_segment *writeback_seg;
 	size_t writeback_io_count = 0;
-	size_t k;
+	u32 k;
 
 	/* Create RB-tree */
 	wb->writeback_tree = RB_ROOT;
@@ -345,9 +361,6 @@ static bool try_writeback_segs(struct wb_device *wb)
 
 static bool do_writeback_segs(struct wb_device *wb)
 {
-	size_t k;
-	struct writeback_segment *writeback_seg;
-
 	if (!try_writeback_segs(wb))
 		return false;
 
@@ -412,7 +425,7 @@ static void do_writeback_proc(struct wb_device *wb)
 
 	/* A segment after written back is clean */
 	for (k = 0; k < wb->nr_cur_batched_writeback; k++) {
-		writeback_seg = *(wb->writeback_segs + k);
+		struct writeback_segment *writeback_seg = *(wb->writeback_segs + k);
 		mark_clean_seg(wb, writeback_seg->seg);
 	}
 

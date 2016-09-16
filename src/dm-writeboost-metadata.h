@@ -24,6 +24,7 @@
 
 struct segment_header *
 get_segment_header_by_id(struct wb_device *, u64 segment_id);
+struct rambuffer *get_rambuffer_by_id(struct wb_device *wb, u64 id);
 sector_t calc_mb_start_sector(struct wb_device *, struct segment_header *,
 			      u32 mb_idx);
 u8 mb_idx_inseg(struct wb_device *, u32 mb_idx);

@@ -149,22 +149,12 @@ struct segment_header {
 /*----------------------------------------------------------------------------*/
 
 /*
- * Foreground queues this object and flush daemon later pops one job to submit
- * logging write to the cache device.
- */
-struct flush_job {
-	struct work_struct work;
-	struct wb_device *wb;
-	struct segment_header *seg;
-	struct bio_list barrier_ios; /* List of deferred bios */
-};
-
-/*
  * RAM buffer is a buffer that any dirty data are first written into.
  */
 struct rambuffer {
+	struct segment_header *seg;
 	void *data;
-	struct flush_job job;
+	struct bio_list barrier_ios; /* List of deferred bios */
 };
 
 /*----------------------------------------------------------------------------*/
@@ -329,6 +319,8 @@ struct wb_device {
 
 	struct rambuffer *rambuf_pool;
 
+	atomic64_t last_queued_segment_id;
+
 	/*--------------------------------------------------------------------*/
 
 	/********************
@@ -339,12 +331,11 @@ struct wb_device {
 
 	/*--------------------------------------------------------------------*/
 
-	/****************
-	 * Buffer Flusher
-	 ****************/
+	/**************
+	 * Flush Daemon
+	 **************/
 
-	mempool_t *flush_job_pool;
-	struct workqueue_struct *flusher_wq;
+	struct task_struct *flush_daemon;
 
 	/*
 	 * Wait for a specified segment to be flushed. Non-interruptible

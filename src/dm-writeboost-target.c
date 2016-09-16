@@ -369,7 +369,7 @@ static void queue_flush_job(struct wb_device *wb)
 
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
-	smp_mb();
+	smp_wmb();
 	atomic64_inc(&wb->last_queued_segment_id);
 	wake_up_process(wb->flush_daemon);
 }
@@ -838,10 +838,8 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, uns
 	if (!cell->cancelled)
 		copy_bio_payload(cell->data, bio);
 
-	if (atomic_dec_and_test(&cells->ack_count)) {
-		smp_mb();
+	if (atomic_dec_and_test(&cells->ack_count))
 		queue_work(cells->wq, &wb->read_cache_work);
-	}
 }
 
 /*
@@ -958,18 +956,15 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i, cur_threshold;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		cell->cancelled = false;
-	}
-
-	atomic_set(&cells->ack_count, cells->size);
-
-	smp_mb();
 
 	mutex_lock(&wb->io_lock);
 	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
+	atomic_set(&cells->ack_count, cells->size);
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		cell->cancelled = false;
+	}
 	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
 		cells->threshold = cur_threshold;
@@ -1030,6 +1025,7 @@ static void read_cache_proc(struct work_struct *work)
 		struct read_cache_cell *cell = cells->array + i;
 		inject_read_cache(wb, cell);
 	}
+
 	reinit_read_cache_cells(wb);
 }
 

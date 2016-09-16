@@ -120,7 +120,7 @@ static void do_flush_proc(struct wb_device *wb)
 	 * We can count up the last_flushed_segment_id only after segment
 	 * is written persistently. Counting up the id is serialized.
 	 */
-	smp_mb();
+	smp_wmb();
 	atomic64_inc(&wb->last_flushed_segment_id);
 	wake_up(&wb->flush_wait_queue);
 }
@@ -137,6 +137,7 @@ void wait_for_flushing(struct wb_device *wb, u64 id)
 {
 	wait_event(wb->flush_wait_queue,
 		atomic64_read(&wb->last_flushed_segment_id) >= id);
+	smp_rmb();
 }
 
 /*----------------------------------------------------------------------------*/
@@ -412,6 +413,8 @@ static void do_writeback_proc(struct wb_device *wb)
 		return;
 	}
 
+	smp_rmb();
+
 	/* Store segments into writeback_segs */
 	for (k = 0; k < nr_writeback_tbd; k++) {
 		struct writeback_segment *writeback_seg = *(wb->writeback_segs + k);
@@ -429,7 +432,7 @@ static void do_writeback_proc(struct wb_device *wb)
 		mark_clean_seg(wb, writeback_seg->seg);
 	}
 
-	smp_mb();
+	smp_wmb();
 	atomic64_add(wb->nr_cur_batched_writeback, &wb->last_writeback_segment_id);
 	wake_up(&wb->writeback_wait_queue);
 }
@@ -452,6 +455,7 @@ void wait_for_writeback(struct wb_device *wb, u64 id)
 	wake_up_process(wb->writeback_daemon);
 	wait_event(wb->writeback_wait_queue,
 		atomic64_read(&wb->last_writeback_segment_id) >= id);
+	smp_rmb();
 	wb->urge_writeback = false;
 }
 

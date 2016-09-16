@@ -343,27 +343,16 @@ static bool try_writeback_segs(struct wb_device *wb)
 	return atomic_read(&wb->writeback_fail_count) == 0;
 }
 
-static void do_writeback_segs(struct wb_device *wb)
+static bool do_writeback_segs(struct wb_device *wb)
 {
 	size_t k;
 	struct writeback_segment *writeback_seg;
 
-	int coeff = 1;
-	while (!try_writeback_segs(wb)) {
-		unsigned long intvl = msecs_to_jiffies(coeff * 1000);
-		schedule_timeout_interruptible(intvl);
-		coeff++;
-	}
+	if (!try_writeback_segs(wb))
+		return false;
+
 	blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL);
-
-	/* A segment after written back is clean */
-	for (k = 0; k < wb->nr_cur_batched_writeback; k++) {
-		writeback_seg = *(wb->writeback_segs + k);
-		mark_clean_seg(wb, writeback_seg->seg);
-	}
-
-	smp_mb();
-	atomic64_add(wb->nr_cur_batched_writeback, &wb->last_writeback_segment_id);
+	return true;
 }
 
 /*
@@ -418,8 +407,17 @@ static void do_writeback_proc(struct wb_device *wb)
 	}
 	wb->nr_cur_batched_writeback = nr_writeback_tbd;
 
-	do_writeback_segs(wb);
+	if (!do_writeback_segs(wb))
+		return;
 
+	/* A segment after written back is clean */
+	for (k = 0; k < wb->nr_cur_batched_writeback; k++) {
+		writeback_seg = *(wb->writeback_segs + k);
+		mark_clean_seg(wb, writeback_seg->seg);
+	}
+
+	smp_mb();
+	atomic64_add(wb->nr_cur_batched_writeback, &wb->last_writeback_segment_id);
 	wake_up(&wb->writeback_wait_queue);
 }
 

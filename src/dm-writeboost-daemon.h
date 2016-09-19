@@ -22,7 +22,7 @@
 
 /*----------------------------------------------------------------------------*/
 
-void flush_proc(struct work_struct *);
+int flush_daemon_proc(void *);
 void wait_for_flushing(struct wb_device *, u64 id);
 
 /*----------------------------------------------------------------------------*/

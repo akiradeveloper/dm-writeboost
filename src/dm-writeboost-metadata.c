@@ -321,8 +321,8 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	check_buffer_alignment(buf);
 
 	io_req_sup = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -386,8 +386,8 @@ static int format_superblock_header(struct wb_device *wb)
 	memcpy(buf, &sup, sizeof(sup));
 
 	io_req_sup = (struct dm_io_request) {
+		WB_IO_WRITE_FUA,
 		.client = wb->io_client,
-		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -478,8 +478,8 @@ static int format_all_segment_headers(struct wb_device *wb)
 	/* Submit all the writes asynchronously. */
 	for (i = 0; i < wb->nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
+			WB_IO_WRITE,
 			.client = wb->io_client,
-			.bi_rw = WRITE,
 			.notify.fn = format_segmd_endio,
 			.notify.context = &context,
 			.mem.type = DM_IO_KMEM,
@@ -588,7 +588,6 @@ static int init_rambuf_pool(struct wb_device *wb)
 			goto bad_alloc_data;
 		}
 		wb->rambuf_pool[i].data = alloced;
-		INIT_WORK(&wb->rambuf_pool[i].job.work, flush_proc);
 	}
 
 	return err;
@@ -604,6 +603,13 @@ static void free_rambuf_pool(struct wb_device *wb)
 	for (i = 0; i < NR_RAMBUF_POOL; i++)
 		vfree(wb->rambuf_pool[i].data);
 	kfree(wb->rambuf_pool);
+}
+
+struct rambuffer *get_rambuffer_by_id(struct wb_device *wb, u64 id)
+{
+	u32 tmp32;
+	div_u64_rem(id - 1, NR_RAMBUF_POOL, &tmp32);
+	return wb->rambuf_pool + tmp32;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -651,8 +657,8 @@ static int read_superblock_record(struct superblock_record_device *record,
 	check_buffer_alignment(buf);
 
 	io_req = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -680,8 +686,8 @@ static int read_whole_segment(void *buf, struct wb_device *wb,
 			      struct segment_header *seg)
 {
 	struct dm_io_request io_req = {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = buf,
@@ -772,8 +778,8 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 				continue;
 
 			io_req = (struct dm_io_request) {
+				WB_IO_WRITE,
 				.client = wb->io_client,
-				.bi_rw = WRITE,
 				.notify.fn = NULL,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = wio.data + (i << 9),
@@ -823,8 +829,8 @@ static int read_segment_header(void *buf, struct wb_device *wb,
 			       struct segment_header *seg)
 {
 	struct dm_io_request io_req = {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -1032,6 +1038,9 @@ static int replay_log_on_cache(struct wb_device *wb)
 
 	/* Setup last_flushed_segment_id */
 	atomic64_set(&wb->last_flushed_segment_id, max_id);
+
+	/* Setup last_queued_segment_id */
+	atomic64_set(&wb->last_queued_segment_id, max_id);
 
 	/* Setup last_writeback_segment_id */
 	infer_last_writeback_id(wb);
@@ -1245,16 +1254,15 @@ bad_writeback_daemon:
 	return err;
 }
 
-static int init_flusher(struct wb_device *wb)
+static int init_flush_daemon(struct wb_device *wb)
 {
-	wb->flusher_wq = create_singlethread_workqueue("dmwb_flusher");
-	if (!wb->flusher_wq) {
-		DMERR("Failed to allocate flusher_wq");
-		return -ENOMEM;
-	}
-
+	int err = 0;
 	init_waitqueue_head(&wb->flush_wait_queue);
-	return 0;
+	CREATE_DAEMON(flush_daemon);
+	return err;
+
+bad_flush_daemon:
+	return err;
 }
 
 static int init_flush_barrier_work(struct wb_device *wb)
@@ -1330,10 +1338,10 @@ int resume_cache(struct wb_device *wb)
 		goto bad_recover;
 	}
 
-	err = init_flusher(wb);
+	err = init_flush_daemon(wb);
 	if (err) {
-		DMERR("init_flusher failed");
-		goto bad_flusher;
+		DMERR("init_flush_daemon failed");
+		goto bad_flush_daemon;
 	}
 
 	err = init_flush_barrier_work(wb);
@@ -1369,8 +1377,8 @@ bad_updater:
 bad_modulator:
 	destroy_workqueue(wb->barrier_wq);
 bad_flush_barrier_work:
-	destroy_workqueue(wb->flusher_wq);
-bad_flusher:
+	kthread_stop(wb->flush_daemon);
+bad_flush_daemon:
 bad_recover:
 	kthread_stop(wb->writeback_daemon);
 	free_writeback_ios(wb);
@@ -1394,7 +1402,7 @@ void free_cache(struct wb_device *wb)
 
 	destroy_workqueue(wb->barrier_wq);
 
-	destroy_workqueue(wb->flusher_wq);
+	kthread_stop(wb->flush_daemon);
 
 	kthread_stop(wb->writeback_daemon);
 	free_writeback_ios(wb);

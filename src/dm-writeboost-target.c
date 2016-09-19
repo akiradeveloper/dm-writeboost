@@ -94,9 +94,10 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 			eb = *err_bits;
 
 		format_dev_t(buf, dev);
-		DMERR("%s() I/O error(%d), bits(%lu), dev(%s), sector(%llu), rw(%d)",
+		DMERR("%s() I/O error(%d), bits(%lu), dev(%s), sector(%llu), %s",
 		      caller, err, eb,
-		      buf, (unsigned long long) regions->sector, io_req->bi_rw);
+		      buf, (unsigned long long) regions->sector,
+		      req_is_write(io_req) ? "write" : "read");
 	}
 
 	return err;
@@ -119,10 +120,10 @@ void bio_endio_compat(struct bio *bio, int error)
 #endif
 }
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
-#define bi_sector(bio) (bio)->bi_sector
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 #define bi_sector(bio) (bio)->bi_iter.bi_sector
+#else
+#define bi_sector(bio) (bio)->bi_sector
 #endif
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
@@ -283,14 +284,20 @@ static bool needs_queue_seg(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-/*
- * Prepare the RAM buffer for segment write.
- */
+static void copy_barrier_requests(struct rambuffer *rambuf, struct wb_device *wb)
+{
+	bio_list_init(&rambuf->barrier_ios);
+	bio_list_merge(&rambuf->barrier_ios, &wb->barrier_ios);
+	bio_list_init(&wb->barrier_ios);
+}
+
 static void prepare_rambuffer(struct rambuffer *rambuf,
 			      struct wb_device *wb,
 			      struct segment_header *seg)
 {
+	rambuf->seg = seg;
 	prepare_segment_header_device(rambuf->data, wb, seg);
+	copy_barrier_requests(rambuf, wb);
 }
 
 static void init_rambuffer(struct wb_device *wb)
@@ -303,15 +310,9 @@ static void init_rambuffer(struct wb_device *wb)
  */
 static void __acquire_new_rambuffer(struct wb_device *wb, u64 id)
 {
-	struct rambuffer *next_rambuf;
-	u32 tmp32;
-
 	wait_for_flushing(wb, SUB_ID(id, NR_RAMBUF_POOL));
 
-	div_u64_rem(id - 1, NR_RAMBUF_POOL, &tmp32);
-	next_rambuf = wb->rambuf_pool + tmp32;
-
-	wb->current_rambuf = next_rambuf;
+	wb->current_rambuf = get_rambuffer_by_id(wb, id);
 
 	init_rambuffer(wb);
 }
@@ -363,31 +364,15 @@ static void prepare_new_seg(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-static void copy_barrier_requests(struct flush_job *job, struct wb_device *wb)
-{
-	bio_list_init(&job->barrier_ios);
-	bio_list_merge(&job->barrier_ios, &wb->barrier_ios);
-	bio_list_init(&wb->barrier_ios);
-}
-
-static void init_flush_job(struct flush_job *job, struct wb_device *wb)
-{
-	job->wb = wb;
-	job->seg = wb->current_seg;
-
-	copy_barrier_requests(job, wb);
-}
-
 static void queue_flush_job(struct wb_device *wb)
 {
-	struct flush_job *job = &wb->current_rambuf->job;
-
 	wait_event(wb->inflight_ios_wq, !atomic_read(&wb->current_seg->nr_inflight_ios));
 
 	prepare_rambuffer(wb->current_rambuf, wb, wb->current_seg);
 
-	init_flush_job(job, wb);
-	queue_work(wb->flusher_wq, &job->work);
+	smp_wmb();
+	atomic64_inc(&wb->last_queued_segment_id);
+	wake_up_process(wb->flush_daemon);
 }
 
 static void queue_current_buffer(struct wb_device *wb)
@@ -607,8 +592,8 @@ static int fill_payload_by_backing(struct wb_device *wb, struct bio *bio)
 		return -ENOMEM;
 
 	io_req = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf + (offset << 9),
@@ -659,8 +644,8 @@ static void *read_mb(struct wb_device *wb, struct segment_header *seg,
 			continue;
 
 		io_req = (struct dm_io_request) {
+			WB_IO_READ,
 			.client = wb->io_client,
-			.bi_rw = READ,
 			.notify.fn = NULL,
 			.mem.type = DM_IO_KMEM,
 			.mem.ptr.addr = result + (i << 9),
@@ -854,10 +839,8 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, uns
 	if (!cell->cancelled)
 		copy_bio_payload(cell->data, bio);
 
-	if (atomic_dec_and_test(&cells->ack_count)) {
-		smp_mb();
+	if (atomic_dec_and_test(&cells->ack_count))
 		queue_work(cells->wq, &wb->read_cache_work);
-	}
 }
 
 /*
@@ -974,18 +957,15 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 {
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i, cur_threshold;
-	for (i = 0; i < cells->size; i++) {
-		struct read_cache_cell *cell = cells->array + i;
-		cell->cancelled = false;
-	}
-
-	atomic_set(&cells->ack_count, cells->size);
-
-	smp_mb();
 
 	mutex_lock(&wb->io_lock);
 	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
+	atomic_set(&cells->ack_count, cells->size);
+	for (i = 0; i < cells->size; i++) {
+		struct read_cache_cell *cell = cells->array + i;
+		cell->cancelled = false;
+	}
 	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
 		cells->threshold = cur_threshold;
@@ -1046,6 +1026,7 @@ static void read_cache_proc(struct work_struct *work)
 		struct read_cache_cell *cell = cells->array + i;
 		inject_read_cache(wb, cell);
 	}
+
 	reinit_read_cache_cells(wb);
 }
 
@@ -1195,10 +1176,10 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
-	 * bio with REQ_FUA has data.
-	 * For such bio, we first treat it like a normal bio and then as a REQ_FLUSH bio.
+	 * bio with FUA flag has data.
+	 * We first handle it as a normal write bio and then as a barrier bio.
 	 */
-	if (bio->bi_rw & REQ_FUA) {
+	if (bio_is_fua(bio)) {
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1310,10 +1291,15 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 	ASSERT(bio_is_fullsize(bio));
 
 	io_req = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 		.mem.type = DM_IO_BIO,
 		.mem.ptr.bio = bio,
+#else
+		.mem.type = DM_IO_BVEC,
+		.mem.ptr.bvec = bio->bi_io_vec + bio->bi_idx,
+#endif
 		.notify.fn = read_backing_async_callback,
 		.notify.context = ctx
 	};
@@ -1434,12 +1420,9 @@ static int process_bio(struct wb_device *wb, struct bio *bio)
 	return bio_is_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
 }
 
-/*
- * Process bio with REQ_FLUSH
- */
-static int process_flush_bio(struct wb_device *wb, struct bio *bio)
+static int process_barrier_bio(struct wb_device *wb, struct bio *bio)
 {
-	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
+	/* barrier bio doesn't have data */
 	ASSERT(bio_sectors(bio) == 0);
 	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
@@ -1452,8 +1435,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_NONE;
 
-	if (bio->bi_rw & REQ_FLUSH)
-		return process_flush_bio(wb, bio);
+	if (bio_is_barrier(bio))
+		return process_barrier_bio(wb, bio);
 
 	return process_bio(wb, bio);
 }
@@ -1957,7 +1940,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 5},
+	.version = {2, 2, 6},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

@@ -1,3 +1,10 @@
+2016-09-19  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.6
+	* Clarify producer-consumer pattern
+	* Fix build error with 3.10 kernel
+	* Fix build error with 3.14 kernel
+
 2016-09-12  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.5

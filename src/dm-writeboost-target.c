@@ -94,9 +94,10 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 			eb = *err_bits;
 
 		format_dev_t(buf, dev);
-		DMERR("%s() I/O error(%d), bits(%lu), dev(%s), sector(%llu), rw(%d)",
+		DMERR("%s() I/O error(%d), bits(%lu), dev(%s), sector(%llu), %s",
 		      caller, err, eb,
-		      buf, (unsigned long long) regions->sector, req_is_write(io_req));
+		      buf, (unsigned long long) regions->sector,
+		      req_is_write(io_req) ? "write" : "read");
 	}
 
 	return err;

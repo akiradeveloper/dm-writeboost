@@ -119,10 +119,10 @@ void bio_endio_compat(struct bio *bio, int error)
 #endif
 }
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
-#define bi_sector(bio) (bio)->bi_sector
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 #define bi_sector(bio) (bio)->bi_iter.bi_sector
+#else
+#define bi_sector(bio) (bio)->bi_sector
 #endif
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)

@@ -1176,8 +1176,8 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 	dec_inflight_ios(wb, wb->current_seg);
 
 	/*
-	 * bio with REQ_FUA has data.
-	 * For such bio, we first treat it like a normal bio and then as a REQ_FLUSH bio.
+	 * bio with FUA flag has data.
+	 * We first handle it as a normal write bio and then as a barrier bio.
 	 */
 	if (bio_is_fua(bio)) {
 		queue_barrier_io(wb, bio);
@@ -1420,12 +1420,9 @@ static int process_bio(struct wb_device *wb, struct bio *bio)
 	return bio_is_write(bio) ? process_write(wb, bio) : process_read(wb, bio);
 }
 
-/*
- * Process bio with REQ_FLUSH
- */
-static int process_flush_bio(struct wb_device *wb, struct bio *bio)
+static int process_barrier_bio(struct wb_device *wb, struct bio *bio)
 {
-	/* In device-mapper bio with REQ_FLUSH is guaranteed to have no data. */
+	/* barrier bio doesn't have data */
 	ASSERT(bio_sectors(bio) == 0);
 	queue_barrier_io(wb, bio);
 	return DM_MAPIO_SUBMITTED;
@@ -1438,8 +1435,8 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_NONE;
 
-	if (bio_is_flush(bio))
-		return process_flush_bio(wb, bio);
+	if (bio_is_barrier(bio))
+		return process_barrier_bio(wb, bio);
 
 	return process_bio(wb, bio);
 }

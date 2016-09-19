@@ -321,8 +321,8 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	check_buffer_alignment(buf);
 
 	io_req_sup = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -386,8 +386,8 @@ static int format_superblock_header(struct wb_device *wb)
 	memcpy(buf, &sup, sizeof(sup));
 
 	io_req_sup = (struct dm_io_request) {
+		WB_IO_WRITE_FUA,
 		.client = wb->io_client,
-		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -478,8 +478,8 @@ static int format_all_segment_headers(struct wb_device *wb)
 	/* Submit all the writes asynchronously. */
 	for (i = 0; i < wb->nr_segments; i++) {
 		struct dm_io_request io_req_seg = {
+			WB_IO_WRITE,
 			.client = wb->io_client,
-			.bi_rw = WRITE,
 			.notify.fn = format_segmd_endio,
 			.notify.context = &context,
 			.mem.type = DM_IO_KMEM,
@@ -657,8 +657,8 @@ static int read_superblock_record(struct superblock_record_device *record,
 	check_buffer_alignment(buf);
 
 	io_req = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,
@@ -686,8 +686,8 @@ static int read_whole_segment(void *buf, struct wb_device *wb,
 			      struct segment_header *seg)
 {
 	struct dm_io_request io_req = {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = buf,
@@ -778,8 +778,8 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 				continue;
 
 			io_req = (struct dm_io_request) {
+				WB_IO_WRITE,
 				.client = wb->io_client,
-				.bi_rw = WRITE,
 				.notify.fn = NULL,
 				.mem.type = DM_IO_KMEM,
 				.mem.ptr.addr = wio.data + (i << 9),
@@ -829,8 +829,8 @@ static int read_segment_header(void *buf, struct wb_device *wb,
 			       struct segment_header *seg)
 {
 	struct dm_io_request io_req = {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,

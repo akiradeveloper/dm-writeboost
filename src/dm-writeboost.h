@@ -498,4 +498,22 @@ sector_t dm_devsize(struct dm_dev *);
 
 /*----------------------------------------------------------------------------*/
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
+#define req_is_write(req) op_is_write((req)->bi_op)
+#define bio_is_flush(bio) ((bio)->bi_opf & REQ_PREFLUSH)
+#define bio_is_fua(bio) ((bio)->bi_opf & REQ_FUA)
+#define WB_IO_WRITE .bi_op = REQ_OP_WRITE, .bi_op_flags = 0
+#define WB_IO_READ .bi_op = REQ_OP_READ, .bi_op_flags = 0
+#define WB_IO_WRITE_FUA .bi_op = REQ_OP_WRITE, .bi_op_flags = REQ_FUA
+#else
+#define req_is_write(req) ((req)->bi_rw == WRITE)
+#define bio_is_flush(bio) ((bio)->bi_rw & REQ_FLUSH)
+#define bio_is_fua(bio) ((bio)->bi_rw & REQ_FUA)
+#define WB_IO_WRITE .bi_rw = WRITE
+#define WB_IO_READ .bi_rw = READ
+#define WB_IO_WRITE_FUA .bi_rw = WRITE_FUA
+#endif
+
+/*----------------------------------------------------------------------------*/
+
 #endif

@@ -94,8 +94,8 @@ static void do_flush_proc(struct wb_device *wb)
 	seg = rambuf->seg;
 
 	io_req = (struct dm_io_request) {
+		WB_IO_WRITE,
 		.client = wb->io_client,
-		.bi_rw = WRITE,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = rambuf->data,
@@ -159,8 +159,8 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 
 	if (writeback_io->data_bits == 255) {
 		struct dm_io_request io_req_w = {
+			WB_IO_WRITE,
 			.client = wb->io_client,
-			.bi_rw = WRITE,
 			.notify.fn = writeback_endio,
 			.notify.context = wb,
 			.mem.type = DM_IO_VMA,
@@ -184,8 +184,8 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 				continue;
 
 			io_req_w = (struct dm_io_request) {
+				WB_IO_WRITE,
 				.client = wb->io_client,
-				.bi_rw = WRITE,
 				.notify.fn = writeback_endio,
 				.notify.context = wb,
 				.mem.type = DM_IO_VMA,
@@ -275,8 +275,8 @@ static int fill_writeback_seg(struct wb_device *wb, struct writeback_segment *wr
 	struct segment_header *seg = writeback_seg->seg;
 
 	struct dm_io_request io_req_r = {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_VMA,
 		.mem.ptr.addr = writeback_seg->buf,
@@ -378,6 +378,7 @@ void update_nr_empty_segs(struct wb_device *wb)
 		atomic64_read(&wb->last_writeback_segment_id) + wb->nr_segments
 		- wb->current_seg->id;
 }
+
 static u32 calc_nr_writeback(struct wb_device *wb)
 {
 	u32 nr_writeback_candidates =
@@ -505,8 +506,8 @@ static void update_superblock_record(struct wb_device *wb)
 	memcpy(buf, &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
+		WB_IO_WRITE_FUA,
 		.client = wb->io_client,
-		.bi_rw = WRITE_FUA,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf,

@@ -96,7 +96,7 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 		format_dev_t(buf, dev);
 		DMERR("%s() I/O error(%d), bits(%lu), dev(%s), sector(%llu), rw(%d)",
 		      caller, err, eb,
-		      buf, (unsigned long long) regions->sector, io_req->bi_rw);
+		      buf, (unsigned long long) regions->sector, req_is_write(io_req));
 	}
 
 	return err;
@@ -591,8 +591,8 @@ static int fill_payload_by_backing(struct wb_device *wb, struct bio *bio)
 		return -ENOMEM;
 
 	io_req = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 		.notify.fn = NULL,
 		.mem.type = DM_IO_KMEM,
 		.mem.ptr.addr = buf + (offset << 9),
@@ -643,8 +643,8 @@ static void *read_mb(struct wb_device *wb, struct segment_header *seg,
 			continue;
 
 		io_req = (struct dm_io_request) {
+			WB_IO_READ,
 			.client = wb->io_client,
-			.bi_rw = READ,
 			.notify.fn = NULL,
 			.mem.type = DM_IO_KMEM,
 			.mem.ptr.addr = result + (i << 9),
@@ -1178,7 +1178,7 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 	 * bio with REQ_FUA has data.
 	 * For such bio, we first treat it like a normal bio and then as a REQ_FLUSH bio.
 	 */
-	if (bio->bi_rw & REQ_FUA) {
+	if (bio_is_fua(bio)) {
 		queue_barrier_io(wb, bio);
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1290,8 +1290,8 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 	ASSERT(bio_is_fullsize(bio));
 
 	io_req = (struct dm_io_request) {
+		WB_IO_READ,
 		.client = wb->io_client,
-		.bi_rw = READ,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 		.mem.type = DM_IO_BIO,
 		.mem.ptr.bio = bio,
@@ -1437,7 +1437,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
 	pbd->type = PBD_NONE;
 
-	if (bio->bi_rw & REQ_FLUSH)
+	if (bio_is_flush(bio))
 		return process_flush_bio(wb, bio);
 
 	return process_bio(wb, bio);

@@ -456,8 +456,8 @@ void wait_for_writeback(struct wb_device *wb, u64 id)
 	wake_up_process(wb->writeback_daemon);
 	wait_event(wb->writeback_wait_queue,
 		atomic64_read(&wb->last_writeback_segment_id) >= id);
-	smp_rmb();
 	wb->urge_writeback = false;
+	smp_rmb();
 }
 
 /*----------------------------------------------------------------------------*/

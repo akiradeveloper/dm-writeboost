@@ -1928,7 +1928,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 	case STATUSTYPE_TABLE:
 		format_dev_t(buf, wb->backing_dev->bdev->bd_dev);
-		DMEMIT(" %s", buf);
+		DMEMIT("%s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
 

@@ -70,7 +70,6 @@ e.g.
 BACKING=/dev/sdb # example
 CACHE=/dev/sdc # example
 sz=`blockdev --getsz ${BACKING}`
-dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE"
 dmsetup create wbdev --table "0 $sz writeboost $BACKING $CACHE 2 writeback_threshold 70"
 
 Shut down the system

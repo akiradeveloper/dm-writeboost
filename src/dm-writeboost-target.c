@@ -674,7 +674,7 @@ enum PBD_FLAG {
 	PBD_READ_SEG = 2,
 };
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0) || RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7,3))
 #define PER_BIO_DATA_SIZE per_io_data_size
 #else
 #define PER_BIO_DATA_SIZE per_bio_data_size

@@ -37,6 +37,12 @@
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
 
+/* We use RHEL_RELEASE_VERSION to compile with RHEL/CentOS 7.3's kernel */
+#ifndef RHEL_RELEASE_CODE
+#define RHEL_RELEASE_CODE 0
+#define RHEL_RELEASE_VERSION(a,b) (((a) << 8) + (b))
+#endif
+
 /*----------------------------------------------------------------------------*/
 
 #define SUB_ID(x, y) ((x) > (y) ? (x) - (y) : 0)

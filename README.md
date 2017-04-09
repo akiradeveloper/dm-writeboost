@@ -46,6 +46,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 * https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  
 * https://gitlab.com/onlyjob/writeboost: A management tool including init script  
 * https://github.com/akiradeveloper/writeboost-test-suite: Testing framework written in Scala
+* https://github.com/kazuhisya/dm-writeboost-rpm: Providing RPM packages
 
 ## Related works
 * Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)

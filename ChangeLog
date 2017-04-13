@@ -1,3 +1,10 @@
+2017-04-13  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.7
+	* Fix build error with CentOS 7.3
+	* Wake up writeback thread only when needed
+	* Fix doc (deprecated --getsize option)
+
 2016-09-19  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.6

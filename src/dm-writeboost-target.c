@@ -3,7 +3,7 @@
  * Log-structured Caching for Linux
  *
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2017 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -674,7 +674,7 @@ enum PBD_FLAG {
 	PBD_READ_SEG = 2,
 };
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0) || RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7,3))
 #define PER_BIO_DATA_SIZE per_io_data_size
 #else
 #define PER_BIO_DATA_SIZE per_bio_data_size
@@ -1928,7 +1928,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 	case STATUSTYPE_TABLE:
 		format_dev_t(buf, wb->backing_dev->bdev->bd_dev);
-		DMEMIT(" %s", buf);
+		DMEMIT("%s", buf);
 		format_dev_t(buf, wb->cache_dev->bdev->bd_dev);
 		DMEMIT(" %s", buf);
 
@@ -1940,7 +1940,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 6},
+	.version = {2, 2, 7},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

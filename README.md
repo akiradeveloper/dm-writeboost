@@ -38,6 +38,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 ## Distribution Packages
 - Debian: [Stretch](https://packages.debian.org/source/testing/dm-writeboost), [Sid](https://packages.debian.org/source/sid/dm-writeboost)  
 - Ubuntu: [Yakkety](http://packages.ubuntu.com/yakkety/kernel/dm-writeboost-dkms),  [Xenial](http://packages.ubuntu.com/xenial/dm-writeboost-dkms), [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
+- [Arch](https://aur.archlinux.org/packages/dm-writeboost/)
 - [Tanglu](http://packages.tanglu.org/ja/dasyatis/kernel/dm-writeboost-dkms)
 - Momonga
 
@@ -45,6 +46,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 * https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  
 * https://gitlab.com/onlyjob/writeboost: A management tool including init script  
 * https://github.com/akiradeveloper/writeboost-test-suite: Testing framework written in Scala
+* https://github.com/kazuhisya/dm-writeboost-rpm: Providing RPM packages
 
 ## Related works
 * Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)
@@ -59,7 +61,7 @@ Awarded by Japanese OSS Encouragement Award. Thanks!
 
 ## License
 ```
-Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
+Copyright (C) 2012-2017 Akira Hayakawa <ruby.wktk@gmail.com>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

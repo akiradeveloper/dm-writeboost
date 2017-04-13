@@ -1,6 +1,6 @@
 /*
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2017 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,6 +36,12 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
+
+/* We use RHEL_RELEASE_VERSION to compile with RHEL/CentOS 7.3's kernel */
+#ifndef RHEL_RELEASE_CODE
+#define RHEL_RELEASE_CODE 0
+#define RHEL_RELEASE_VERSION(a,b) (((a) << 8) + (b))
+#endif
 
 /*----------------------------------------------------------------------------*/
 

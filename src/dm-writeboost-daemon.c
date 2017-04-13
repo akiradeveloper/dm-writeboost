@@ -1,6 +1,6 @@
 /*
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2016 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2017 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -452,12 +452,14 @@ int writeback_daemon_proc(void *data)
  */
 void wait_for_writeback(struct wb_device *wb, u64 id)
 {
-	wb->urge_writeback = true;
-	wake_up_process(wb->writeback_daemon);
-	wait_event(wb->writeback_wait_queue,
-		atomic64_read(&wb->last_writeback_segment_id) >= id);
+	if (atomic64_read(&wb->last_writeback_segment_id) < id) {
+		wb->urge_writeback = true;
+		wake_up_process(wb->writeback_daemon);
+		wait_event(wb->writeback_wait_queue,
+			atomic64_read(&wb->last_writeback_segment_id) >= id);
+		wb->urge_writeback = false;
+	}
 	smp_rmb();
-	wb->urge_writeback = false;
 }
 
 /*----------------------------------------------------------------------------*/

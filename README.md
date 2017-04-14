@@ -37,7 +37,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 
 ## Distribution Packages
 - Debian: [Stretch](https://packages.debian.org/source/testing/dm-writeboost), [Sid](https://packages.debian.org/source/sid/dm-writeboost)  
-- Ubuntu: [Yakkety](http://packages.ubuntu.com/yakkety/kernel/dm-writeboost-dkms),  [Xenial](http://packages.ubuntu.com/xenial/dm-writeboost-dkms), [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
+- Ubuntu: [Zesty](http://packages.ubuntu.com/zesty/kernel/dm-writeboost-dkms), [Yakkety](http://packages.ubuntu.com/yakkety/kernel/dm-writeboost-dkms), [Xenial](http://packages.ubuntu.com/xenial/dm-writeboost-dkms), [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
 - [Arch](https://aur.archlinux.org/packages/dm-writeboost/)
 - [Tanglu](http://packages.tanglu.org/ja/dasyatis/kernel/dm-writeboost-dkms)
 - Momonga

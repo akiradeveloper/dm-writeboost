@@ -112,7 +112,10 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 void bio_endio_compat(struct bio *bio, int error)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+	bio->bi_status = error;
+	bio_endio(bio);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
 	bio->bi_error = error;
 	bio_endio(bio);
 #else
@@ -1441,7 +1444,11 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+static int writeboost_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
+#else
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
+#endif
 {
 	struct wb_device *wb = ti->private;
 	struct per_bio_data *pbd = per_bio_data(wb, bio);

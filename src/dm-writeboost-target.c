@@ -1444,9 +1444,17 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
+/*
+ * DM_ENDIO_DONE was actually introduced since 4.12 but used restrictedly in rq-based dm.
+ * In 4.13, a patch titled "dm: change ->end_io calling convention" changed the dm internal
+ * so other bio-based dm targets should follow the convension.
+ * For this reason, I will start to use the DM_ENDIO_DONE at 4.13.
+ */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+#define DM_ENDIO_DONE_COMPAT DM_ENDIO_DONE
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
 #else
+#define DM_ENDIO_DONE_COMPAT 0
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 #endif
 {
@@ -1456,10 +1464,10 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	switch (pbd->type) {
 	case PBD_NONE:
 	case PBD_WILL_CACHE:
-		return 0;
+		return DM_ENDIO_DONE_COMPAT;
 	case PBD_READ_SEG:
 		dec_inflight_ios(wb, pbd->seg);
-		return 0;
+		return DM_ENDIO_DONE_COMPAT;
 	default:
 		BUG();
 	}

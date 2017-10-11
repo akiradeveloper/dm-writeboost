@@ -514,6 +514,9 @@ static void update_superblock_record(struct wb_device *wb)
 		cpu_to_le64(atomic64_read(&wb->last_writeback_segment_id));
 
 	buf = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	if (!buf)
+		return;
+
 	memset(buf, 0, 8 << 9);
 	memcpy(buf + (7 << 9), &o, sizeof(o));
 

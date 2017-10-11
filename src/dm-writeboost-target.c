@@ -110,13 +110,16 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 /*----------------------------------------------------------------------------*/
 
-void bio_endio_compat(struct bio *bio, int error)
+void bio_io_success_compat(struct bio *bio)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
-	bio->bi_error = error;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+	bio->bi_status = BLK_STS_OK;
+	bio_endio(bio);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio->bi_error = 0;
 	bio_endio(bio);
 #else
-	bio_endio(bio, error);
+	bio_endio(bio, 0);
 #endif
 }
 
@@ -1184,7 +1187,7 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	bio_endio_compat(bio, 0);
+	bio_io_success_compat(bio);
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -1264,7 +1267,7 @@ static void read_backing_async_callback_onstack(unsigned long error, struct read
 	if (error)
 		bio_io_error(ctx->bio);
 	else
-		bio_endio_compat(ctx->bio, 0);
+		bio_io_success_compat(ctx->bio);
 }
 
 static void read_backing_async_callback(unsigned long error, void *context)
@@ -1367,7 +1370,7 @@ read_buffered_mb_exit:
 		if (unlikely(err))
 			bio_io_error(bio);
 		else
-			bio_endio_compat(bio, 0);
+			bio_io_success_compat(bio);
 
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1399,7 +1402,7 @@ read_mb_exit:
 		if (unlikely(err))
 			bio_io_error(bio);
 		else
-			bio_endio_compat(bio, 0);
+			bio_io_success_compat(bio);
 
 		return DM_MAPIO_SUBMITTED;
 	}

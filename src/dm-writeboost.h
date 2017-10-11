@@ -487,7 +487,7 @@ int prepare_overwrite(struct wb_device *, struct segment_header *, struct metabl
 	do_check_buffer_alignment(buf, #buf, __func__)
 void do_check_buffer_alignment(void *, const char *, const char *);
 
-void bio_endio_compat(struct bio *bio, int error);
+void bio_io_success_compat(struct bio *bio);
 
 /*
  * dm_io wrapper

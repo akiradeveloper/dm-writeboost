@@ -63,7 +63,17 @@ static void process_deferred_barriers(struct wb_device *wb, struct rambuffer *ra
 
 		/* Ack the chained barrier requests. */
 		while ((bio = bio_list_pop(&rambuf->barrier_ios)))
-			bio_endio_compat(bio, err);
+			/*
+			 * We won't endio with the err returned from blkdev_issue_flush
+			 * because it's sort of meaningless to return a detailed error here
+			 * and other parts of the code even in foreground round the error
+			 * off to bio_io_error which returns a generic error which results in
+			 * IOERR in userland.
+			 */
+			if (unlikely(err))
+				bio_io_error(bio);
+			else
+				bio_io_success_compat(bio);
 	}
 }
 

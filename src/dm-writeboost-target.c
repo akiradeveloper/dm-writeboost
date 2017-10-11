@@ -131,7 +131,11 @@ void bio_io_success_compat(struct bio *bio)
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+	bio_set_dev(bio, dev->bdev);
+#else
 	bio->bi_bdev = dev->bdev;
+#endif
 	bi_sector(bio) = sector;
 }
 

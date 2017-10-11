@@ -383,6 +383,7 @@ static int format_superblock_header(struct wb_device *wb)
 	if (!buf)
 		return -ENOMEM;
 
+	memset(buf, 0, 8 << 9);
 	memcpy(buf, &sup, sizeof(sup));
 
 	io_req_sup = (struct dm_io_request) {

@@ -1229,8 +1229,10 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 static int process_write_wb(struct wb_device *wb, struct bio *bio)
 {
 	int err = do_process_write(wb, bio);
-	if (err)
-		return err;
+	if (err) {
+		bio_io_error(bio);
+		return DM_MAPIO_SUBMITTED;
+	}
 	return complete_process_write(wb, bio);
 }
 

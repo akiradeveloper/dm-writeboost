@@ -275,8 +275,6 @@ struct wb_device {
 
 	u8 nr_caches_inseg; /* Const */
 
-	struct kmem_cache *buf_1_cachep;
-	mempool_t *buf_1_pool; /* 1 sector buffer pool */
 	struct kmem_cache *buf_8_cachep;
 	mempool_t *buf_8_pool; /* 8 sector buffer pool */
 	struct workqueue_struct *io_wq;

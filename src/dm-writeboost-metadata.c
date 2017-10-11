@@ -315,7 +315,7 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	struct dm_io_request io_req_sup;
 	struct dm_io_region region_sup;
 
-	void *buf = mempool_alloc(wb->buf_1_pool, GFP_KERNEL);
+	void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 	check_buffer_alignment(buf);
@@ -330,7 +330,7 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	region_sup = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
 		.sector = 0,
-		.count = 1,
+		.count = 8,
 	};
 	err = wb_io(&io_req_sup, 1, &region_sup, NULL, false);
 	if (err)
@@ -339,7 +339,7 @@ static int read_superblock_header(struct superblock_header_device *sup,
 	memcpy(sup, buf, sizeof(*sup));
 
 bad_io:
-	mempool_free(buf, wb->buf_1_pool);
+	mempool_free(buf, wb->buf_8_pool);
 	return err;
 }
 
@@ -379,7 +379,7 @@ static int format_superblock_header(struct wb_device *wb)
 		.magic = cpu_to_le32(WB_MAGIC),
 	};
 
-	void *buf = mempool_alloc(wb->buf_1_pool, GFP_KERNEL);
+	void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -395,14 +395,14 @@ static int format_superblock_header(struct wb_device *wb)
 	region_sup = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
 		.sector = 0,
-		.count = 1,
+		.count = 8,
 	};
 	err = wb_io(&io_req_sup, 1, &region_sup, NULL, false);
 	if (err)
 		goto bad_io;
 
 bad_io:
-	mempool_free(buf, wb->buf_1_pool);
+	mempool_free(buf, wb->buf_8_pool);
 	return err;
 }
 
@@ -469,7 +469,8 @@ static int format_all_segment_headers(struct wb_device *wb)
 	void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-	memset(buf, 0, 1 << 12);
+
+	memset(buf, 0, 8 << 9);
 	check_buffer_alignment(buf);
 
 	atomic64_set(&context.count, wb->nr_segments);
@@ -650,7 +651,7 @@ static int read_superblock_record(struct superblock_record_device *record,
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 
-	void *buf = mempool_alloc(wb->buf_1_pool, GFP_KERNEL);
+	void *buf = mempool_alloc(wb->buf_8_pool, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -665,17 +666,17 @@ static int read_superblock_record(struct superblock_record_device *record,
 	};
 	region = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
-		.sector = (1 << 11) - 1,
-		.count = 1,
+		.sector = (1 << 11) - 8,
+		.count = 8,
 	};
 	err = wb_io(&io_req, 1, &region, NULL, false);
 	if (err)
 		goto bad_io;
 
-	memcpy(record, buf, sizeof(*record));
+	memcpy(record, buf + (7 << 9), sizeof(*record));
 
 bad_io:
-	mempool_free(buf, wb->buf_1_pool);
+	mempool_free(buf, wb->buf_8_pool);
 	return err;
 }
 

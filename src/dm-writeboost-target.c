@@ -1625,18 +1625,6 @@ static int init_core_struct(struct dm_target *ti)
 		goto bad_kcopyd_client;
 	}
 
-	wb->buf_1_cachep = kmem_cache_create("dmwb_buf_1",
-			1 << 9, 1 << 9, SLAB_RED_ZONE, NULL);
-	if (!wb->buf_1_cachep) {
-		err = -ENOMEM;
-		goto bad_buf_1_cachep;
-	}
-	wb->buf_1_pool = mempool_create_slab_pool(16, wb->buf_1_cachep);
-	if (!wb->buf_1_pool) {
-		err = -ENOMEM;
-		goto bad_buf_1_pool;
-	}
-
 	wb->buf_8_cachep = kmem_cache_create("dmwb_buf_8",
 			1 << 12, 1 << 12, SLAB_RED_ZONE, NULL);
 	if (!wb->buf_8_cachep) {
@@ -1678,10 +1666,6 @@ bad_io_wq:
 bad_buf_8_pool:
 	kmem_cache_destroy(wb->buf_8_cachep);
 bad_buf_8_cachep:
-	mempool_destroy(wb->buf_1_pool);
-bad_buf_1_pool:
-	kmem_cache_destroy(wb->buf_1_cachep);
-bad_buf_1_cachep:
 	dm_kcopyd_client_destroy(wb->copier);
 bad_kcopyd_client:
 	kfree(wb);
@@ -1694,8 +1678,6 @@ static void free_core_struct(struct wb_device *wb)
 	destroy_workqueue(wb->io_wq);
 	mempool_destroy(wb->buf_8_pool);
 	kmem_cache_destroy(wb->buf_8_cachep);
-	mempool_destroy(wb->buf_1_pool);
-	kmem_cache_destroy(wb->buf_1_cachep);
 	dm_kcopyd_client_destroy(wb->copier);
 	kfree(wb);
 }

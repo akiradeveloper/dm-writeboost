@@ -513,9 +513,9 @@ static void update_superblock_record(struct wb_device *wb)
 	o.last_writeback_segment_id =
 		cpu_to_le64(atomic64_read(&wb->last_writeback_segment_id));
 
-	buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO);
-	memset(buf, 0, 1 << 9);
-	memcpy(buf, &o, sizeof(o));
+	buf = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	memset(buf, 0, 8 << 9);
+	memcpy(buf + (7 << 9), &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
 		WB_IO_WRITE_FUA,
@@ -526,12 +526,12 @@ static void update_superblock_record(struct wb_device *wb)
 	};
 	region = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
-		.sector = (1 << 11) - 1,
-		.count = 1,
+		.sector = (1 << 11) - 8,
+		.count = 8,
 	};
 	wb_io(&io_req, 1, &region, NULL, false);
 
-	mempool_free(buf, wb->buf_1_pool);
+	mempool_free(buf, wb->buf_8_pool);
 }
 
 int sb_record_updater_proc(void *data)

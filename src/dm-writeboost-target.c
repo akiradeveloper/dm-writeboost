@@ -1444,7 +1444,11 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+static int writeboost_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
+#else
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
+#endif
 {
 	struct wb_device *wb = ti->private;
 	struct per_bio_data *pbd = per_bio_data(wb, bio);

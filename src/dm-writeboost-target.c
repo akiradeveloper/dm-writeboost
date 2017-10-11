@@ -1863,18 +1863,17 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	return do_consume_optional_argv(wb, &as, 2);
 }
 
-/*
- * Since Writeboost is just a cache target and the cache block size is fixed
- * to 4KB. There is no reason to count the cache device in device iteration.
- */
 static int writeboost_iterate_devices(struct dm_target *ti,
 				      iterate_devices_callout_fn fn, void *data)
 {
+	int r = 0;
 	struct wb_device *wb = ti->private;
-	struct dm_dev *backing = wb->backing_dev;
-	sector_t start = 0;
-	sector_t len = dm_devsize(backing);
-	return fn(ti, backing, start, len, data);
+
+	r = fn(ti, wb->cache_dev, 0, dm_devsize(wb->cache_dev), data);
+	if (!r)
+		r = fn(ti, wb->backing_dev, 0, ti->len, data);
+
+	return r;
 }
 
 static void writeboost_io_hints(struct dm_target *ti, struct queue_limits *limits)

@@ -110,13 +110,16 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 /*----------------------------------------------------------------------------*/
 
-void bio_endio_compat(struct bio *bio, int error)
+void bio_io_success_compat(struct bio *bio)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
-	bio->bi_error = error;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+	bio->bi_status = BLK_STS_OK;
+	bio_endio(bio);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio->bi_error = 0;
 	bio_endio(bio);
 #else
-	bio_endio(bio, error);
+	bio_endio(bio, 0);
 #endif
 }
 
@@ -128,7 +131,11 @@ void bio_endio_compat(struct bio *bio, int error)
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+	bio_set_dev(bio, dev->bdev);
+#else
 	bio->bi_bdev = dev->bdev;
+#endif
 	bi_sector(bio) = sector;
 }
 
@@ -1184,7 +1191,7 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	bio_endio_compat(bio, 0);
+	bio_io_success_compat(bio);
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -1222,8 +1229,10 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
 static int process_write_wb(struct wb_device *wb, struct bio *bio)
 {
 	int err = do_process_write(wb, bio);
-	if (err)
-		return err;
+	if (err) {
+		bio_io_error(bio);
+		return DM_MAPIO_SUBMITTED;
+	}
 	return complete_process_write(wb, bio);
 }
 
@@ -1264,7 +1273,7 @@ static void read_backing_async_callback_onstack(unsigned long error, struct read
 	if (error)
 		bio_io_error(ctx->bio);
 	else
-		bio_endio_compat(ctx->bio, 0);
+		bio_io_success_compat(ctx->bio);
 }
 
 static void read_backing_async_callback(unsigned long error, void *context)
@@ -1367,7 +1376,7 @@ read_buffered_mb_exit:
 		if (unlikely(err))
 			bio_io_error(bio);
 		else
-			bio_endio_compat(bio, 0);
+			bio_io_success_compat(bio);
 
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1399,7 +1408,7 @@ read_mb_exit:
 		if (unlikely(err))
 			bio_io_error(bio);
 		else
-			bio_endio_compat(bio, 0);
+			bio_io_success_compat(bio);
 
 		return DM_MAPIO_SUBMITTED;
 	}
@@ -1441,7 +1450,19 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 	return process_bio(wb, bio);
 }
 
+/*
+ * DM_ENDIO_DONE was actually introduced since 4.12 but used restrictedly in rq-based dm.
+ * In 4.13, a patch titled "dm: change ->end_io calling convention" changed the dm internal
+ * so other bio-based dm targets should follow the convension.
+ * For this reason, I will start to use the DM_ENDIO_DONE at 4.13.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
+#define DM_ENDIO_DONE_COMPAT DM_ENDIO_DONE
+static int writeboost_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
+#else
+#define DM_ENDIO_DONE_COMPAT 0
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
+#endif
 {
 	struct wb_device *wb = ti->private;
 	struct per_bio_data *pbd = per_bio_data(wb, bio);
@@ -1449,10 +1470,10 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	switch (pbd->type) {
 	case PBD_NONE:
 	case PBD_WILL_CACHE:
-		return 0;
+		return DM_ENDIO_DONE_COMPAT;
 	case PBD_READ_SEG:
 		dec_inflight_ios(wb, pbd->seg);
-		return 0;
+		return DM_ENDIO_DONE_COMPAT;
 	default:
 		BUG();
 	}
@@ -1606,18 +1627,6 @@ static int init_core_struct(struct dm_target *ti)
 		goto bad_kcopyd_client;
 	}
 
-	wb->buf_1_cachep = kmem_cache_create("dmwb_buf_1",
-			1 << 9, 1 << 9, SLAB_RED_ZONE, NULL);
-	if (!wb->buf_1_cachep) {
-		err = -ENOMEM;
-		goto bad_buf_1_cachep;
-	}
-	wb->buf_1_pool = mempool_create_slab_pool(16, wb->buf_1_cachep);
-	if (!wb->buf_1_pool) {
-		err = -ENOMEM;
-		goto bad_buf_1_pool;
-	}
-
 	wb->buf_8_cachep = kmem_cache_create("dmwb_buf_8",
 			1 << 12, 1 << 12, SLAB_RED_ZONE, NULL);
 	if (!wb->buf_8_cachep) {
@@ -1659,10 +1668,6 @@ bad_io_wq:
 bad_buf_8_pool:
 	kmem_cache_destroy(wb->buf_8_cachep);
 bad_buf_8_cachep:
-	mempool_destroy(wb->buf_1_pool);
-bad_buf_1_pool:
-	kmem_cache_destroy(wb->buf_1_cachep);
-bad_buf_1_cachep:
 	dm_kcopyd_client_destroy(wb->copier);
 bad_kcopyd_client:
 	kfree(wb);
@@ -1675,8 +1680,6 @@ static void free_core_struct(struct wb_device *wb)
 	destroy_workqueue(wb->io_wq);
 	mempool_destroy(wb->buf_8_pool);
 	kmem_cache_destroy(wb->buf_8_cachep);
-	mempool_destroy(wb->buf_1_pool);
-	kmem_cache_destroy(wb->buf_1_cachep);
 	dm_kcopyd_client_destroy(wb->copier);
 	kfree(wb);
 }
@@ -1862,18 +1865,17 @@ static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
 	return do_consume_optional_argv(wb, &as, 2);
 }
 
-/*
- * Since Writeboost is just a cache target and the cache block size is fixed
- * to 4KB. There is no reason to count the cache device in device iteration.
- */
 static int writeboost_iterate_devices(struct dm_target *ti,
 				      iterate_devices_callout_fn fn, void *data)
 {
+	int r = 0;
 	struct wb_device *wb = ti->private;
-	struct dm_dev *backing = wb->backing_dev;
-	sector_t start = 0;
-	sector_t len = dm_devsize(backing);
-	return fn(ti, backing, start, len, data);
+
+	r = fn(ti, wb->cache_dev, 0, dm_devsize(wb->cache_dev), data);
+	if (!r)
+		r = fn(ti, wb->backing_dev, 0, ti->len, data);
+
+	return r;
 }
 
 static void writeboost_io_hints(struct dm_target *ti, struct queue_limits *limits)
@@ -1940,7 +1942,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 7},
+	.version = {2, 2, 8},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

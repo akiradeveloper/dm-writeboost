@@ -63,7 +63,17 @@ static void process_deferred_barriers(struct wb_device *wb, struct rambuffer *ra
 
 		/* Ack the chained barrier requests. */
 		while ((bio = bio_list_pop(&rambuf->barrier_ios)))
-			bio_endio_compat(bio, err);
+			/*
+			 * We won't endio with the err returned from blkdev_issue_flush
+			 * because it's sort of meaningless to return a detailed error here
+			 * and other parts of the code even in foreground round the error
+			 * off to bio_io_error which returns a generic error which results in
+			 * IOERR in userland.
+			 */
+			if (unlikely(err))
+				bio_io_error(bio);
+			else
+				bio_io_success_compat(bio);
 	}
 }
 
@@ -503,9 +513,12 @@ static void update_superblock_record(struct wb_device *wb)
 	o.last_writeback_segment_id =
 		cpu_to_le64(atomic64_read(&wb->last_writeback_segment_id));
 
-	buf = mempool_alloc(wb->buf_1_pool, GFP_NOIO);
-	memset(buf, 0, 1 << 9);
-	memcpy(buf, &o, sizeof(o));
+	buf = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
+	if (!buf)
+		return;
+
+	memset(buf, 0, 8 << 9);
+	memcpy(buf + (7 << 9), &o, sizeof(o));
 
 	io_req = (struct dm_io_request) {
 		WB_IO_WRITE_FUA,
@@ -516,12 +529,12 @@ static void update_superblock_record(struct wb_device *wb)
 	};
 	region = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
-		.sector = (1 << 11) - 1,
-		.count = 1,
+		.sector = (1 << 11) - 8,
+		.count = 8,
 	};
 	wb_io(&io_req, 1, &region, NULL, false);
 
-	mempool_free(buf, wb->buf_1_pool);
+	mempool_free(buf, wb->buf_8_pool);
 }
 
 int sb_record_updater_proc(void *data)

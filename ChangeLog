@@ -1,3 +1,9 @@
+2017-10-15  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.8
+	* Fix build error with 4.14 kernel
+	* Support 4Kn devices
+
 2017-04-13  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.7

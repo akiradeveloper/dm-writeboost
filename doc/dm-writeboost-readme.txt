@@ -47,7 +47,7 @@ Trigger caching device reformat
 The caching device is triggered reformating only if the first one sector of the
 caching device is zeroed out. Note that this operation should be omitted when
 you resume the caching device.
-e.g. dd if=/dev/zero of=/dev/mapper/wbdev oflag=direct bs=512 count=1
+e.g. dd if=/dev/zero of=$CACHE oflag=direct bs=512 count=1
 
 Construct dm-writeboost'd device
 --------------------------------

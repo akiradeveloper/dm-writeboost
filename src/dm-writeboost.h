@@ -520,4 +520,12 @@ sector_t dm_devsize(struct dm_dev *);
 
 /*----------------------------------------------------------------------------*/
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+#define read_once(x) READ_ONCE(x)
+#else
+#define read_once(x) ACCESS_ONCE(x)
+#endif
+
+/*----------------------------------------------------------------------------*/
+
 #endif

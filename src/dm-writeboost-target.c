@@ -782,7 +782,7 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 
 	ASSERT(cells->threshold > 0);
 
-	if (!ACCESS_ONCE(wb->read_cache_threshold))
+	if (!read_once(wb->read_cache_threshold))
 		return false;
 
 	if (!cells->cursor)
@@ -973,7 +973,7 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 		struct read_cache_cell *cell = cells->array + i;
 		cell->cancelled = false;
 	}
-	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
+	cur_threshold = read_once(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
 		cells->threshold = cur_threshold;
 		cells->over_threshold = false;

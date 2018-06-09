@@ -1,6 +1,6 @@
 /*
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2017 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2018 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -516,6 +516,14 @@ sector_t dm_devsize(struct dm_dev *);
 #define WB_IO_WRITE .bi_rw = WRITE
 #define WB_IO_READ .bi_rw = READ
 #define WB_IO_WRITE_FUA .bi_rw = WRITE_FUA
+#endif
+
+/*----------------------------------------------------------------------------*/
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
+#define read_once(x) READ_ONCE(x)
+#else
+#define read_once(x) ACCESS_ONCE(x)
 #endif
 
 /*----------------------------------------------------------------------------*/

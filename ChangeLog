@@ -1,3 +1,9 @@
+2018-06-09  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.9
+	* Fix build error with 4.15 kernel
+	* Fix build error with 4.17 kernel
+
 2017-10-15  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.8

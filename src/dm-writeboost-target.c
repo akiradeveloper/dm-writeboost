@@ -3,7 +3,7 @@
  * Log-structured Caching for Linux
  *
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2017 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2018 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -782,7 +782,7 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 
 	ASSERT(cells->threshold > 0);
 
-	if (!ACCESS_ONCE(wb->read_cache_threshold))
+	if (!read_once(wb->read_cache_threshold))
 		return false;
 
 	if (!cells->cursor)
@@ -973,7 +973,7 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 		struct read_cache_cell *cell = cells->array + i;
 		cell->cancelled = false;
 	}
-	cur_threshold = ACCESS_ONCE(wb->read_cache_threshold);
+	cur_threshold = read_once(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
 		cells->threshold = cur_threshold;
 		cells->over_threshold = false;
@@ -1840,7 +1840,12 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv,
+			      char *result, unsigned maxlen)
+#else
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
+#endif
 {
 	struct wb_device *wb = ti->private;
 
@@ -1942,7 +1947,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 8},
+	.version = {2, 2, 9},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

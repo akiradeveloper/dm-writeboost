@@ -1840,7 +1840,12 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv,
+			      char *result, unsigned maxlen)
+#else
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
+#endif
 {
 	struct wb_device *wb = ti->private;
 

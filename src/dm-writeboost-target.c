@@ -424,13 +424,13 @@ static void inc_stat(struct wb_device *wb,
 
 	int i = 0;
 	if (rw)
-		i |= (1 << STAT_WRITE);
+		i |= (1 << WB_STAT_WRITE);
 	if (found)
-		i |= (1 << STAT_HIT);
+		i |= (1 << WB_STAT_HIT);
 	if (on_buffer)
-		i |= (1 << STAT_ON_BUFFER);
+		i |= (1 << WB_STAT_ON_BUFFER);
 	if (fullsize)
-		i |= (1 << STAT_FULLSIZE);
+		i |= (1 << WB_STAT_FULLSIZE);
 
 	v = &wb->stat[i];
 	atomic64_inc(v);

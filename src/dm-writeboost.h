@@ -232,10 +232,10 @@ struct read_cache_cells {
 /*----------------------------------------------------------------------------*/
 
 enum STATFLAG {
-	STAT_WRITE = 3, /* Write or read */
-	STAT_HIT = 2, /* Hit or miss */
-	STAT_ON_BUFFER = 1, /* Found on buffer or on the cache device */
-	STAT_FULLSIZE = 0, /* Bio is fullsize or partial */
+	WB_STAT_WRITE = 3, /* Write or read */
+	WB_STAT_HIT = 2, /* Hit or miss */
+	WB_STAT_ON_BUFFER = 1, /* Found on buffer or on the cache device */
+	WB_STAT_FULLSIZE = 0, /* Bio is fullsize or partial */
 };
 #define STATLEN (1 << 4)
 

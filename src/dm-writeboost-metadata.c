@@ -438,13 +438,10 @@ static void zeroing_complete(int read_err, unsigned long write_err, void *contex
  */
 static int do_zeroing_region(struct wb_device *wb, struct dm_io_region *region)
 {
-	int err;
 	struct zeroing_context zc;
 	zc.error = 0;
 	init_completion(&zc.complete);
-	err = dm_kcopyd_zero(wb->copier, 1, region, 0, zeroing_complete, &zc);
-	if (err)
-		return err;
+	dm_kcopyd_zero(wb->copier, 1, region, 0, zeroing_complete, &zc);
 	wait_for_completion(&zc.complete);
 	return zc.error;
 }

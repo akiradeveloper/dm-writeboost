@@ -8,9 +8,10 @@ DCD, implemented in Solaris, is an OS-level IO controller that builds logs from 
 As a further extension, dm-writeboost supports read-caching which also writes data sequentially.
 
 ## Documents
+- [dm-writeboost-quickstart](https://docs.google.com/presentation/d/1v-L8Ma138o7jNBFqRl0epyc1Lji3XhUH1RGj8p7DVe8/edit?usp=sharing)  
 - doc/dm-writeboost-readme.txt  
 - [dm-writeboost-internal](https://docs.google.com/presentation/d/1mDh5ct3OR-eRxBbci3LQgaTvUFx9WTLw-kkBxNBeTD8/edit?usp=sharing)  
-- [dm-writeboost-for-admin](https://docs.google.com/presentation/d/1v-L8Ma138o7jNBFqRl0epyc1Lji3XhUH1RGj8p7DVe8/edit?usp=sharing)
+- [Wiki](https://github.com/akiradeveloper/dm-writeboost/wiki)
 
 ## Features
 * **Durable**: Any power failure can't break consistency because each log consists of data, metadata and
@@ -36,10 +37,10 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   for system shutdown because dm-writeboost is even durable even against sudden power failure.
 
 ## Distribution Packages
-- Debian: [Stretch](https://packages.debian.org/source/testing/dm-writeboost), [Sid](https://packages.debian.org/source/sid/dm-writeboost)  
-- Ubuntu: [Zesty](http://packages.ubuntu.com/zesty/kernel/dm-writeboost-dkms), [Yakkety](http://packages.ubuntu.com/yakkety/kernel/dm-writeboost-dkms), [Xenial](http://packages.ubuntu.com/xenial/dm-writeboost-dkms), [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
-- [Arch](https://aur.archlinux.org/packages/dm-writeboost/)
-- [Tanglu](http://packages.tanglu.org/ja/dasyatis/kernel/dm-writeboost-dkms)
+- [Debian](https://packages.debian.org/search?keywords=dm-writeboost-dkms)  
+- [Ubuntu](https://packages.ubuntu.com/search?keywords=dm-writeboost-dkms)  
+- [CentOS/Fedora](https://copr.fedorainfracloud.org/coprs/khara/dm-writeboost/)
+- [Arch](https://aur.archlinux.org/packages/dm-writeboost/)  
 - Momonga
 
 ## Related Projects

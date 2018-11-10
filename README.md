@@ -2,15 +2,17 @@
 Log-structured Caching for Linux
 
 ## Overview
-dm-writeboost is originated from [Disk Caching Disk(DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).
+dm-writeboost is originated from [Disk Caching Disk (DCD)](http://www.ele.uri.edu/research/hpcl/DCD/DCD.html).
 DCD, implemented in Solaris, is an OS-level IO controller that builds logs from in-coming writes
 (data and metadata) and then writes the logs sequentially similar to log-structured filesystem.
+dm-writeboost implements the concept on Linux's device-mapper in more sophisticated way.
 As a further extension, dm-writeboost supports read-caching which also writes data sequentially.
 
 ## Documents
+- [dm-writeboost-quickstart](https://docs.google.com/presentation/d/1v-L8Ma138o7jNBFqRl0epyc1Lji3XhUH1RGj8p7DVe8/edit?usp=sharing)  
 - doc/dm-writeboost-readme.txt  
 - [dm-writeboost-internal](https://docs.google.com/presentation/d/1mDh5ct3OR-eRxBbci3LQgaTvUFx9WTLw-kkBxNBeTD8/edit?usp=sharing)  
-- [dm-writeboost-for-admin](https://docs.google.com/presentation/d/1v-L8Ma138o7jNBFqRl0epyc1Lji3XhUH1RGj8p7DVe8/edit?usp=sharing)
+- [Wiki](https://github.com/akiradeveloper/dm-writeboost/wiki)
 
 ## Features
 * **Durable**: Any power failure can't break consistency because each log consists of data, metadata and
@@ -21,9 +23,9 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   metadata updates so the SSD lives longer since SSD's lifetime depends on
   how many writes are submitted.  
 * **Fast**: Since the sequential write is the best I/O pattern for every SSD and the code base is optimized for
-  in-coming random writes, the write performance is the best of all caching drivers including dm-cache and
+  in-coming random writes, the write performance is the best among all caching drivers including dm-cache and
   bcache.  
-* **Portable**: Kernel version 3.10 or later is supported with minimum compile-time macros.
+* **Portable**: All kernel version 3.10 or later is supported with minimum compile-time macros.
 
 ## Usage
 - **Install**: `sudo make install` to install and `sudo make uninstall` to uninstall.
@@ -31,15 +33,13 @@ As a further extension, dm-writeboost supports read-caching which also writes da
   DKMS is required so please install it beforehand. (usually available in package system)
 - **Make a device**: Make a script to build a caching device. Please read doc/dm-writeboost-readme.txt for
   the dmsetup command detail.
-  You also need to rebuild the caching device after reboot. To do this, cron's @reboot
-  is recommended but you can use systemd or sysvinit. Note you don't need to prepare anything
-  for system shutdown because dm-writeboost is even durable even against sudden power failure.
+  After reboot, you need to rebuild the caching device rather than reformatting as in the initial setup.
 
 ## Distribution Packages
-- Debian: [Stretch](https://packages.debian.org/source/testing/dm-writeboost), [Sid](https://packages.debian.org/source/sid/dm-writeboost)  
-- Ubuntu: [Zesty](http://packages.ubuntu.com/zesty/kernel/dm-writeboost-dkms), [Yakkety](http://packages.ubuntu.com/yakkety/kernel/dm-writeboost-dkms), [Xenial](http://packages.ubuntu.com/xenial/dm-writeboost-dkms), [Wily](http://packages.ubuntu.com/wily/dm-writeboost-dkms)
-- [Arch](https://aur.archlinux.org/packages/dm-writeboost/)
-- [Tanglu](http://packages.tanglu.org/ja/dasyatis/kernel/dm-writeboost-dkms)
+- [Debian](https://packages.debian.org/search?keywords=dm-writeboost-dkms)  
+- [Ubuntu](https://packages.ubuntu.com/search?keywords=dm-writeboost-dkms)  
+- [CentOS/Fedora](https://copr.fedorainfracloud.org/coprs/khara/dm-writeboost/)
+- [Arch](https://aur.archlinux.org/packages/dm-writeboost/)  
 - Momonga
 
 ## Related Projects

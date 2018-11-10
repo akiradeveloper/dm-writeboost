@@ -90,7 +90,7 @@ If you want to detach your caching device for some reasons (you don't like
 dm-writeboost anymore or you try to upgrade the caching device to a newly
 perchased device) the safest way to do this is clean the dirty data up from your
 caching device first and then deconstrust the dm-writeboost'd device.
-You can do this by first suspend/resuming the device to drop all transient data
+You can do this by first suspend/resume the device to drop all transient data
 from RAM buffer and then sending drop_caches message to drop dirty cache blocks
 from the caching device.
 e.g.
@@ -130,7 +130,7 @@ Sync all the volatile data every $sync_data_interval second. 0 means disabled.
 read_cache_threshold (int)
   accepts: 0..127
   default: 0 (read caching disabled)
-More than $read_cache_threshold * 4KB consecutive reads won't be staged.
+Reads larger than $read_cache_threshold * 4KB consecutive won't be staged.
 
 write_around_mode (bool)
   accepts: 0..1

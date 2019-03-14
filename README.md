@@ -1,4 +1,8 @@
-# dm-writeboost [![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/akiradeveloper/dm-writeboost?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+# dm-writeboost 
+
+[![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/akiradeveloper/dm-writeboost?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![](https://tokei.rs/b1/github/akiradeveloper/dm-writeboost)](https://github.com/akiradeveloper/dm-writeboost)
+
 Log-structured Caching for Linux
 
 ## Overview

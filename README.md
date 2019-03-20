@@ -1,7 +1,6 @@
 # dm-writeboost 
 
 [![Tokei](https://tokei.rs/b1/github/akiradeveloper/dm-writeboost)](https://github.com/akiradeveloper/dm-writeboost)
-[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](ruby.wktk@gmail.com)
 
 Log-structured Caching for Linux
 

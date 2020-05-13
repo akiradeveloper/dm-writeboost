@@ -21,6 +21,9 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,7,0)
+#include <linux/part_stat.h>
+#endif
 #include <linux/rbtree.h>
 
 /*----------------------------------------------------------------------------*/

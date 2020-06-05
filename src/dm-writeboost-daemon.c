@@ -1,6 +1,6 @@
 /*
  * This file is part of dm-writeboost
- * Copyright (C) 2012-2018 Akira Hayakawa <ruby.wktk@gmail.com>
+ * Copyright (C) 2012-2020 Akira Hayakawa <ruby.wktk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,9 @@
 #include "dm-writeboost-metadata.h"
 #include "dm-writeboost-daemon.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,7,0)
+#include <linux/part_stat.h>
+#endif
 #include <linux/rbtree.h>
 
 /*----------------------------------------------------------------------------*/

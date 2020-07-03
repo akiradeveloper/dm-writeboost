@@ -507,7 +507,7 @@ static int format_all_segment_headers(struct wb_device *wb)
 		goto bad;
 	}
 
-	err = blkdev_issue_flush(dev->bdev, GFP_KERNEL, NULL);
+	err = dm_blkdev_issue_flush(dev->bdev, GFP_KERNEL);
 
 bad:
 	mempool_free(buf, wb->buf_8_pool);

@@ -1837,7 +1837,7 @@ static void writeboost_postsuspend(struct dm_target *ti)
 {
 	struct wb_device *wb = ti->private;
 	flush_current_buffer(wb);
-	blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+	dm_blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO);
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)

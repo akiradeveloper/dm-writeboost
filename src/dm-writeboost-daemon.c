@@ -62,7 +62,7 @@ static void process_deferred_barriers(struct wb_device *wb, struct rambuffer *ra
 		struct bio *bio;
 
 		/* Make all the preceding data persistent. */
-		int err = blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+		int err = dm_blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO);
 
 		/* Ack the chained barrier requests. */
 		while ((bio = bio_list_pop(&rambuf->barrier_ios)))
@@ -378,7 +378,7 @@ static bool do_writeback_segs(struct wb_device *wb)
 	if (!try_writeback_segs(wb))
 		return false;
 
-	blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO, NULL);
+	dm_blkdev_issue_flush(wb->backing_dev->bdev, GFP_NOIO);
 	return true;
 }
 
@@ -578,7 +578,7 @@ int data_synchronizer_proc(void *data)
 		}
 
 		flush_current_buffer(wb);
-		blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+		dm_blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO);
 		schedule_timeout_interruptible(msecs_to_jiffies(intvl));
 	}
 	return 0;

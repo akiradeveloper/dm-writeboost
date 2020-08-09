@@ -1837,7 +1837,7 @@ static void writeboost_postsuspend(struct dm_target *ti)
 {
 	struct wb_device *wb = ti->private;
 	flush_current_buffer(wb);
-	blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO, NULL);
+	dm_blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO);
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
@@ -1947,7 +1947,7 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 
 static struct target_type writeboost_target = {
 	.name = "writeboost",
-	.version = {2, 2, 11},
+	.version = {2, 2, 12},
 	.module = THIS_MODULE,
 	.map = writeboost_map,
 	.end_io = writeboost_end_io,

@@ -534,4 +534,10 @@ sector_t dm_devsize(struct dm_dev *);
 #define dm_blkdev_issue_flush(x, y) blkdev_issue_flush(x, y, NULL)
 #endif
 
+/*----------------------------------------------------------------------------*/
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,9,0)
+#define uninitialized_var(x) x = x
+#endif
+
 #endif

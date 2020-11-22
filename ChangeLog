@@ -1,3 +1,8 @@
+2020-11-22  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.13
+	* Fix build error with 5.9 kernel
+
 2020-08-09  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.12

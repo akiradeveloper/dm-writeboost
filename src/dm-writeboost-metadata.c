@@ -981,7 +981,7 @@ static int infer_last_writeback_id(struct wb_device *wb)
 	u64 inferred_last_writeback_id;
 	u64 record_id;
 
-	struct superblock_record_device uninitialized_var(record);
+	struct superblock_record_device record;
 	err = read_superblock_record(&record, wb);
 	if (err)
 		return err;

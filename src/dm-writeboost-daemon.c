@@ -481,12 +481,16 @@ int writeback_modulator_proc(void *data)
 {
 	struct wb_device *wb = data;
 
-	struct hd_struct *hd = wb->backing_dev->bdev->bd_part;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,11,0)
+	struct block_device *part = wb->backing_dev->bdev;
+#else
+	struct hd_struct *part = wb->backing_dev->bdev->bd_part;
+#endif
 	unsigned long old = 0, new, util;
 	unsigned long intvl = 1000;
 
 	while (!kthread_should_stop()) {
-		new = jiffies_to_msecs(part_stat_read(hd, io_ticks));
+		new = jiffies_to_msecs(part_stat_read(part, io_ticks));
 
 		util = div_u64(100 * (new - old), 1000);
 

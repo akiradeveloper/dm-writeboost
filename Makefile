@@ -1,4 +1,4 @@
-MODULE_VERSION ?= 2.2.13
+MODULE_VERSION ?= 2.2.14
 DKMS_DIR := /usr/src/dm-writeboost-$(MODULE_VERSION)
 DKMS_KEY := -m dm-writeboost -v $(MODULE_VERSION)
 

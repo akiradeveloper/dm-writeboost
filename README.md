@@ -49,7 +49,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 ## Related Projects
 * https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  
 * https://gitlab.com/onlyjob/writeboost: A management tool including init script  
-* https://github.com/akiradeveloper/writeboost-test-suite: Testing framework written in Scala
+* https://github.com/akiradeveloper/device-mapper-tests: Testing framework written in Rust
 * https://github.com/kazuhisya/dm-writeboost-rpm: Providing RPM packages
 
 ## Related works

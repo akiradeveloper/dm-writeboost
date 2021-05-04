@@ -1,3 +1,8 @@
+2021-05-04  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.15
+	* Fix build error with 5.12 kernel
+
 2021-03-21  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.14

@@ -1942,6 +1942,12 @@ static void writeboost_status(struct dm_target *ti, status_type_t type,
 		for (i = 0; i < wb->nr_ctr_args; i++)
 			DMEMIT(" %s", wb->ctr_args[i]);
 		break;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,15,0)
+	case STATUSTYPE_IMA:
+		*result = '\0';
+		break;
+#endif
 	}
 }
 

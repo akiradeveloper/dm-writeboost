@@ -502,13 +502,20 @@ sector_t dm_devsize(struct dm_dev *);
 
 /*----------------------------------------------------------------------------*/
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
-#define req_is_write(req) op_is_write((req)->bi_op)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,0,0)
+#define req_is_write(req) op_is_write((req)->bi_opf)
+#define WB_IO_WRITE .bi_opf = REQ_OP_WRITE
+#define WB_IO_READ .bi_opf = REQ_OP_READ
+#define WB_IO_WRITE_FUA .bi_opf = REQ_OP_WRITE | REQ_FUA
 #define bio_is_barrier(bio) ((bio)->bi_opf & REQ_PREFLUSH)
 #define bio_is_fua(bio) ((bio)->bi_opf & REQ_FUA)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
+#define req_is_write(req) op_is_write((req)->bi_op)
 #define WB_IO_WRITE .bi_op = REQ_OP_WRITE, .bi_op_flags = 0
 #define WB_IO_READ .bi_op = REQ_OP_READ, .bi_op_flags = 0
 #define WB_IO_WRITE_FUA .bi_op = REQ_OP_WRITE, .bi_op_flags = REQ_FUA
+#define bio_is_barrier(bio) ((bio)->bi_opf & REQ_PREFLUSH)
+#define bio_is_fua(bio) ((bio)->bi_opf & REQ_FUA)
 #else
 #define req_is_write(req) ((req)->bi_rw == WRITE)
 #define bio_is_barrier(bio) ((bio)->bi_rw & REQ_FLUSH)

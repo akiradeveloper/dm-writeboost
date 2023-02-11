@@ -1,3 +1,9 @@
+2023-02-11  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.16
+	* Fix build error with 6.0 kernel
+	* Handle STATUSTYPE_IMA
+
 2021-05-04  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.15

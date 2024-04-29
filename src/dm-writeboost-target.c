@@ -26,6 +26,17 @@
 
 #include "linux/sort.h"
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,2)) || \
+	((LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,11)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6,8,0))) || \
+	((LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,23)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6,7,0))) || \
+	((LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,83)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6,2,0)))
+// Linux commit 6e5f0f6383b4896c7e9b943d84b136149d0f45e9 "dm io: Support IO priority"
+// added the IO priority parameter in v6.9-rc1.
+#define DM_IO(arg1, arg2, arg3, arg4) dm_io(arg1, arg2, arg3, arg4, IOPRIO_DEFAULT)
+#else
+#define DM_IO(arg1, arg2, arg3, arg4) dm_io(arg1, arg2, arg3, arg4)
+#endif
+
 /*----------------------------------------------------------------------------*/
 
 void do_check_buffer_alignment(void *buf, const char *name, const char *caller)
@@ -53,7 +64,7 @@ static void wb_io_fn(struct work_struct *work)
 {
 	struct wb_io *io = container_of(work, struct wb_io, work);
 	io->err_bits = 0;
-	io->err = dm_io(io->io_req, io->num_regions, io->regions, &io->err_bits);
+	io->err = DM_IO(io->io_req, io->num_regions, io->regions, &io->err_bits);
 }
 
 int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
@@ -79,7 +90,7 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 		if (err_bits)
 			*err_bits = io.err_bits;
 	} else {
-		err = dm_io(io_req, num_regions, regions, err_bits);
+		err = DM_IO(io_req, num_regions, regions, err_bits);
 	}
 
 	/* err_bits can be NULL. */

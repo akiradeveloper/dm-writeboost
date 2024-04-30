@@ -1,3 +1,9 @@
+2024-05-01  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.17
+	* Fix build error with 6.9 kernel and backports
+	* Improve dkms.conf
+
 2023-02-11  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.16

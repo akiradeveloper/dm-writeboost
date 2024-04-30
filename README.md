@@ -1,8 +1,5 @@
 # dm-writeboost 
 
-[![Tokei](https://tokei.rs/b1/github/akiradeveloper/dm-writeboost)](https://github.com/akiradeveloper/dm-writeboost)
-[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/akiradeveloper)
-
 Log-structured Caching for Linux
 
 ## Overview
@@ -42,15 +39,11 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 ## Distribution Packages
 - [Debian](https://packages.debian.org/search?keywords=dm-writeboost-dkms)  
 - [Ubuntu](https://packages.ubuntu.com/search?keywords=dm-writeboost-dkms)  
-- [CentOS/Fedora](https://copr.fedorainfracloud.org/coprs/khara/dm-writeboost/)
-- [Arch](https://aur.archlinux.org/packages/dm-writeboost/)  
-- Momonga
 
 ## Related Projects
 * https://github.com/akiradeveloper/dm-writeboost-tools: Tools to help users analyze the state of the cache device  
 * https://gitlab.com/onlyjob/writeboost: A management tool including init script  
 * https://github.com/akiradeveloper/device-mapper-tests: Testing framework written in Rust
-* https://github.com/kazuhisya/dm-writeboost-rpm: Providing RPM packages
 
 ## Related works
 * Y. Hu and Q. Yang -- DCD Disk Caching Disk: A New Approach for Boosting I/O Performance (1995)

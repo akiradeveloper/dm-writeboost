@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  run_tests:
+    name: Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install dependencies
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: cargo dkms cryptsetup xfs xfsprogs dbench stress
+          version: 1.0
+
+      - name: Check cryptsetup enabled
+        run: cryptsetup benchmark -c aes-xts-plain64 -s 512
+
+      - name: Checkout device-mapper-tests
+        uses: actions/checkout@v4
+        with:
+          repository: akiradeveloper/device-mapper-tests
+          ref: bump
+          path: tests
+
+      - name: Checkout dm-writeboost
+        uses: actions/checkout@v4
+        with:
+          repository: akiradeveloper/dm-writeboost
+          ref: master
+          path: module
+
+      - name: Install dm-writeboost target
+        working-directory: module
+        run: sudo make install
+
+      - name: Load dm-writeboost
+        run: sudo modprobe dm-writeboost
+
+      - name: Checkout dm-writeboost-tools
+        uses: actions/checkout@v4
+        with:
+          repository: akiradeveloper/dm-writeboost-tools
+          ref: master
+          path: tools
+
+      - name: Install dm-writeboost-tools
+        working-directory: tools
+        run: sudo cargo install --path . --root /usr/local
+
+      - name: Test (wb-command)
+        working-directory: tests/wb-command-tests
+        run: sudo make test
+
+      - name: Test (writeboost)
+        working-directory: tests/writeboost-tests
+        run: sudo make test

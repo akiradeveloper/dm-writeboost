@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: akiradeveloper/device-mapper-tests
-          ref: bump
+          ref: master
           path: tests
 
       - name: Checkout dm-writeboost

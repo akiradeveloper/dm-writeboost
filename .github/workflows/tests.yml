@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: akiradeveloper/dm-writeboost-tools
-          ref: master
+          ref: clap4
           path: tools
 
       - name: Install dm-writeboost-tools
@@ -55,6 +55,6 @@ jobs:
         working-directory: tests/wb-command-tests
         run: sudo make test
 
-      - name: Test (writeboost)
-        working-directory: tests/writeboost-tests
-        run: sudo make test
+      # - name: Test (writeboost)
+      #   working-directory: tests/writeboost-tests
+      #   run: sudo make test

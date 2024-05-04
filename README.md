@@ -1,5 +1,7 @@
 # dm-writeboost 
 
+![CI](https://github.com/akiradeveloper/dm-writeboost/workflows/tests/badge.svg)
+
 Log-structured Caching for Linux
 
 ## Overview

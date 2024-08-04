@@ -11,8 +11,11 @@ on:
 jobs:
   run_tests:
     name: Tests
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
+      - name: Kernel version
+        run: uname -a
+
       - name: Install dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:

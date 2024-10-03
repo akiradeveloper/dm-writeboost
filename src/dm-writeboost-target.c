@@ -116,7 +116,11 @@ int wb_io_internal(struct wb_device *wb, struct dm_io_request *io_req,
 
 sector_t dm_devsize(struct dm_dev *dev)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
 	return i_size_read(dev->bdev->bd_inode) >> 9;
+#else
+	return bdev_nr_sectors(dev->bdev);
+#endif
 }
 
 /*----------------------------------------------------------------------------*/

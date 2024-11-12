@@ -40,7 +40,9 @@ jobs:
 
       - name: Install dm-writeboost target
         working-directory: module
-        run: sudo make install
+        run: |
+          sudo mkdir -p /var/lib/dkms
+          sudo make install
 
       - name: Load dm-writeboost
         run: sudo modprobe dm-writeboost

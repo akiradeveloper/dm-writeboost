@@ -1,3 +1,8 @@
+2024-11-12  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.18
+	* Fix build error with 6.10 kernel
+
 2024-05-01  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.17

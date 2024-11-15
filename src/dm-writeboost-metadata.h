@@ -37,9 +37,14 @@ struct lookup_key {
 	sector_t sector;
 };
 
+struct cacheblock_access {
+	struct cacheblock *cacheblk;
+	u8 in_mb_idx;
+};
+
 struct ht_head;
 struct ht_head *ht_get_head(struct wb_device *, struct lookup_key *);
-struct metablock *ht_lookup(struct wb_device *,
+struct metablock_access *ht_lookup(struct wb_device *,
 			    struct ht_head *, struct lookup_key *);
 void ht_register(struct wb_device *, struct ht_head *,
 		 struct metablock *, struct lookup_key *);

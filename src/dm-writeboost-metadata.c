@@ -281,7 +281,7 @@ void ht_register(struct wb_device *wb, struct ht_head *head,
 	mb->sector = key->sector;
 };
 
-struct metablock *ht_lookup(struct wb_device *wb, struct ht_head *head,
+struct cacheblock_access *ht_lookup(struct wb_device *wb, struct ht_head *head,
 			    struct lookup_key *key)
 {
 	struct metablock *mb, *found = NULL;

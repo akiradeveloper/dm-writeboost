@@ -545,7 +545,7 @@ struct lookup_result {
 	struct lookup_key key; /* Lookup key used */
 
 	struct segment_header *found_seg;
-	struct metablock *found_mb;
+	struct metablock_access *found_mb;
 
 	bool found; /* Cache hit? */
 	bool on_buffer; /* Is the metablock found on the RAM buffer? */

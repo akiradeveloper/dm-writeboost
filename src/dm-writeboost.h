@@ -128,14 +128,19 @@ struct dirtiness {
 	u8 data_bits;
 };
 
-struct metablock {
-	sector_t sector; /* The original aligned address */
+struct cacheblock {
+	struct dirtiness dirtiness;
+};
 
-	u32 idx; /* Const. Index in the metablock array */
+struct metablock {
+	u8 n_metablocks;
+
+	u32 start_cache_idx; /* Const */
+	sector_t backing_sector; /* Const */
 
 	struct hlist_node ht_list; /* Linked to the hash table */
 
-	struct dirtiness dirtiness;
+	struct cacheblock cb_arr[0];
 };
 
 #define SZ_MAX (~(size_t)0)
@@ -149,7 +154,7 @@ struct segment_header {
 
 	atomic_t nr_inflight_ios;
 
-	struct metablock mb_array[0];
+	struct metablock mb_arr[0];
 };
 
 /*----------------------------------------------------------------------------*/

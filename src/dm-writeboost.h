@@ -128,19 +128,18 @@ struct dirtiness {
 	u8 data_bits;
 };
 
-struct cacheblock {
+struct metablock {
 	struct dirtiness dirtiness;
 };
 
-struct metablock {
-	u8 n_metablocks;
+struct metaset {
+	u8 in_seg_idx;
 
-	u32 start_cache_idx; /* Const */
 	sector_t backing_sector; /* Const */
 
 	struct hlist_node ht_list; /* Linked to the hash table */
 
-	struct cacheblock cb_arr[0];
+	struct metablock mb_arr[0];
 };
 
 #define SZ_MAX (~(size_t)0)
@@ -154,7 +153,7 @@ struct segment_header {
 
 	atomic_t nr_inflight_ios;
 
-	struct metablock mb_arr[0];
+	struct metaset mset_arr[0];
 };
 
 /*----------------------------------------------------------------------------*/

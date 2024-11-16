@@ -28,7 +28,7 @@ struct rambuffer *get_rambuffer_by_id(struct wb_device *wb, u64 id);
 sector_t calc_mb_start_sector(struct wb_device *, struct segment_header *,
 			      u32 mb_idx);
 u8 mb_idx_inseg(struct wb_device *, u32 mb_idx);
-struct segment_header *mb_to_seg(struct wb_device *, struct metablock *);
+struct segment_header *mb_to_seg(struct wb_device *, struct metablock_access *);
 bool is_on_buffer(struct wb_device *, u32 mb_idx);
 
 /*----------------------------------------------------------------------------*/
@@ -37,9 +37,9 @@ struct lookup_key {
 	sector_t sector;
 };
 
-struct cacheblock_access {
-	struct cacheblock *cacheblk;
-	u8 in_mb_idx;
+struct metablock_access {
+	struct metaset *mset;
+	u8 in_mset_idx;
 };
 
 struct ht_head;

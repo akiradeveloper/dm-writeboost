@@ -125,12 +125,13 @@ sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg, 
 /*
  * Get the segment that contains the passed mb
  */
-struct segment_header *mb_to_seg(struct wb_device *wb, struct metablock *mb)
+struct segment_header *mb_to_seg(struct wb_device *wb, struct metablock_access *mb)
 {
 	struct segment_header *seg;
-	seg = ((void *) mb)
-	      - mb_idx_inseg(wb, mb->idx) * sizeof(struct metablock)
-	      - sizeof(struct segment_header);
+	struct metaset *mset;
+
+	mset = ((void *) cb) - cb->in_mset_idx * sizeof(struct metablock) - sizeof(struct metaset);
+	seg = ((void *)) mset) - mset->in_seg_idx * sizeof(struct metaset) - sizeof(struct segment_header);
 	return seg;
 }
 
@@ -281,11 +282,20 @@ void ht_register(struct wb_device *wb, struct ht_head *head,
 	mb->sector = key->sector;
 };
 
-struct cacheblock_access *ht_lookup(struct wb_device *wb, struct ht_head *head,
+struct metablock_access ht_lookup(struct wb_device *wb, struct ht_head *head,
 			    struct lookup_key *key)
 {
-	struct metablock *mb, *found = NULL;
-	hlist_for_each_entry(mb, &head->ht_list, ht_list) {
+	struct metaset *mset;
+	struct metablock_access found;
+
+	hlist_for_each_entry(mset, &head->ht_list, ht_list) {
+		for (i = 0; i < wb->nr_caches_inseg; i++) {
+			struct metablock *mb = mset->mb_arr + i;
+			if (mb_hit(mb, key)) {
+				found = mset;
+				break;
+			}
+		}
 		if (mb_hit(mb, key)) {
 			found = mb;
 			break;
@@ -741,7 +751,8 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 {
 	struct lookup_key key;
 	struct ht_head *head;
-	struct metablock *found = NULL, *mb = seg->mb_array + i;
+	struct cacheblock_access *found = NULL;
+	struct cacheblock *mb = seg->mb_array + i;
 	struct metablock_device *mbdev = src->mbarr + i;
 
 	mb->sector = le64_to_cpu(mbdev->sector);

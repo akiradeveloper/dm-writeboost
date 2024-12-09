@@ -1900,7 +1900,11 @@ static int writeboost_iterate_devices(struct dm_target *ti,
 
 static void writeboost_io_hints(struct dm_target *ti, struct queue_limits *limits)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
+	limits->io_opt = 4096;
+#else
 	blk_limits_io_opt(limits, 4096);
+#endif
 }
 
 static void writeboost_status(struct dm_target *ti, status_type_t type,

@@ -421,11 +421,11 @@ void flush_current_buffer(struct wb_device *wb)
 {
 	struct segment_header *old_seg;
 
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 	old_seg = wb->current_seg;
 
 	queue_current_buffer(wb);
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 
 	wait_for_flushing(wb, old_seg->id);
 }
@@ -879,13 +879,13 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	};
 	struct ht_head *head = ht_get_head(wb, &key);
 
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 	/*
 	 * if might_cancel_read_cache_cell() on the foreground
 	 * cancelled this cell, the data is now stale.
 	 */
 	if (cell->cancelled) {
-		mutex_unlock(&wb->io_lock);
+		up_write(&wb->io_lock);
 		return;
 	}
 
@@ -907,7 +907,7 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 
 	ht_register(wb, head, mb, &key);
 
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 
 	dec_inflight_ios(wb, seg);
 }
@@ -980,7 +980,7 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i, cur_threshold;
 
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
 	atomic_set(&cells->ack_count, cells->size);
@@ -993,7 +993,7 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 		cells->threshold = cur_threshold;
 		cells->over_threshold = false;
 	}
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 }
 
 /*
@@ -1157,7 +1157,7 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 		return -ENOMEM;
 	initialize_write_io(&wio, bio);
 
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 
 	cache_lookup(wb, bio, &res);
 
@@ -1188,7 +1188,7 @@ do_write:
 	ht_register(wb, res.head, write_pos, &res.key);
 
 out:
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 	mempool_free(wio.data, wb->buf_8_pool);
 	return err;
 }
@@ -1233,9 +1233,9 @@ static int complete_process_write(struct wb_device *wb, struct bio *bio)
  *
  * process_write:
  *   do_process_write:
- *     mutex_lock (to serialize write)
+ *     write lock (to serialize write)
  *       inc in_flight_ios # refcount on the dst segment
- *     mutex_unlock
+ *     write unlock
  *
  *   complete_process_write:
  *     dec in_flight_ios
@@ -1255,7 +1255,7 @@ static int process_write_wa(struct wb_device *wb, struct bio *bio)
 {
 	struct lookup_result res;
 
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 	cache_lookup(wb, bio, &res);
 	if (res.found) {
 		dec_inflight_ios(wb, res.found_seg);
@@ -1263,7 +1263,7 @@ static int process_write_wa(struct wb_device *wb, struct bio *bio)
 	}
 
 	might_cancel_read_cache_cell(wb, bio);
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 
 	bio_remap(bio, wb->backing_dev, bi_sector(bio));
 	return DM_MAPIO_REMAPPED;
@@ -1348,11 +1348,11 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 
 	bool reserved = false;
 
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 	cache_lookup(wb, bio, &res);
 	if (!res.found)
 		reserved = reserve_read_cache_cell(wb, bio);
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 
 	if (!res.found) {
 		if (reserved) {
@@ -1668,7 +1668,7 @@ static int init_core_struct(struct dm_target *ti)
 		goto bad_io_client;
 	}
 
-	mutex_init(&wb->io_lock);
+	init_rwsem(&wb->io_lock);
 	init_waitqueue_head(&wb->inflight_ios_wq);
 	spin_lock_init(&wb->mb_lock);
 	atomic64_set(&wb->nr_dirty_caches, 0);

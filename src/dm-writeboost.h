@@ -27,6 +27,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
+#include <linux/rwsem.h>
 #include <linux/mutex.h>
 #include <linux/kthread.h>
 #include <linux/sched.h>
@@ -261,7 +262,7 @@ struct wb_device {
 	const char **ctr_args;
 
 	bool do_format; /* True if it was the first creation */
-	struct mutex io_lock; /* Mutex is light-weighed */
+	struct rw_semaphore io_lock;
 
 	/*
 	 * Wq to wait for nr_inflight_ios to be zero.

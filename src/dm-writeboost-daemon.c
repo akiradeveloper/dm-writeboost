@@ -30,9 +30,9 @@
 
 void queue_barrier_io(struct wb_device *wb, struct bio *bio)
 {
-	mutex_lock(&wb->io_lock);
+	down_write(&wb->io_lock);
 	bio_list_add(&wb->barrier_ios, bio);
-	mutex_unlock(&wb->io_lock);
+	up_write(&wb->io_lock);
 
 	/*
 	 * queue_work does nothing if the work is already in the queue.

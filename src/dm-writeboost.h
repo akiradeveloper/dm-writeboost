@@ -207,7 +207,7 @@ struct writeback_segment {
 struct read_cache_cell {
 	sector_t sector;
 	void *data; /* 4KB data read */
-	bool cancelled; /* Don't include this */
+	atomic_t cancelled; /* Don't include this */
 	struct rb_node rb_node;
 };
 

@@ -1260,9 +1260,8 @@ static int process_write_wa(struct wb_device *wb, struct bio *bio)
 	if (res.found) {
 		dec_inflight_ios(wb, res.found_seg);
 		ht_del(wb, res.found_mb);
-	}
-
-	might_cancel_read_cache_cell(wb, bio);
+	} else
+		might_cancel_read_cache_cell(wb, bio);
 	mutex_unlock(&wb->io_lock);
 
 	bio_remap(bio, wb->backing_dev, bi_sector(bio));

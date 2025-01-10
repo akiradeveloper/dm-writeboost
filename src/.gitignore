@@ -1,0 +1,8 @@
+*
+!.gitignore
+!dm-writeboost.h
+!dm-writeboost-target.[c]
+!dm-writeboost-metadata.[ch]
+!dm-writeboost-daemon.[ch]
+!dkms.conf
+!Makefile

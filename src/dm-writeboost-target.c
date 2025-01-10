@@ -760,7 +760,7 @@ static void read_cache_cancel_cells(struct read_cache_cells *cells, u32 n)
 		last = cells->size;
 	for (i = cells->cursor; i < last; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		cell->cancelled = true;
+		atomic_set(&cell->cancelled, 1);
 	}
 }
 
@@ -780,7 +780,7 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 
 	if (cells->seqcount > cells->threshold) {
 		if (cells->over_threshold)
-			new_cell->cancelled = true;
+			atomic_set(&new_cell->cancelled, 1);
 		else {
 			cells->over_threshold = true;
 			read_cache_cancel_cells(cells, cells->seqcount);
@@ -839,7 +839,7 @@ static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	struct read_cache_cell *found;
 	found = lookup_read_cache_cell(wb, calc_cache_alignment(bi_sector(bio)));
 	if (found)
-		found->cancelled = true;
+		atomic_set(&found->cancelled, 1);
 }
 
 static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, unsigned long error)
@@ -852,13 +852,13 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, uns
 
 	/* Data can be broken. So don't stage. */
 	if (error)
-		cell->cancelled = true;
+		atomic_set(&cell->cancelled, 1);
 
 	/*
 	 * We can omit copying if the cell is cancelled but
 	 * copying for a non-cancelled cell isn't problematic.
 	 */
-	if (!cell->cancelled)
+	if (!atomic_read(&cell->cancelled))
 		copy_bio_payload(cell->data, bio);
 
 	if (atomic_dec_and_test(&cells->ack_count))
@@ -884,7 +884,7 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	 * if might_cancel_read_cache_cell() on the foreground
 	 * cancelled this cell, the data is now stale.
 	 */
-	if (cell->cancelled) {
+	if (atomic_read(&cell->cancelled)) {
 		mutex_unlock(&wb->io_lock);
 		return;
 	}
@@ -986,7 +986,7 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	atomic_set(&cells->ack_count, cells->size);
 	for (i = 0; i < cells->size; i++) {
 		struct read_cache_cell *cell = cells->array + i;
-		cell->cancelled = false;
+		atomic_set(&cell->cancelled, 0);
 	}
 	cur_threshold = read_once(wb->read_cache_threshold);
 	if (cur_threshold && (cur_threshold != cells->threshold)) {
@@ -1004,7 +1004,7 @@ static void visit_and_cancel_cells(struct rb_node *first, struct rb_node *last)
 	struct rb_node *rbp = first;
 	while (rbp != last) {
 		struct read_cache_cell *cell = read_cache_cell_from_node(rbp);
-		cell->cancelled = true;
+		atomic_set(&cell->cancelled, 1);
 		rbp = rb_next(rbp);
 	}
 }

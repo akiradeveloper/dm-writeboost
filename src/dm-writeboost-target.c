@@ -980,7 +980,6 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	u32 i, cur_threshold;
 
-	mutex_lock(&wb->io_lock);
 	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
 	atomic_set(&cells->ack_count, cells->size);
@@ -993,7 +992,6 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 		cells->threshold = cur_threshold;
 		cells->over_threshold = false;
 	}
-	mutex_unlock(&wb->io_lock);
 }
 
 /*
@@ -1049,7 +1047,9 @@ static void read_cache_proc(struct work_struct *work)
 		inject_read_cache(wb, cell);
 	}
 
+	mutex_lock(&wb->io_lock);
 	reinit_read_cache_cells(wb);
+	mutex_unlock(&wb->io_lock);
 }
 
 static int init_read_cache_cells(struct wb_device *wb)

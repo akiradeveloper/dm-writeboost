@@ -212,6 +212,8 @@ struct read_cache_cell {
 };
 
 struct read_cache_cells {
+	struct mutex lock;
+
 	u32 size;
 	struct read_cache_cell *array;
 	u32 cursor;

@@ -732,10 +732,10 @@ static void read_cache_add(struct read_cache_cells *cells, struct read_cache_cel
 	rb_insert_color(&cell->rb_node, &cells->rb_root);
 }
 
-static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, sector_t sector)
+static struct read_cache_cell *lookup_read_cache_cell(struct read_cache_cells *cells, sector_t sector)
 {
 	struct rb_node **rbp, *parent;
-	rbp = &wb->read_cache_cells->rb_root.rb_node;
+	rbp = &cells->rb_root.rb_node;
 	parent = NULL;
 	while (*rbp) {
 		struct read_cache_cell *parent_cell;
@@ -792,18 +792,40 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 	cells->last_sector = new_cell->sector;
 }
 
+static bool do_reserve_read_cache_cell(struct read_cache_cells *cells, struct bio *bio)
+{
+	struct read_cache_cell *found, *new_cell;
+
+	ASSERT(cells->threshold > 0);
+	if (!cells->cursor)
+		return false;
+
+	/*
+	 * We don't need to reserve the same address twice
+	 * because it's either unchanged or invalidated.
+	 */
+	found = lookup_read_cache_cell(cells, bi_sector(bio));
+	if (found)
+		return false;
+
+	cells->cursor--;
+	new_cell = cells->array + cells->cursor;
+	new_cell->sector = bi_sector(bio);
+	read_cache_add(cells, new_cell);
+
+	/* Cancel the new_cell if needed */
+	read_cache_cancel_foreground(cells, new_cell);
+
+	return true;
+}
+
 static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 {
 	struct per_bio_data *pbd;
 	struct read_cache_cells *cells = wb->read_cache_cells;
-	struct read_cache_cell *found, *new_cell;
-
-	ASSERT(cells->threshold > 0);
+	bool reserved;
 
 	if (!read_once(wb->read_cache_threshold))
-		return false;
-
-	if (!cells->cursor)
 		return false;
 
 	/*
@@ -814,25 +836,16 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	if (!bio_is_fullsize(bio))
 		return false;
 
-	/*
-	 * We don't need to reserve the same address twice
-	 * because it's either unchanged or invalidated.
-	 */
-	found = lookup_read_cache_cell(wb, bi_sector(bio));
-	if (found)
-		return false;
+	mutex_lock(&cells->lock);
+	reserved = do_reserve_read_cache_cell(cells, bio);
+	mutex_unlock(&cells->lock);
 
-	cells->cursor--;
-	new_cell = cells->array + cells->cursor;
-	new_cell->sector = bi_sector(bio);
-	read_cache_add(cells, new_cell);
+	if (!reserved)
+		return false;
 
 	pbd = per_bio_data(bio);
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
-
-	/* Cancel the new_cell if needed */
-	read_cache_cancel_foreground(cells, new_cell);
 
 	return true;
 }
@@ -840,7 +853,12 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 {
 	struct read_cache_cell *found;
-	found = lookup_read_cache_cell(wb, calc_cache_alignment(bi_sector(bio)));
+	struct read_cache_cells *cells = wb->read_cache_cells;
+
+	mutex_lock(&cells->lock);
+	found = lookup_read_cache_cell(cells, calc_cache_alignment(bi_sector(bio)));
+	mutex_unlock(&cells->lock);
+
 	if (found)
 		atomic_set(&found->cancelled, 1);
 }
@@ -932,6 +950,7 @@ static struct read_cache_cells *alloc_read_cache_cells(struct wb_device *wb, u32
 	if (!cells)
 		return NULL;
 
+	mutex_init(&cells->lock);
 	cells->size = n;
 	cells->threshold = UINT_MAX; /* Default: every read will be cached */
 	cells->last_sector = ~0;
@@ -978,10 +997,9 @@ static void free_read_cache_cells(struct wb_device *wb)
 	kfree(cells);
 }
 
-static void reinit_read_cache_cells(struct wb_device *wb)
+static void reinit_read_cache_cells(struct read_cache_cells *cells, u32 new_threshold)
 {
-	struct read_cache_cells *cells = wb->read_cache_cells;
-	u32 i, cur_threshold;
+	u32 i;
 
 	cells->rb_root = RB_ROOT;
 	cells->cursor = cells->size;
@@ -990,9 +1008,8 @@ static void reinit_read_cache_cells(struct wb_device *wb)
 		struct read_cache_cell *cell = cells->array + i;
 		atomic_set(&cell->cancelled, 0);
 	}
-	cur_threshold = read_once(wb->read_cache_threshold);
-	if (cur_threshold && (cur_threshold != cells->threshold)) {
-		cells->threshold = cur_threshold;
+	if (new_threshold && (new_threshold != cells->threshold)) {
+		cells->threshold = new_threshold;
 		cells->over_threshold = false;
 	}
 }
@@ -1050,9 +1067,9 @@ static void read_cache_proc(struct work_struct *work)
 		inject_read_cache(wb, cell);
 	}
 
-	mutex_lock(&wb->io_lock);
-	reinit_read_cache_cells(wb);
-	mutex_unlock(&wb->io_lock);
+	mutex_lock(&cells->lock);
+	reinit_read_cache_cells(cells, read_once(wb->read_cache_threshold));
+	mutex_unlock(&cells->lock);
 }
 
 static int init_read_cache_cells(struct wb_device *wb)
@@ -1063,7 +1080,7 @@ static int init_read_cache_cells(struct wb_device *wb)
 	if (!cells)
 		return -ENOMEM;
 	wb->read_cache_cells = cells;
-	reinit_read_cache_cells(wb);
+	reinit_read_cache_cells(cells, wb->read_cache_threshold);
 	return 0;
 }
 

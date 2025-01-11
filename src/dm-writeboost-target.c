@@ -752,7 +752,10 @@ static struct read_cache_cell *lookup_read_cache_cell(struct wb_device *wb, sect
 	return NULL;
 }
 
-static void read_cache_cancel_cells(struct read_cache_cells *cells, u32 n)
+/*
+ * Cancel all cells in [cursor, cursor + seqcount).
+ */
+static void read_cache_cancel_seq_cells(struct read_cache_cells *cells)
 {
 	u32 i;
 	u32 last = cells->cursor + cells->seqcount;
@@ -783,7 +786,7 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 			atomic_set(&new_cell->cancelled, 1);
 		else {
 			cells->over_threshold = true;
-			read_cache_cancel_cells(cells, cells->seqcount);
+			read_cache_cancel_seq_cells(cells);
 		}
 	}
 	cells->last_sector = new_cell->sector;

@@ -708,7 +708,7 @@ struct per_bio_data {
 		struct segment_header *seg;
 	};
 };
-#define per_bio_data(wb, bio) ((struct per_bio_data *)dm_per_bio_data((bio), (wb)->ti->PER_BIO_DATA_SIZE))
+#define per_bio_data(bio) ((struct per_bio_data *) dm_per_bio_data((bio), sizeof(struct per_bio_data)))
 
 /*----------------------------------------------------------------------------*/
 
@@ -827,7 +827,7 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	new_cell->sector = bi_sector(bio);
 	read_cache_add(cells, new_cell);
 
-	pbd = per_bio_data(wb, bio);
+	pbd = per_bio_data(bio);
 	pbd->type = PBD_WILL_CACHE;
 	pbd->cell_idx = cells->cursor;
 
@@ -847,7 +847,7 @@ static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 
 static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, unsigned long error)
 {
-	struct per_bio_data *pbd = per_bio_data(wb, bio);
+	struct per_bio_data *pbd = per_bio_data(bio);
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	struct read_cache_cell *cell = cells->array + pbd->cell_idx;
 
@@ -1430,7 +1430,7 @@ read_mb_exit:
 		return DM_MAPIO_SUBMITTED;
 	}
 
-	pbd = per_bio_data(wb, bio);
+	pbd = per_bio_data(bio);
 	pbd->type = PBD_READ_SEG;
 	pbd->seg = res.found_seg;
 
@@ -1458,7 +1458,7 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 {
 	struct wb_device *wb = ti->private;
 
-	struct per_bio_data *pbd = per_bio_data(wb, bio);
+	struct per_bio_data *pbd = per_bio_data(bio);
 	pbd->type = PBD_NONE;
 
 	if (bio_is_barrier(bio))
@@ -1482,7 +1482,7 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 #endif
 {
 	struct wb_device *wb = ti->private;
-	struct per_bio_data *pbd = per_bio_data(wb, bio);
+	struct per_bio_data *pbd = per_bio_data(bio);
 
 	switch (pbd->type) {
 	case PBD_NONE:

@@ -780,6 +780,7 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 		cells->seqcount = 1;
 		cells->over_threshold = false;
 	}
+	cells->last_sector = new_cell->sector;
 
 	if (cells->seqcount > cells->threshold) {
 		if (cells->over_threshold)
@@ -789,7 +790,6 @@ static void read_cache_cancel_foreground(struct read_cache_cells *cells,
 			read_cache_cancel_seq_cells(cells);
 		}
 	}
-	cells->last_sector = new_cell->sector;
 }
 
 static bool do_reserve_read_cache_cell(struct read_cache_cells *cells, struct bio *bio)

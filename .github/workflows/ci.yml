@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: cargo dkms cryptsetup xfs xfsprogs dbench stress
+          packages: cargo dkms cryptsetup xfsprogs dbench stress
           version: 1.0
 
       - name: Check cryptsetup enabled

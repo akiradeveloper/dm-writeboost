@@ -17,10 +17,7 @@ jobs:
         run: uname -a
 
       - name: Install dependencies
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: cargo dkms cryptsetup xfs xfsprogs dbench stress
-          version: 1.0
+        run: sudo apt-get update && sudo apt-get install -y cargo dkms cryptsetup xfsprogs dbench stress
 
       - name: Check cryptsetup enabled
         run: cryptsetup benchmark -c aes-xts-plain64 -s 512

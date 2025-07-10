@@ -1,3 +1,10 @@
+2025-07-10  Akira Hayakawa  <ruby.wktk@gmail.com>
+
+	* v2.2.19
+	* Fix build error with 6.12 kernel
+	* Refactor
+	* Update copyright year
+
 2024-11-12  Akira Hayakawa  <ruby.wktk@gmail.com>
 
 	* v2.2.18

@@ -1180,7 +1180,6 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 	mutex_lock(&wb->io_lock);
 
 	cache_lookup(wb, bio, &res);
-
 	if (res.found) {
 		if (unlikely(res.on_buffer)) {
 			write_pos = res.found_mb;
@@ -1191,8 +1190,8 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 			if (err)
 				goto out;
 		}
-	} else
-		might_cancel_read_cache_cell(wb, bio);
+	}
+	might_cancel_read_cache_cell(wb, bio);
 
 	might_queue_current_buffer(wb);
 
@@ -1280,8 +1279,8 @@ static int process_write_wa(struct wb_device *wb, struct bio *bio)
 	if (res.found) {
 		dec_inflight_ios(wb, res.found_seg);
 		ht_del(wb, res.found_mb);
-	} else
-		might_cancel_read_cache_cell(wb, bio);
+	}
+	might_cancel_read_cache_cell(wb, bio);
 	mutex_unlock(&wb->io_lock);
 
 	bio_remap(bio, wb->backing_dev, bi_sector(bio));

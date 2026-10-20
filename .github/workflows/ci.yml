@@ -11,15 +11,21 @@ on:
 jobs:
   run_tests:
     name: Tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Kernel version
         run: uname -a
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
       - name: Install dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: cargo dkms cryptsetup xfsprogs dbench stress
+          packages: dkms cryptsetup xfsprogs dbench stress
           version: 1.0
 
       - name: Check cryptsetup enabled
@@ -56,12 +62,12 @@ jobs:
 
       - name: Install dm-writeboost-tools
         working-directory: tools
-        run: sudo cargo install --path . --root /usr/local
+        run: make install
 
       - name: Test (wb-command)
-        working-directory: tests/wb-command-tests
-        run: sudo make test
+        working-directory: tests
+        run: just wb-command-tests
 
       - name: Test (writeboost)
-        working-directory: tests/writeboost-tests
-        run: sudo make test
+        working-directory: tests
+        run: just writeboost-tests

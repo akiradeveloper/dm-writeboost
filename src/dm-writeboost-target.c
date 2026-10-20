@@ -26,12 +26,7 @@
 
 #include "linux/sort.h"
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,2)) || \
-	((LINUX_VERSION_CODE >= KERNEL_VERSION(6,7,11)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6,8,0))) || \
-	((LINUX_VERSION_CODE >= KERNEL_VERSION(6,6,23)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6,7,0))) || \
-	((LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,83)) && (LINUX_VERSION_CODE < KERNEL_VERSION(6,2,0)))
-// Linux commit 6e5f0f6383b4896c7e9b943d84b136149d0f45e9 "dm io: Support IO priority"
-// added the IO priority parameter in v6.9-rc1.
+#if DM_IO_HAS_IOPRIO
 #define DM_IO(arg1, arg2, arg3, arg4) dm_io(arg1, arg2, arg3, arg4, IOPRIO_DEFAULT)
 #else
 #define DM_IO(arg1, arg2, arg3, arg4) dm_io(arg1, arg2, arg3, arg4)

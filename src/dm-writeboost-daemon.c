@@ -165,6 +165,7 @@ static void writeback_endio(unsigned long error, void *context)
 	if (atomic_dec_and_test(&wb->writeback_io_count))
 		wake_up(&wb->writeback_io_wait_queue);
 }
+WB_IO_NOTIFY_COMPAT(writeback_endio);
 
 static void submit_writeback_io(struct wb_device *wb, struct writeback_io *writeback_io)
 {
@@ -174,7 +175,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 		struct dm_io_request io_req_w = {
 			WB_IO_WRITE,
 			.client = wb->io_client,
-			.notify.fn = writeback_endio,
+			.notify.fn = WB_IO_NOTIFY(writeback_endio),
 			.notify.context = wb,
 			.mem.type = DM_IO_VMA,
 			.mem.ptr.addr = writeback_io->data,
@@ -199,7 +200,7 @@ static void submit_writeback_io(struct wb_device *wb, struct writeback_io *write
 			io_req_w = (struct dm_io_request) {
 				WB_IO_WRITE,
 				.client = wb->io_client,
-				.notify.fn = writeback_endio,
+				.notify.fn = WB_IO_NOTIFY(writeback_endio),
 				.notify.context = wb,
 				.mem.type = DM_IO_VMA,
 				.mem.ptr.addr = writeback_io->data + (i << 9),

@@ -8,6 +8,9 @@ wb_dm_io_header := $(srctree)/include/linux/dm-io.h
 # added the IO priority parameter in v6.9-rc1.
 # The dm-io ioprio argument is also backported to stable kernels.
 ccflags-y += -DDM_IO_HAS_IOPRIO=$(if $(shell grep -w ioprio $(wb_dm_io_header)),1,0)
+
+# The dm-io unsupported-error bitmap is also backported to stable kernels.
+ccflags-y += -DDM_IO_HAS_UNSUP=$(if $(shell grep -w sync_unsup_bits $(wb_dm_io_header)),1,0)
 endif
 
 obj-m := dm-writeboost.o

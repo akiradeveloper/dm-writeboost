@@ -419,6 +419,7 @@ static void format_segmd_endio(unsigned long error, void *__context)
 		context->err = 1;
 	atomic64_dec(&context->count);
 }
+WB_IO_NOTIFY_COMPAT(format_segmd_endio);
 
 struct zeroing_context {
 	int error;
@@ -479,7 +480,7 @@ static int format_all_segment_headers(struct wb_device *wb)
 		struct dm_io_request io_req_seg = {
 			WB_IO_WRITE,
 			.client = wb->io_client,
-			.notify.fn = format_segmd_endio,
+			.notify.fn = WB_IO_NOTIFY(format_segmd_endio),
 			.notify.context = &context,
 			.mem.type = DM_IO_KMEM,
 			.mem.ptr.addr = buf,

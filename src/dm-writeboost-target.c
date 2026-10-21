@@ -26,7 +26,21 @@
 
 #include "linux/sort.h"
 
-#if DM_IO_HAS_IOPRIO
+#if DM_IO_HAS_UNSUP
+static int dm_io_compat(struct dm_io_request *io_req, unsigned num_regions,
+			struct dm_io_region *regions, unsigned long *error_bits)
+{
+	unsigned long io_error_bits = 0, unsup_bits = 0;
+	int r;
+
+	r = dm_io(io_req, num_regions, regions, &io_error_bits, &unsup_bits,
+		  IOPRIO_DEFAULT);
+	if (error_bits)
+		*error_bits = io_error_bits | unsup_bits;
+	return r;
+}
+#define DM_IO(arg1, arg2, arg3, arg4) dm_io_compat(arg1, arg2, arg3, arg4)
+#elif DM_IO_HAS_IOPRIO
 #define DM_IO(arg1, arg2, arg3, arg4) dm_io(arg1, arg2, arg3, arg4, IOPRIO_DEFAULT)
 #else
 #define DM_IO(arg1, arg2, arg3, arg4) dm_io(arg1, arg2, arg3, arg4)
@@ -1274,6 +1288,7 @@ static void read_backing_async_callback(unsigned long error, void *context)
 	read_backing_async_callback_onstack(error, ctx);
 	kfree(ctx);
 }
+WB_IO_NOTIFY_COMPAT(read_backing_async_callback);
 
 static int read_backing_async(struct wb_device *wb, struct bio *bio)
 {
@@ -1296,7 +1311,7 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 		.client = wb->io_client,
 		.mem.type = DM_IO_BIO,
 		.mem.ptr.bio = bio,
-		.notify.fn = read_backing_async_callback,
+		.notify.fn = WB_IO_NOTIFY(read_backing_async_callback),
 		.notify.context = ctx
 	};
 	region = (struct dm_io_region) {

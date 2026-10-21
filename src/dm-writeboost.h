@@ -37,6 +37,19 @@
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
 
+/* Preserve the old combined error bitmap for dm-io completion handlers. */
+#if DM_IO_HAS_UNSUP
+#define WB_IO_NOTIFY(fn) fn##_compat
+#define WB_IO_NOTIFY_COMPAT(fn) \
+static void fn##_compat(unsigned long error, unsigned long unsup, void *context) \
+{ \
+	fn(error | unsup, context); \
+}
+#else
+#define WB_IO_NOTIFY(fn) fn
+#define WB_IO_NOTIFY_COMPAT(fn)
+#endif
+
 /*----------------------------------------------------------------------------*/
 
 #define SUB_ID(x, y) ((x) > (y) ? (x) - (y) : 0)

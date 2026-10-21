@@ -122,31 +122,14 @@ sector_t dm_devsize(struct dm_dev *dev)
 
 void bio_io_success_compat(struct bio *bio)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
 	bio->bi_status = BLK_STS_OK;
 	bio_endio(bio);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
-	bio->bi_error = 0;
-	bio_endio(bio);
-#else
-	bio_endio(bio, 0);
-#endif
 }
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
-#define bi_sector(bio) (bio)->bi_iter.bi_sector
-#else
-#define bi_sector(bio) (bio)->bi_sector
-#endif
 
 static void bio_remap(struct bio *bio, struct dm_dev *dev, sector_t sector)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 	bio_set_dev(bio, dev->bdev);
-#else
-	bio->bi_bdev = dev->bdev;
-#endif
-	bi_sector(bio) = sector;
+	bio->bi_iter.bi_sector = sector;
 }
 
 static u8 calc_offset(sector_t sector)
@@ -158,7 +141,7 @@ static u8 calc_offset(sector_t sector)
 
 static u8 bio_calc_offset(struct bio *bio)
 {
-	return calc_offset(bi_sector(bio));
+	return calc_offset(bio->bi_iter.bi_sector);
 }
 
 static bool bio_is_fullsize(struct bio *bio)
@@ -458,20 +441,6 @@ static void clear_stat(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
-#define bv_vec struct bio_vec
-#define bv_page(vec) vec.bv_page
-#define bv_offset(vec) vec.bv_offset
-#define bv_len(vec) vec.bv_len
-#define bv_it struct bvec_iter
-#else
-#define bv_vec struct bio_vec *
-#define bv_page(vec) vec->bv_page
-#define bv_offset(vec) vec->bv_offset
-#define bv_len(vec) vec->bv_len
-#define bv_it int
-#endif
-
 /*
  * Incoming bio may have multiple bio vecs as a result bvec merging.
  * We shouldn't use bio_data directly to access to whole payload but
@@ -480,12 +449,12 @@ static void clear_stat(struct wb_device *wb)
 static void copy_bio_payload(void *buf, struct bio *bio)
 {
 	size_t sum = 0;
-	bv_vec vec;
-	bv_it it;
+	struct bio_vec vec;
+	struct bvec_iter it;
 	bio_for_each_segment(vec, bio, it) {
-		void *dst = kmap_atomic(bv_page(vec));
-		size_t l = bv_len(vec);
-		memcpy(buf, dst + bv_offset(vec), l);
+		void *dst = kmap_atomic(vec.bv_page);
+		size_t l = vec.bv_len;
+		memcpy(buf, dst + vec.bv_offset, l);
 		kunmap_atomic(dst);
 		buf += l;
 		sum += l;
@@ -501,16 +470,16 @@ static void __copy_to_bio_payload(struct bio *bio, void *buf, u8 i)
 	size_t head = 0;
 	size_t tail = head;
 
-	bv_vec vec;
-	bv_it it;
+	struct bio_vec vec;
+	struct bvec_iter it;
 	bio_for_each_segment(vec, bio, it) {
-		size_t l = bv_len(vec);
+		size_t l = vec.bv_len;
 		tail += l;
 		if ((i << 9) < tail) {
-			void *dst = kmap_atomic(bv_page(vec));
+			void *dst = kmap_atomic(vec.bv_page);
 			size_t offset = (i << 9) - head;
 			BUG_ON((l - offset) < (1 << 9));
-			memcpy(dst + bv_offset(vec) + offset, buf, 1 << 9);
+			memcpy(dst + vec.bv_offset + offset, buf, 1 << 9);
 			kunmap_atomic(dst);
 			return;
 		}
@@ -553,7 +522,7 @@ struct lookup_result {
 static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_result *res)
 {
 	res->key = (struct lookup_key) {
-		.sector = calc_cache_alignment(bi_sector(bio)),
+		.sector = calc_cache_alignment(bio->bi_iter.bi_sector),
 	};
 	res->head = ht_get_head(wb, &res->key);
 
@@ -598,7 +567,7 @@ static int fill_payload_by_backing(struct wb_device *wb, struct bio *bio)
 	struct dm_io_request io_req;
 	struct dm_io_region region;
 
-	sector_t start = bi_sector(bio);
+	sector_t start = bio->bi_iter.bi_sector;
 	u8 offset = calc_offset(start);
 	u8 len = bio_sectors(bio);
 	u8 copy_bits = to_mask(offset, len);
@@ -691,11 +660,6 @@ enum PBD_FLAG {
 	PBD_READ_SEG = 2,
 };
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0) || RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7,3))
-#define PER_BIO_DATA_SIZE per_io_data_size
-#else
-#define PER_BIO_DATA_SIZE per_bio_data_size
-#endif
 struct per_bio_data {
 	enum PBD_FLAG type;
 	union {
@@ -799,13 +763,13 @@ static bool do_reserve_read_cache_cell(struct read_cache_cells *cells, struct bi
 	 * We don't need to reserve the same address twice
 	 * because it's either unchanged or invalidated.
 	 */
-	found = lookup_read_cache_cell(cells, bi_sector(bio));
+	found = lookup_read_cache_cell(cells, bio->bi_iter.bi_sector);
 	if (found)
 		return false;
 
 	cells->cursor--;
 	new_cell = cells->array + cells->cursor;
-	new_cell->sector = bi_sector(bio);
+	new_cell->sector = bio->bi_iter.bi_sector;
 	read_cache_add(cells, new_cell);
 
 	/* Cancel the new_cell if needed */
@@ -820,7 +784,7 @@ static bool reserve_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 	bool reserved;
 
-	if (!read_once(wb->read_cache_threshold))
+	if (!READ_ONCE(wb->read_cache_threshold))
 		return false;
 
 	/*
@@ -851,7 +815,7 @@ static void might_cancel_read_cache_cell(struct wb_device *wb, struct bio *bio)
 	struct read_cache_cells *cells = wb->read_cache_cells;
 
 	mutex_lock(&cells->lock);
-	found = lookup_read_cache_cell(cells, calc_cache_alignment(bi_sector(bio)));
+	found = lookup_read_cache_cell(cells, calc_cache_alignment(bio->bi_iter.bi_sector));
 	mutex_unlock(&cells->lock);
 
 	if (found)
@@ -1063,7 +1027,7 @@ static void read_cache_proc(struct work_struct *work)
 	}
 
 	mutex_lock(&cells->lock);
-	reinit_read_cache_cells(cells, read_once(wb->read_cache_threshold));
+	reinit_read_cache_cells(cells, READ_ONCE(wb->read_cache_threshold));
 	mutex_unlock(&cells->lock);
 }
 
@@ -1278,7 +1242,7 @@ static int process_write_wa(struct wb_device *wb, struct bio *bio)
 	might_cancel_read_cache_cell(wb, bio);
 	mutex_unlock(&wb->io_lock);
 
-	bio_remap(bio, wb->backing_dev, bi_sector(bio));
+	bio_remap(bio, wb->backing_dev, bio->bi_iter.bi_sector);
 	return DM_MAPIO_REMAPPED;
 }
 
@@ -1330,19 +1294,14 @@ static int read_backing_async(struct wb_device *wb, struct bio *bio)
 	io_req = (struct dm_io_request) {
 		WB_IO_READ,
 		.client = wb->io_client,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,14,0)
 		.mem.type = DM_IO_BIO,
 		.mem.ptr.bio = bio,
-#else
-		.mem.type = DM_IO_BVEC,
-		.mem.ptr.bvec = bio->bi_io_vec + bio->bi_idx,
-#endif
 		.notify.fn = read_backing_async_callback,
 		.notify.context = ctx
 	};
 	region = (struct dm_io_region) {
 		.bdev = wb->backing_dev->bdev,
-		.sector = bi_sector(bio),
+		.sector = bio->bi_iter.bi_sector,
 		.count = 8
 	};
 
@@ -1384,7 +1343,7 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 			}
 			return DM_MAPIO_SUBMITTED;
 		} else {
-			bio_remap(bio, wb->backing_dev, bi_sector(bio));
+			bio_remap(bio, wb->backing_dev, bio->bi_iter.bi_sector);
 			return DM_MAPIO_REMAPPED;
 		}
 	}
@@ -1479,18 +1438,11 @@ static int writeboost_map(struct dm_target *ti, struct bio *bio)
 }
 
 /*
- * DM_ENDIO_DONE was actually introduced since 4.12 but used restrictedly in rq-based dm.
- * In 4.13, a patch titled "dm: change ->end_io calling convention" changed the dm internal
- * so other bio-based dm targets should follow the convension.
- * For this reason, I will start to use the DM_ENDIO_DONE at 4.13.
+ * DM_ENDIO_DONE was introduced in 4.12 for request-based dm.
+ * In 4.13, "dm: change ->end_io calling convention" extended this
+ * calling convention to bio-based dm targets.
  */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,13,0)
-#define DM_ENDIO_DONE_COMPAT DM_ENDIO_DONE
 static int writeboost_end_io(struct dm_target *ti, struct bio *bio, blk_status_t *error)
-#else
-#define DM_ENDIO_DONE_COMPAT 0
-static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
-#endif
 {
 	struct wb_device *wb = ti->private;
 	struct per_bio_data *pbd = per_bio_data(bio);
@@ -1498,10 +1450,10 @@ static int writeboost_end_io(struct dm_target *ti, struct bio *bio, int error)
 	switch (pbd->type) {
 	case PBD_NONE:
 	case PBD_WILL_CACHE:
-		return DM_ENDIO_DONE_COMPAT;
+		return DM_ENDIO_DONE;
 	case PBD_READ_SEG:
 		dec_inflight_ios(wb, pbd->seg);
-		return DM_ENDIO_DONE_COMPAT;
+		return DM_ENDIO_DONE;
 	default:
 		BUG();
 	}
@@ -1639,7 +1591,7 @@ static int init_core_struct(struct dm_target *ti)
 	ti->num_discard_bios = 0;
 	ti->discards_supported = false;
 
-	ti->PER_BIO_DATA_SIZE = sizeof(struct per_bio_data);
+	ti->per_io_data_size = sizeof(struct per_bio_data);
 
 	wb = kzalloc(sizeof(*wb), GFP_KERNEL);
 	if (!wb) {
@@ -1868,12 +1820,8 @@ static void writeboost_postsuspend(struct dm_target *ti)
 	dm_blkdev_issue_flush(wb->cache_dev->bdev, GFP_NOIO);
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
 static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv,
 			      char *result, unsigned maxlen)
-#else
-static int writeboost_message(struct dm_target *ti, unsigned argc, char **argv)
-#endif
 {
 	struct wb_device *wb = ti->private;
 

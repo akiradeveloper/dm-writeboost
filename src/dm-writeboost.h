@@ -37,12 +37,6 @@
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
 
-/* We use RHEL_RELEASE_VERSION to compile with RHEL/CentOS 7.3's kernel */
-#ifndef RHEL_RELEASE_CODE
-#define RHEL_RELEASE_CODE 0
-#define RHEL_RELEASE_VERSION(a,b) (((a) << 8) + (b))
-#endif
-
 /*----------------------------------------------------------------------------*/
 
 #define SUB_ID(x, y) ((x) > (y) ? (x) - (y) : 0)
@@ -511,28 +505,13 @@ sector_t dm_devsize(struct dm_dev *);
 #define WB_IO_WRITE_FUA .bi_opf = REQ_OP_WRITE | REQ_FUA
 #define bio_is_barrier(bio) ((bio)->bi_opf & REQ_PREFLUSH)
 #define bio_is_fua(bio) ((bio)->bi_opf & REQ_FUA)
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,8,0)
+#else
 #define req_is_write(req) op_is_write((req)->bi_op)
 #define WB_IO_WRITE .bi_op = REQ_OP_WRITE, .bi_op_flags = 0
 #define WB_IO_READ .bi_op = REQ_OP_READ, .bi_op_flags = 0
 #define WB_IO_WRITE_FUA .bi_op = REQ_OP_WRITE, .bi_op_flags = REQ_FUA
 #define bio_is_barrier(bio) ((bio)->bi_opf & REQ_PREFLUSH)
 #define bio_is_fua(bio) ((bio)->bi_opf & REQ_FUA)
-#else
-#define req_is_write(req) ((req)->bi_rw == WRITE)
-#define bio_is_barrier(bio) ((bio)->bi_rw & REQ_FLUSH)
-#define bio_is_fua(bio) ((bio)->bi_rw & REQ_FUA)
-#define WB_IO_WRITE .bi_rw = WRITE
-#define WB_IO_READ .bi_rw = READ
-#define WB_IO_WRITE_FUA .bi_rw = WRITE_FUA
-#endif
-
-/*----------------------------------------------------------------------------*/
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
-#define read_once(x) READ_ONCE(x)
-#else
-#define read_once(x) ACCESS_ONCE(x)
 #endif
 
 /*----------------------------------------------------------------------------*/

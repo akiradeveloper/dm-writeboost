@@ -398,7 +398,7 @@ static u32 calc_nr_writeback(struct wb_device *wb)
 		atomic64_read(&wb->last_flushed_segment_id)
 		- atomic64_read(&wb->last_writeback_segment_id);
 
-	u32 nr_max_batch = read_once(wb->nr_max_batched_writeback);
+	u32 nr_max_batch = READ_ONCE(wb->nr_max_batched_writeback);
 	if (wb->nr_writeback_segs != nr_max_batch)
 		try_alloc_writeback_ios(wb, nr_max_batch, GFP_NOIO | __GFP_NOWARN);
 
@@ -407,9 +407,9 @@ static u32 calc_nr_writeback(struct wb_device *wb)
 
 static bool should_writeback(struct wb_device *wb)
 {
-	return read_once(wb->allow_writeback) ||
-	       read_once(wb->urge_writeback)  ||
-	       read_once(wb->force_drop);
+	return READ_ONCE(wb->allow_writeback) ||
+	       READ_ONCE(wb->urge_writeback)  ||
+	       READ_ONCE(wb->force_drop);
 }
 
 static void do_writeback_proc(struct wb_device *wb)
@@ -494,7 +494,7 @@ int writeback_modulator_proc(void *data)
 
 		util = div_u64(100 * (new - old), 1000);
 
-		if (util < read_once(wb->writeback_threshold))
+		if (util < READ_ONCE(wb->writeback_threshold))
 			wb->allow_writeback = true;
 		else
 			wb->allow_writeback = false;
@@ -552,7 +552,7 @@ int sb_record_updater_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = read_once(wb->update_sb_record_interval) * 1000;
+		intvl = READ_ONCE(wb->update_sb_record_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -574,7 +574,7 @@ int data_synchronizer_proc(void *data)
 
 	while (!kthread_should_stop()) {
 		/* sec -> ms */
-		intvl = read_once(wb->sync_data_interval) * 1000;
+		intvl = READ_ONCE(wb->sync_data_interval) * 1000;
 
 		if (!intvl) {
 			schedule_timeout_interruptible(msecs_to_jiffies(1000));

@@ -28,7 +28,7 @@ As a further extension, dm-writeboost supports read-caching which also writes da
 * **Fast**: Since the sequential write is the best I/O pattern for every SSD and the code base is optimized for
   in-coming random writes, the write performance is the best among all caching drivers including dm-cache and
   bcache.  
-* **Portable**: All kernel version 3.10 or later is supported with minimum compile-time macros.
+* **Portable**: Requires Linux kernel 4.18 or later.
 
 ## Usage
 - **Install**: `sudo make install` to install and `sudo make uninstall` to uninstall.

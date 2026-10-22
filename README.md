@@ -98,6 +98,23 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 ## Developer Info
 
+### Unit tests
+
+Run the RAM map tests from the repository root:
+
+```sh
+make test
+make test-sanitize
+```
+
+These commands compile the production map implementation in user space. They
+require a C compiler; the sanitizer target also requires AddressSanitizer and
+UndefinedBehaviorSanitizer support. Kernel build headers, a loaded module, and
+root privileges are not needed. Build output is kept in `tests/unit/.build/`.
+
+The I/O integration tests live in the separate
+[device-mapper-tests](https://github.com/akiradeveloper/device-mapper-tests) project.
+
 Akira Hayakawa ([@akiradeveloper](https://github.com/akiradeveloper))
 
 Email: ruby.wktk@gmail.com

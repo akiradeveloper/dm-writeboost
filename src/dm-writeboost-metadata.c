@@ -23,60 +23,13 @@
 
 /*----------------------------------------------------------------------------*/
 
-struct large_array {
-	u64 nr_elems;
-	u32 elemsize;
-	void *data;
-};
-
-static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
-{
-	struct large_array *arr;
-
-	if (!elemsize || nr_elems > SZ_MAX / elemsize)
-		return NULL;
-	arr = kmalloc(sizeof(*arr), GFP_KERNEL);
-	if (!arr) {
-		DMERR("Failed to allocate arr");
-		return NULL;
-	}
-
-	arr->elemsize = elemsize;
-	arr->nr_elems = nr_elems;
-
-	arr->data = vmalloc(elemsize * nr_elems);
-	if (!arr->data) {
-		DMERR("Failed to allocate data");
-		goto bad_alloc_data;
-	}
-
-	return arr;
-
-bad_alloc_data:
-	kfree(arr);
-	return NULL;
-}
-
-static void large_array_free(struct large_array *arr)
-{
-	vfree(arr->data);
-	kfree(arr);
-}
-
-static void *large_array_at(struct large_array *arr, u64 i)
-{
-	return arr->data + arr->elemsize * i;
-}
-
-/*----------------------------------------------------------------------------*/
-
 /*
  * Segment locations are derived from their position in the fixed RAM array.
  * Cache indices remain stable for the lifetime of the target.
  */
 static u32 segment_index(struct wb_device *wb, struct segment_header *seg)
 {
-	return seg - (struct segment_header *)wb->segment_header_array->data;
+	return seg - wb->segment_header_array;
 }
 
 u32 segment_start_idx(struct wb_device *wb, struct segment_header *seg)
@@ -122,7 +75,7 @@ struct segment_header *cache_idx_to_seg(struct wb_device *wb, u32 cache_idx)
 {
 	u32 seg_idx = div_u64(cache_idx, wb->nr_caches_inseg);
 
-	return large_array_at(wb->segment_header_array, seg_idx);
+	return &wb->segment_header_array[seg_idx];
 }
 
 bool is_on_buffer(struct wb_device *wb, u32 cache_idx)
@@ -140,14 +93,9 @@ static u32 segment_id_to_idx(struct wb_device *wb, u64 id)
 	return idx;
 }
 
-static struct segment_header *segment_at(struct wb_device *wb, u32 k)
-{
-	return large_array_at(wb->segment_header_array, k);
-}
-
 struct segment_header *get_segment_header_by_id(struct wb_device *wb, u64 id)
 {
-	return segment_at(wb, segment_id_to_idx(wb, id));
+	return &wb->segment_header_array[segment_id_to_idx(wb, id)];
 }
 
 /*----------------------------------------------------------------------------*/
@@ -159,13 +107,15 @@ static int init_segment_header_array(struct wb_device *wb)
 	BUILD_BUG_ON(sizeof(struct segment_header) != 32);
 	BUILD_BUG_ON(sizeof(struct wb_map_entry) != 16);
 	BUILD_BUG_ON((1 << (SEGMENT_SIZE_ORDER - 3)) > 128);
-	wb->segment_header_array = large_array_alloc(sizeof(struct segment_header),
-						   wb->nr_segments);
+	if (wb->nr_segments > SZ_MAX / sizeof(*wb->segment_header_array))
+		return -EOVERFLOW;
+	wb->segment_header_array = vmalloc((size_t)wb->nr_segments *
+					  sizeof(*wb->segment_header_array));
 	if (!wb->segment_header_array)
 		return -ENOMEM;
 
 	for (i = 0; i < wb->nr_segments; i++) {
-		struct segment_header *seg = segment_at(wb, i);
+		struct segment_header *seg = &wb->segment_header_array[i];
 
 		seg->id = 0;
 		seg->length = 0;
@@ -173,11 +123,6 @@ static int init_segment_header_array(struct wb_device *wb)
 		bitmap_zero(seg->dirty_bits, 128);
 	}
 	return 0;
-}
-
-static void free_segment_header_array(struct wb_device *wb)
-{
-	large_array_free(wb->segment_header_array);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -809,7 +754,7 @@ static int do_find_max_id(struct wb_device *wb, u64 *max_id)
 
 	*max_id = 0;
 	for (k = 0; k < wb->nr_segments; k++) {
-		struct segment_header *seg = segment_at(wb, k);
+		struct segment_header *seg = &wb->segment_header_array[k];
 		struct segment_header_device *header;
 		err = read_segment_header(buf, wb, seg);
 		if (err)
@@ -870,7 +815,7 @@ static int do_apply_valid_segments(struct wb_device *wb, u64 *max_id)
 	for (i = start_idx; i < (start_idx + wb->nr_segments); i++) {
 		u32 actual, expected, k;
 		div_u64_rem(i, wb->nr_segments, &k);
-		seg = segment_at(wb, k);
+		seg = &wb->segment_header_array[k];
 
 		err = read_whole_segment(rambuf, wb, seg);
 		if (err)
@@ -1164,7 +1109,7 @@ static int init_metadata(struct wb_device *wb)
 	return err;
 
 bad_alloc_ht:
-	free_segment_header_array(wb);
+	vfree(wb->segment_header_array);
 bad_alloc_segment_header_array:
 	return err;
 }
@@ -1172,7 +1117,7 @@ bad_alloc_segment_header_array:
 static void free_metadata(struct wb_device *wb)
 {
 	free_ht(wb);
-	free_segment_header_array(wb);
+	vfree(wb->segment_header_array);
 }
 
 static int init_writeback_daemon(struct wb_device *wb)

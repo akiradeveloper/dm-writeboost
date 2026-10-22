@@ -293,7 +293,7 @@ struct wb_device {
 	 **********************/
 
 	u32 nr_segments; /* Const */
-	struct large_array *segment_header_array;
+	struct segment_header *segment_header_array;
 
 	/*--------------------------------------------------------------------*/
 

@@ -31,7 +31,11 @@ struct large_array {
 
 static struct large_array *large_array_alloc(u32 elemsize, u64 nr_elems)
 {
-	struct large_array *arr = kmalloc(sizeof(*arr), GFP_KERNEL);
+	struct large_array *arr;
+
+	if (!elemsize || nr_elems > SZ_MAX / elemsize)
+		return NULL;
+	arr = kmalloc(sizeof(*arr), GFP_KERNEL);
 	if (!arr) {
 		DMERR("Failed to allocate arr");
 		return NULL;
@@ -67,88 +71,71 @@ static void *large_array_at(struct large_array *arr, u64 i)
 /*----------------------------------------------------------------------------*/
 
 /*
- * Get the in-core metablock of the given index.
+ * Segment locations are derived from their position in the fixed RAM array.
+ * Cache indices remain stable for the lifetime of the target.
  */
-static struct metablock *mb_at(struct wb_device *wb, u32 idx)
+static u32 segment_index(struct wb_device *wb, struct segment_header *seg)
 {
-	u32 idx_inseg;
-	u32 seg_idx = div_u64_rem(idx, wb->nr_caches_inseg, &idx_inseg);
-	struct segment_header *seg = large_array_at(wb->segment_header_array, seg_idx);
-	return seg->mb_array + idx_inseg;
+	return seg - (struct segment_header *)wb->segment_header_array->data;
 }
 
-static void mb_array_empty_init(struct wb_device *wb)
+u32 segment_start_idx(struct wb_device *wb, struct segment_header *seg)
 {
-	u32 i;
-	for (i = 0; i < wb->nr_caches; i++) {
-		struct metablock *mb = mb_at(wb, i);
-		INIT_HLIST_NODE(&mb->ht_list);
-
-		mb->idx = i;
-		mb->dirtiness.data_bits = 0;
-		mb->dirtiness.is_dirty = false;
-	}
+	return segment_index(wb, seg) * wb->nr_caches_inseg;
 }
 
-/*
- * Calc the starting sector of the k-th segment
- */
 static sector_t calc_segment_header_start(struct wb_device *wb, u32 k)
 {
-	return (1 << 11) + (1 << SEGMENT_SIZE_ORDER) * k;
+	return ((sector_t)1 << 11) + ((sector_t)k << SEGMENT_SIZE_ORDER);
 }
 
-static u32 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
+sector_t segment_start_sector(struct wb_device *wb, struct segment_header *seg)
+{
+	return calc_segment_header_start(wb, segment_index(wb, seg));
+}
+
+static u64 calc_nr_segments(struct dm_dev *dev, struct wb_device *wb)
 {
 	sector_t devsize = dm_devsize(dev);
+
+	if (devsize <= (1 << 11))
+		return 0;
 	return div_u64(devsize - (1 << 11), 1 << SEGMENT_SIZE_ORDER);
 }
 
-/*
- * Get the relative index in a segment of the mb_idx-th metablock
- */
-u8 mb_idx_inseg(struct wb_device *wb, u32 mb_idx)
+u8 mb_idx_inseg(struct wb_device *wb, u32 cache_idx)
 {
-	u32 tmp32;
-	div_u64_rem(mb_idx, wb->nr_caches_inseg, &tmp32);
-	return tmp32;
+	u32 idx_inseg;
+
+	div_u64_rem(cache_idx, wb->nr_caches_inseg, &idx_inseg);
+	return idx_inseg;
 }
 
-/*
- * Calc the starting sector of the mb_idx-th cache block
- */
-sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg, u32 mb_idx)
+sector_t calc_mb_start_sector(struct wb_device *wb, struct segment_header *seg,
+			     u32 cache_idx)
 {
-	return seg->start_sector + ((1 + mb_idx_inseg(wb, mb_idx)) << 3);
+	return segment_start_sector(wb, seg) +
+	       ((1 + mb_idx_inseg(wb, cache_idx)) << 3);
 }
 
-/*
- * Get the segment that contains the passed mb
- */
-struct segment_header *mb_to_seg(struct wb_device *wb, struct metablock *mb)
+struct segment_header *cache_idx_to_seg(struct wb_device *wb, u32 cache_idx)
 {
-	struct segment_header *seg;
-	seg = ((void *) mb)
-	      - mb_idx_inseg(wb, mb->idx) * sizeof(struct metablock)
-	      - sizeof(struct segment_header);
-	return seg;
+	u32 seg_idx = div_u64(cache_idx, wb->nr_caches_inseg);
+
+	return large_array_at(wb->segment_header_array, seg_idx);
 }
 
-bool is_on_buffer(struct wb_device *wb, u32 mb_idx)
+bool is_on_buffer(struct wb_device *wb, u32 cache_idx)
 {
-	u32 start = wb->current_seg->start_idx;
-	if (mb_idx < start)
-		return false;
+	u32 start = segment_start_idx(wb, wb->current_seg);
 
-	if (mb_idx >= (start + wb->nr_caches_inseg))
-		return false;
-
-	return true;
+	return cache_idx >= start && cache_idx - start < wb->nr_caches_inseg;
 }
 
 static u32 segment_id_to_idx(struct wb_device *wb, u64 id)
 {
 	u32 idx;
+
 	div_u64_rem(id - 1, wb->nr_segments, &idx);
 	return idx;
 }
@@ -158,10 +145,6 @@ static struct segment_header *segment_at(struct wb_device *wb, u32 k)
 	return large_array_at(wb->segment_header_array, k);
 }
 
-/*
- * Get the segment from the segment id.
- * The index of the segment is calculated from the segment id.
- */
 struct segment_header *get_segment_header_by_id(struct wb_device *wb, u64 id)
 {
 	return segment_at(wb, segment_id_to_idx(wb, id));
@@ -171,31 +154,24 @@ struct segment_header *get_segment_header_by_id(struct wb_device *wb, u64 id)
 
 static int init_segment_header_array(struct wb_device *wb)
 {
-	u32 segment_idx;
+	u32 i;
 
-	wb->segment_header_array = large_array_alloc(
-			sizeof(struct segment_header) +
-			sizeof(struct metablock) * wb->nr_caches_inseg,
-			wb->nr_segments);
-	if (!wb->segment_header_array) {
-		DMERR("Failed to allocate segment_header_array");
+	BUILD_BUG_ON(sizeof(struct segment_header) != 32);
+	BUILD_BUG_ON(sizeof(struct wb_map_entry) != 16);
+	BUILD_BUG_ON((1 << (SEGMENT_SIZE_ORDER - 3)) > 128);
+	wb->segment_header_array = large_array_alloc(sizeof(struct segment_header),
+						   wb->nr_segments);
+	if (!wb->segment_header_array)
 		return -ENOMEM;
-	}
 
-	for (segment_idx = 0; segment_idx < wb->nr_segments; segment_idx++) {
-		struct segment_header *seg = large_array_at(wb->segment_header_array, segment_idx);
+	for (i = 0; i < wb->nr_segments; i++) {
+		struct segment_header *seg = segment_at(wb, i);
 
 		seg->id = 0;
 		seg->length = 0;
 		atomic_set(&seg->nr_inflight_ios, 0);
-
-		/* Const values */
-		seg->start_idx = wb->nr_caches_inseg * segment_idx;
-		seg->start_sector = calc_segment_header_start(wb, segment_idx);
+		bitmap_zero(seg->dirty_bits, 128);
 	}
-
-	mb_array_empty_init(wb);
-
 	return 0;
 }
 
@@ -206,104 +182,76 @@ static void free_segment_header_array(struct wb_device *wb)
 
 /*----------------------------------------------------------------------------*/
 
-struct ht_head {
-	struct hlist_head ht_list;
-};
-
 static int ht_empty_init(struct wb_device *wb)
 {
-	u32 idx;
-	size_t i, nr_heads;
-	struct large_array *arr;
+	struct wb_map_entry *entries;
+	u32 *heads;
+	/* Four slots per bucket at full occupancy; never resize during I/O. */
+	u32 nr_buckets = max_t(u32, 1, wb->nr_caches / 4 + !!(wb->nr_caches % 4));
+	int err;
 
-	wb->htsize = wb->nr_caches;
-	nr_heads = wb->htsize + 1;
-	arr = large_array_alloc(sizeof(struct ht_head), nr_heads);
-	if (!arr) {
-		DMERR("Failed to allocate htable");
+	if (wb->nr_caches > SZ_MAX / sizeof(*entries) ||
+	    nr_buckets > SZ_MAX / sizeof(*heads))
+		return -EOVERFLOW;
+
+	entries = vmalloc((size_t)wb->nr_caches * sizeof(*entries));
+	if (!entries)
 		return -ENOMEM;
+	heads = vmalloc((size_t)nr_buckets * sizeof(*heads));
+	if (!heads) {
+		err = -ENOMEM;
+		goto bad_heads;
 	}
-
-	wb->htable = arr;
-
-	for (i = 0; i < nr_heads; i++) {
-		struct ht_head *hd = large_array_at(arr, i);
-		INIT_HLIST_HEAD(&hd->ht_list);
+	wb->data_bits = vzalloc(wb->nr_caches);
+	if (!wb->data_bits) {
+		err = -ENOMEM;
+		goto bad_data_bits;
 	}
-
-	wb->null_head = large_array_at(wb->htable, wb->htsize);
-
-	for (idx = 0; idx < wb->nr_caches; idx++) {
-		struct metablock *mb = mb_at(wb, idx);
-		hlist_add_head(&mb->ht_list, &wb->null_head->ht_list);
-	}
-
+	err = wb_map_init(&wb->map, entries, wb->nr_caches, heads, nr_buckets);
+	if (err)
+		goto bad_map;
 	return 0;
+
+bad_map:
+	vfree(wb->data_bits);
+bad_data_bits:
+	vfree(heads);
+bad_heads:
+	vfree(entries);
+	return err;
 }
 
 static void free_ht(struct wb_device *wb)
 {
-	large_array_free(wb->htable);
+	vfree(wb->data_bits);
+	vfree(wb->map.heads);
+	vfree(wb->map.entries);
 }
 
-struct ht_head *ht_get_head(struct wb_device *wb, struct lookup_key *key)
+u32 ht_lookup(struct wb_device *wb, struct lookup_key *key)
 {
-	u32 idx;
-	div_u64_rem(key->sector >> 3, wb->htsize, &idx);
-	return large_array_at(wb->htable, idx);
+	return wb_map_lookup(&wb->map, key->sector);
 }
 
-static bool mb_hit(struct metablock *mb, struct lookup_key *key)
+void ht_del(struct wb_device *wb, u32 cache_idx)
 {
-	return mb->sector == key->sector;
+	/* Keep the physical slot's LBA and mask for writeback and recovery. */
+	wb_map_remove(&wb->map, cache_idx);
 }
 
-/*
- * Remove the metablock from the hashtable and link the orphan to the null head.
- */
-void ht_del(struct wb_device *wb, struct metablock *mb)
+void ht_register(struct wb_device *wb, u32 cache_idx, struct lookup_key *key)
 {
-	struct ht_head *null_head;
-
-	hlist_del(&mb->ht_list);
-
-	null_head = wb->null_head;
-	hlist_add_head(&mb->ht_list, &null_head->ht_list);
+	ASSERT(!(key->sector & 7));
+	wb_map_insert(&wb->map, cache_idx, key->sector);
 }
 
-void ht_register(struct wb_device *wb, struct ht_head *head,
-		 struct metablock *mb, struct lookup_key *key)
-{
-	hlist_del(&mb->ht_list);
-	hlist_add_head(&mb->ht_list, &head->ht_list);
-
-	BUG_ON(key->sector & 7); // should be 4KB aligned
-	mb->sector = key->sector;
-};
-
-struct metablock *ht_lookup(struct wb_device *wb, struct ht_head *head,
-			    struct lookup_key *key)
-{
-	struct metablock *mb, *found = NULL;
-	hlist_for_each_entry(mb, &head->ht_list, ht_list) {
-		if (mb_hit(mb, key)) {
-			found = mb;
-			break;
-		}
-	}
-	return found;
-}
-
-/*
- * Remove all the metablock in the segment from the lookup table.
- */
 void discard_caches_inseg(struct wb_device *wb, struct segment_header *seg)
 {
+	u32 start = segment_start_idx(wb, seg);
 	u8 i;
-	for (i = 0; i < wb->nr_caches_inseg; i++) {
-		struct metablock *mb = seg->mb_array + i;
-		ht_del(wb, mb);
-	}
+
+	for (i = 0; i < wb->nr_caches_inseg; i++)
+		ht_del(wb, start + i);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -694,7 +642,7 @@ static int read_whole_segment(void *buf, struct wb_device *wb,
 	};
 	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
-		.sector = seg->start_sector,
+		.sector = segment_start_sector(wb, seg),
 		.count = 1 << SEGMENT_SIZE_ORDER,
 	};
 	return wb_io(&io_req, 1, &region, NULL, false);
@@ -717,14 +665,15 @@ void prepare_segment_header_device(void *rambuffer,
 	struct segment_header_device *dest = rambuffer;
 	u32 i;
 
-	ASSERT((src->length) == (wb->cursor - src->start_idx));
+	ASSERT((src->length) == (wb->cursor - segment_start_idx(wb, src)));
 
 	for (i = 0; i < src->length; i++) {
-		struct metablock *mb = src->mb_array + i;
+		u32 cache_idx = segment_start_idx(wb, src) + i;
 		struct metablock_device *mbdev = dest->mbarr + i;
+		struct dirtiness dirtiness = read_mb_dirtiness(wb, src, cache_idx);
 
-		mbdev->sector = cpu_to_le64((u64)mb->sector);
-		mbdev->dirty_bits = mb->dirtiness.is_dirty ? mb->dirtiness.data_bits : 0;
+		mbdev->sector = cpu_to_le64(cache_sector(wb, cache_idx));
+		mbdev->dirty_bits = dirtiness.is_dirty ? dirtiness.data_bits : 0;
 	}
 
 	dest->id = cpu_to_le64(src->id);
@@ -741,21 +690,21 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 				  struct segment_header_device *src, u8 i)
 {
 	struct lookup_key key;
-	struct ht_head *head;
-	struct metablock *found = NULL, *mb = seg->mb_array + i;
+	u32 found, cache_idx = segment_start_idx(wb, seg) + i;
 	struct metablock_device *mbdev = src->mbarr + i;
 
-	mb->sector = le64_to_cpu(mbdev->sector);
-
-	mb->dirtiness.data_bits = mbdev->dirty_bits ? mbdev->dirty_bits : 255;
-	mb->dirtiness.is_dirty = mbdev->dirty_bits ? true : false;
+	wb->map.entries[cache_idx].sector = le64_to_cpu(mbdev->sector);
+	wb->data_bits[cache_idx] = mbdev->dirty_bits ? mbdev->dirty_bits : 255;
+	if (mbdev->dirty_bits)
+		__set_bit(i, seg->dirty_bits);
+	else
+		__clear_bit(i, seg->dirty_bits);
 
 	key = (struct lookup_key) {
-		.sector = mb->sector,
+		.sector = cache_sector(wb, cache_idx),
 	};
-	head = ht_get_head(wb, &key);
-	found = ht_lookup(wb, head, &key);
-	if (found) {
+	found = ht_lookup(wb, &key);
+	if (found != WB_MAP_NONE) {
 		int err = 0;
 		u8 i;
 		struct write_io wio;
@@ -767,7 +716,8 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 			.data = buf,
 			.data_bits = 0,
 		};
-		err = prepare_overwrite(wb, mb_to_seg(wb, found), found, &wio, mb->dirtiness.data_bits);
+		err = prepare_overwrite(wb, cache_idx_to_seg(wb, found), found,
+					&wio, wb->data_bits[cache_idx]);
 		if (err)
 			goto fail_out;
 
@@ -786,7 +736,7 @@ static int apply_metablock_device(struct wb_device *wb, struct segment_header *s
 			};
 			region = (struct dm_io_region) {
 				.bdev = wb->backing_dev->bdev,
-				.sector = mb->sector + i,
+				.sector = cache_sector(wb, cache_idx) + i,
 				.count = 1,
 			};
 			err = wb_io(&io_req, 1, &region, NULL, true);
@@ -800,9 +750,9 @@ fail_out:
 			return err;
 	}
 
-	ht_register(wb, head, mb, &key);
+	ht_register(wb, cache_idx, &key);
 
-	if (mb->dirtiness.is_dirty)
+	if (test_bit(i, seg->dirty_bits))
 		inc_nr_dirty_caches(wb);
 
 	return 0;
@@ -837,7 +787,7 @@ static int read_segment_header(void *buf, struct wb_device *wb,
 	};
 	struct dm_io_region region = {
 		.bdev = wb->cache_dev->bdev,
-		.sector = seg->start_sector,
+		.sector = segment_start_sector(wb, seg),
 		.count = 8,
 	};
 	return wb_io(&io_req, 1, &region, NULL, false);
@@ -1313,9 +1263,14 @@ bad_data_synchronizer:
 int resume_cache(struct wb_device *wb)
 {
 	int err = 0;
+	u64 nr_segments = calc_nr_segments(wb->cache_dev, wb);
 
-	wb->nr_segments = calc_nr_segments(wb->cache_dev, wb);
 	wb->nr_caches_inseg = (1 << (SEGMENT_SIZE_ORDER - 3)) - 1;
+	if (!nr_segments || nr_segments > (u32)~0U / wb->nr_caches_inseg) {
+		DMERR("Cache capacity does not fit 32-bit cache indices");
+		return -EINVAL;
+	}
+	wb->nr_segments = nr_segments;
 	wb->nr_caches = wb->nr_segments * wb->nr_caches_inseg;
 
 	err = init_devices(wb);

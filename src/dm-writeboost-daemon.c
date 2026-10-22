@@ -115,7 +115,7 @@ static void do_flush_proc(struct wb_device *wb)
 	};
 	region = (struct dm_io_region) {
 		.bdev = wb->cache_dev->bdev,
-		.sector = seg->start_sector,
+		.sector = segment_start_sector(wb, seg),
 		.count = (seg->length + 1) << 3,
 	};
 
@@ -297,7 +297,7 @@ static int fill_writeback_seg(struct wb_device *wb, struct writeback_segment *wr
 	};
 	struct dm_io_region region_r = {
 		.bdev = wb->cache_dev->bdev,
-		.sector = seg->start_sector + (1 << 3), /* Header excluded */
+		.sector = segment_start_sector(wb, seg) + (1 << 3), /* Header excluded */
 		.count = seg->length << 3,
 	};
 
@@ -317,14 +317,14 @@ static void prepare_writeback_ios(struct wb_device *wb, struct writeback_segment
 	for (i = 0; i < seg->length; i++) {
 		struct writeback_io *writeback_io;
 
-		struct metablock *mb = seg->mb_array + i;
-		struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, mb);
+		u32 cache_idx = segment_start_idx(wb, seg) + i;
+		struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, cache_idx);
 		ASSERT(dirtiness.data_bits > 0);
 		if (!dirtiness.is_dirty)
 			continue;
 
 		writeback_io = writeback_seg->ios + i;
-		writeback_io->sector = mb->sector;
+		writeback_io->sector = cache_sector(wb, cache_idx);
 		writeback_io->id = seg->id;
 		/* writeback_io->data is already set */
 		writeback_io->data_bits = dirtiness.data_bits;
@@ -338,8 +338,9 @@ void mark_clean_seg(struct wb_device *wb, struct segment_header *seg)
 {
 	u8 i;
 	for (i = 0; i < seg->length; i++) {
-		struct metablock *mb = seg->mb_array + i;
-		if (mark_clean_mb(wb, mb))
+		u32 cache_idx = segment_start_idx(wb, seg) + i;
+
+		if (mark_clean_mb(wb, cache_idx))
 			dec_nr_dirty_caches(wb);
 	}
 }

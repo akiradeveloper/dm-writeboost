@@ -9,8 +9,19 @@ on:
       - master
 
 jobs:
+  unit_tests:
+    name: Map unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: make test
+      - name: Address and undefined behavior sanitizers
+        run: make test-sanitize
+
   run_tests:
     name: Tests
+    needs: unit_tests
     runs-on: ubuntu-latest
     steps:
       - name: Kernel version

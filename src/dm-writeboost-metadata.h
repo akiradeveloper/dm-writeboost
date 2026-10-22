@@ -28,7 +28,14 @@ struct rambuffer *get_rambuffer_by_id(struct wb_device *wb, u64 id);
 sector_t calc_mb_start_sector(struct wb_device *, struct segment_header *,
 			      u32 mb_idx);
 u8 mb_idx_inseg(struct wb_device *, u32 mb_idx);
-struct segment_header *mb_to_seg(struct wb_device *, struct metablock *);
+struct segment_header *cache_idx_to_seg(struct wb_device *wb, u32 cache_idx);
+u32 segment_start_idx(struct wb_device *wb, struct segment_header *seg);
+sector_t segment_start_sector(struct wb_device *wb, struct segment_header *seg);
+static inline sector_t cache_sector(struct wb_device *wb, u32 cache_idx)
+{
+	return wb->map.entries[cache_idx].sector;
+}
+
 bool is_on_buffer(struct wb_device *, u32 mb_idx);
 
 /*----------------------------------------------------------------------------*/
@@ -37,13 +44,9 @@ struct lookup_key {
 	sector_t sector;
 };
 
-struct ht_head;
-struct ht_head *ht_get_head(struct wb_device *, struct lookup_key *);
-struct metablock *ht_lookup(struct wb_device *,
-			    struct ht_head *, struct lookup_key *);
-void ht_register(struct wb_device *, struct ht_head *,
-		 struct metablock *, struct lookup_key *);
-void ht_del(struct wb_device *, struct metablock *);
+u32 ht_lookup(struct wb_device *wb, struct lookup_key *key);
+void ht_register(struct wb_device *wb, u32 cache_idx, struct lookup_key *key);
+void ht_del(struct wb_device *wb, u32 cache_idx);
 void discard_caches_inseg(struct wb_device *, struct segment_header *);
 
 /*----------------------------------------------------------------------------*/

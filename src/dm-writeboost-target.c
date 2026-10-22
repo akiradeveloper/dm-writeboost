@@ -195,10 +195,9 @@ static void wake_up_active_wq(wait_queue_head_t *wq)
 static u8 count_dirty_caches_remained(struct segment_header *seg)
 {
 	u8 i, count = 0;
-	struct metablock *mb;
+
 	for (i = 0; i < seg->length; i++) {
-		mb = seg->mb_array + i;
-		if (mb->dirtiness.is_dirty)
+		if (test_bit(i, seg->dirty_bits))
 			count++;
 	}
 	return count;
@@ -217,31 +216,35 @@ void dec_nr_dirty_caches(struct wb_device *wb)
 		wake_up_interruptible(&wb->wait_drop_caches);
 }
 
-static bool taint_mb(struct wb_device *wb, struct metablock *mb, u8 data_bits)
+static bool taint_mb(struct wb_device *wb, u32 cache_idx, u8 data_bits)
 {
+	struct segment_header *seg = cache_idx_to_seg(wb, cache_idx);
+	u8 idx_inseg = mb_idx_inseg(wb, cache_idx);
 	unsigned long flags;
 	bool flipped = false;
 
 	ASSERT(data_bits > 0);
 	spin_lock_irqsave(&wb->mb_lock, flags);
-	if (!mb->dirtiness.is_dirty) {
-		mb->dirtiness.is_dirty = true;
+	if (!test_bit(idx_inseg, seg->dirty_bits)) {
+		__set_bit(idx_inseg, seg->dirty_bits);
 		flipped = true;
 	}
-	mb->dirtiness.data_bits |= data_bits;
+	wb->data_bits[cache_idx] |= data_bits;
 	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
 	return flipped;
 }
 
-bool mark_clean_mb(struct wb_device *wb, struct metablock *mb)
+bool mark_clean_mb(struct wb_device *wb, u32 cache_idx)
 {
+	struct segment_header *seg = cache_idx_to_seg(wb, cache_idx);
+	u8 idx_inseg = mb_idx_inseg(wb, cache_idx);
 	unsigned long flags;
 	bool flipped = false;
 
 	spin_lock_irqsave(&wb->mb_lock, flags);
-	if (mb->dirtiness.is_dirty) {
-		mb->dirtiness.is_dirty = false;
+	if (test_bit(idx_inseg, seg->dirty_bits)) {
+		__clear_bit(idx_inseg, seg->dirty_bits);
 		flipped = true;
 	}
 	spin_unlock_irqrestore(&wb->mb_lock, flags);
@@ -250,16 +253,17 @@ bool mark_clean_mb(struct wb_device *wb, struct metablock *mb)
 }
 
 /*
- * Read the dirtiness of a metablock at the moment.
+ * Read the dirtiness of a cache block at the moment.
  */
 struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
-				   struct metablock *mb)
+				   u32 cache_idx)
 {
 	unsigned long flags;
 	struct dirtiness retval;
 
 	spin_lock_irqsave(&wb->mb_lock, flags);
-	retval = mb->dirtiness;
+	retval.is_dirty = test_bit(mb_idx_inseg(wb, cache_idx), seg->dirty_bits);
+	retval.data_bits = wb->data_bits[cache_idx];
 	spin_unlock_irqrestore(&wb->mb_lock, flags);
 
 	return retval;
@@ -269,7 +273,7 @@ struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *
 
 void cursor_init(struct wb_device *wb)
 {
-	wb->cursor = wb->current_seg->start_idx;
+	wb->cursor = segment_start_idx(wb, wb->current_seg);
 	wb->current_seg->length = 0;
 }
 
@@ -361,7 +365,7 @@ static void __acquire_new_seg(struct wb_device *wb, u64 id)
 /*
  * Acquire the new segment and RAM buffer for the following writes.
  * Guarantees all dirty caches in the segments are written back and
- * all metablocks in it are invalidated (Linked to null head).
+ * all cache blocks in it are removed from the lookup index.
  */
 void acquire_new_seg(struct wb_device *wb, u64 id)
 {
@@ -519,11 +523,10 @@ static void copy_to_bio_payload(struct bio *bio, void *buf, u8 copy_bits)
 /*----------------------------------------------------------------------------*/
 
 struct lookup_result {
-	struct ht_head *head; /* Lookup head used */
 	struct lookup_key key; /* Lookup key used */
 
 	struct segment_header *found_seg;
-	struct metablock *found_mb;
+	u32 found_idx;
 
 	bool found; /* Cache hit? */
 	bool on_buffer; /* Is the metablock found on the RAM buffer? */
@@ -538,19 +541,17 @@ static void cache_lookup(struct wb_device *wb, struct bio *bio, struct lookup_re
 	res->key = (struct lookup_key) {
 		.sector = calc_cache_alignment(bio->bi_iter.bi_sector),
 	};
-	res->head = ht_get_head(wb, &res->key);
-
-	res->found_mb = ht_lookup(wb, res->head, &res->key);
-	if (res->found_mb) {
-		res->found_seg = mb_to_seg(wb, res->found_mb);
+	res->found_idx = ht_lookup(wb, &res->key);
+	if (res->found_idx != WB_MAP_NONE) {
+		res->found_seg = cache_idx_to_seg(wb, res->found_idx);
 		atomic_inc(&res->found_seg->nr_inflight_ios);
 	}
 
-	res->found = (res->found_mb != NULL);
+	res->found = (res->found_idx != WB_MAP_NONE);
 
 	res->on_buffer = false;
 	if (res->found)
-		res->on_buffer = is_on_buffer(wb, res->found_mb->idx);
+		res->on_buffer = is_on_buffer(wb, res->found_idx);
 
 	inc_stat(wb, bio_is_write(bio), res->found, res->on_buffer, bio_is_fullsize(bio));
 }
@@ -617,9 +618,9 @@ bad:
  * Get the reference to the 4KB-aligned data in RAM buffer.
  * Since it only takes the reference caller need not to free the pointer.
  */
-static void *ref_buffered_mb(struct wb_device *wb, struct metablock *mb)
+static void *ref_buffered_mb(struct wb_device *wb, u32 cache_idx)
 {
-	sector_t offset = ((mb_idx_inseg(wb, mb->idx) + 1) << 3);
+	sector_t offset = ((mb_idx_inseg(wb, cache_idx) + 1) << 3);
 	return wb->current_rambuf->data + (offset << 9);
 }
 
@@ -628,7 +629,7 @@ static void *ref_buffered_mb(struct wb_device *wb, struct metablock *mb)
  * Caller should free the returned pointer after used by mempool_alloc().
  */
 static void *read_mb(struct wb_device *wb, struct segment_header *seg,
-		     struct metablock *mb, u8 data_bits)
+		     u32 cache_idx, u8 data_bits)
 {
 	u8 i;
 	void *result = mempool_alloc(wb->buf_8_pool, GFP_NOIO);
@@ -653,7 +654,7 @@ static void *read_mb(struct wb_device *wb, struct segment_header *seg,
 
 		region = (struct dm_io_region) {
 			.bdev = wb->cache_dev->bdev,
-			.sector = calc_mb_start_sector(wb, seg, mb->idx) + i,
+			.sector = calc_mb_start_sector(wb, seg, cache_idx) + i,
 			.count = 1,
 		};
 
@@ -864,14 +865,12 @@ static void read_cache_cell_copy_data(struct wb_device *wb, struct bio *bio, uns
  */
 static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell)
 {
-	struct metablock *mb;
-	u32 _mb_idx_inseg;
+	u32 cache_idx, idx_inseg;
 	struct segment_header *seg;
 
 	struct lookup_key key = {
 		.sector = cell->sector,
 	};
-	struct ht_head *head = ht_get_head(wb, &key);
 
 	mutex_lock(&wb->io_lock);
 	/*
@@ -886,20 +885,20 @@ static void inject_read_cache(struct wb_device *wb, struct read_cache_cell *cell
 	might_queue_current_buffer(wb);
 
 	seg = wb->current_seg;
-	_mb_idx_inseg = mb_idx_inseg(wb, advance_cursor(wb));
+	cache_idx = advance_cursor(wb);
+	idx_inseg = mb_idx_inseg(wb, cache_idx);
 
 	/*
 	 * We should copy the cell data into the rambuf with lock held
 	 * otherwise subsequent write data may be written first and then overwritten by
 	 * the old data in the cell.
 	 */
-	memcpy(wb->current_rambuf->data + ((_mb_idx_inseg + 1) << 12), cell->data, 1 << 12);
+	memcpy(wb->current_rambuf->data + ((idx_inseg + 1) << 12), cell->data, 1 << 12);
 
-	mb = seg->mb_array + _mb_idx_inseg;
-	ASSERT(!mb->dirtiness.is_dirty);
-	mb->dirtiness.data_bits = 255;
+	ASSERT(!test_bit(idx_inseg, seg->dirty_bits));
+	wb->data_bits[cache_idx] = 255;
 
-	ht_register(wb, head, mb, &key);
+	ht_register(wb, cache_idx, &key);
 
 	mutex_unlock(&wb->io_lock);
 
@@ -1080,9 +1079,10 @@ static void memcpy_masked(void *to, u8 protect_bits, void *from, u8 copy_bits)
 	}
 }
 
-int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct metablock *old_mb, struct write_io* wio, u8 overwrite_bits)
+int prepare_overwrite(struct wb_device *wb, struct segment_header *seg,
+		      u32 old_idx, struct write_io *wio, u8 overwrite_bits)
 {
-	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_mb);
+	struct dirtiness dirtiness = read_mb_dirtiness(wb, seg, old_idx);
 
 	bool needs_merge_prev_cache = !(overwrite_bits == 255) || !(dirtiness.data_bits == 255);
 
@@ -1098,7 +1098,7 @@ int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct m
 		wait_for_flushing(wb, seg->id);
 		ASSERT(dirtiness.is_dirty);
 
-		buf = read_mb(wb, seg, old_mb, dirtiness.data_bits);
+		buf = read_mb(wb, seg, old_idx, dirtiness.data_bits);
 		if (!buf)
 			return -EIO;
 
@@ -1108,10 +1108,10 @@ int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct m
 		mempool_free(buf, wb->buf_8_pool);
 	}
 
-	if (mark_clean_mb(wb, old_mb))
+	if (mark_clean_mb(wb, old_idx))
 		dec_nr_dirty_caches(wb);
 
-	ht_del(wb, old_mb);
+	ht_del(wb, old_idx);
 
 	return 0;
 }
@@ -1119,17 +1119,18 @@ int prepare_overwrite(struct wb_device *wb, struct segment_header *seg, struct m
 /*
  * Get a new place to write.
  */
-static struct metablock *prepare_new_write_pos(struct wb_device *wb)
+static u32 prepare_new_write_pos(struct wb_device *wb)
 {
-	struct metablock *ret = wb->current_seg->mb_array + mb_idx_inseg(wb, advance_cursor(wb));
-	ASSERT(!ret->dirtiness.is_dirty);
-	ret->dirtiness.data_bits = 0;
-	return ret;
+	u32 cache_idx = advance_cursor(wb);
+
+	ASSERT(!test_bit(mb_idx_inseg(wb, cache_idx), wb->current_seg->dirty_bits));
+	wb->data_bits[cache_idx] = 0;
+	return cache_idx;
 }
 
-static void write_on_rambuffer(struct wb_device *wb, struct metablock *write_pos, struct write_io *wio)
+static void write_on_rambuffer(struct wb_device *wb, u32 write_pos, struct write_io *wio)
 {
-	size_t mb_offset = (mb_idx_inseg(wb, write_pos->idx) + 1) << 12;
+	size_t mb_offset = (mb_idx_inseg(wb, write_pos) + 1) << 12;
 	void *mb_data = wb->current_rambuf->data + mb_offset;
 	if (wio->data_bits == 255)
 		memcpy(mb_data, wio->data, 1 << 12);
@@ -1141,7 +1142,7 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 {
 	int err = 0;
 
-	struct metablock *write_pos = NULL;
+	u32 write_pos = WB_MAP_NONE;
 	struct lookup_result res;
 
 	struct write_io wio;
@@ -1155,10 +1156,11 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 	cache_lookup(wb, bio, &res);
 	if (res.found) {
 		if (unlikely(res.on_buffer)) {
-			write_pos = res.found_mb;
+			write_pos = res.found_idx;
 			goto do_write;
 		} else {
-			err = prepare_overwrite(wb, res.found_seg, res.found_mb, &wio, wio.data_bits);
+			err = prepare_overwrite(wb, res.found_seg, res.found_idx,
+						&wio, wio.data_bits);
 			dec_inflight_ios(wb, res.found_seg);
 			if (err)
 				goto out;
@@ -1171,13 +1173,13 @@ static int do_process_write(struct wb_device *wb, struct bio *bio)
 	write_pos = prepare_new_write_pos(wb);
 
 do_write:
-	ASSERT(write_pos);
+	ASSERT(write_pos != WB_MAP_NONE);
 	write_on_rambuffer(wb, write_pos, &wio);
 
 	if (taint_mb(wb, write_pos, wio.data_bits))
 		inc_nr_dirty_caches(wb);
 
-	ht_register(wb, res.head, write_pos, &res.key);
+	ht_register(wb, write_pos, &res.key);
 
 out:
 	mutex_unlock(&wb->io_lock);
@@ -1251,7 +1253,7 @@ static int process_write_wa(struct wb_device *wb, struct bio *bio)
 	cache_lookup(wb, bio, &res);
 	if (res.found) {
 		dec_inflight_ios(wb, res.found_seg);
-		ht_del(wb, res.found_mb);
+		ht_del(wb, res.found_idx);
 	}
 	might_cancel_read_cache_cell(wb, bio);
 	mutex_unlock(&wb->io_lock);
@@ -1363,14 +1365,15 @@ static int process_read(struct wb_device *wb, struct bio *bio)
 		}
 	}
 
-	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_mb);
+	dirtiness = read_mb_dirtiness(wb, res.found_seg, res.found_idx);
 	if (unlikely(res.on_buffer)) {
 		int err = fill_payload_by_backing(wb, bio);
 		if (err)
 			goto read_buffered_mb_exit;
 
 		if (dirtiness.is_dirty)
-			copy_to_bio_payload(bio, ref_buffered_mb(wb, res.found_mb), dirtiness.data_bits);
+			copy_to_bio_payload(bio, ref_buffered_mb(wb, res.found_idx),
+					    dirtiness.data_bits);
 
 read_buffered_mb_exit:
 		dec_inflight_ios(wb, res.found_seg);
@@ -1395,7 +1398,7 @@ read_buffered_mb_exit:
 			goto read_mb_exit;
 
 		if (dirtiness.is_dirty) {
-			void *buf = read_mb(wb, res.found_seg, res.found_mb, dirtiness.data_bits);
+			void *buf = read_mb(wb, res.found_seg, res.found_idx, dirtiness.data_bits);
 			if (!buf) {
 				err = -EIO;
 				goto read_mb_exit;
@@ -1420,7 +1423,7 @@ read_mb_exit:
 	pbd->seg = res.found_seg;
 
 	bio_remap(bio, wb->cache_dev,
-		  calc_mb_start_sector(wb, res.found_seg, res.found_mb->idx) +
+		  calc_mb_start_sector(wb, res.found_seg, res.found_idx) +
 		  bio_calc_offset(bio));
 
 	return DM_MAPIO_REMAPPED;

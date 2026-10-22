@@ -17,10 +17,11 @@ obj-m := dm-writeboost.o
 dm-writeboost-objs := \
 	dm-writeboost-target.o \
 	dm-writeboost-metadata.o \
+	dm-writeboost-map.o \
 	dm-writeboost-daemon.o
 
 all:
-	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) modules
+	$(MAKE) -C $(KERNEL_TREE) M=$(CURDIR) modules
 
 clean:
-	$(MAKE) -C $(KERNEL_TREE) M=$(PWD) clean
+	$(MAKE) -C $(KERNEL_TREE) M=$(CURDIR) clean

@@ -36,6 +36,9 @@
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
+#include <linux/bitmap.h>
+
+#include "dm-writeboost-map.h"
 
 /* Preserve the old combined error bitmap for dm-io completion handlers. */
 #if DM_IO_HAS_UNSUP
@@ -135,28 +138,12 @@ struct dirtiness {
 	u8 data_bits;
 };
 
-struct metablock {
-	sector_t sector; /* The original aligned address */
-
-	u32 idx; /* Const. Index in the metablock array */
-
-	struct hlist_node ht_list; /* Linked to the hash table */
-
-	struct dirtiness dirtiness;
-};
-
 #define SZ_MAX (~(size_t)0)
 struct segment_header {
 	u64 id; /* Must be initialized to 0 */
-
-	u8 length; /* The number of valid metablocks */
-
-	u32 start_idx; /* Const */
-	sector_t start_sector; /* Const */
-
 	atomic_t nr_inflight_ios;
-
-	struct metablock mb_array[0];
+	u8 length; /* The number of valid cache blocks */
+	DECLARE_BITMAP(dirty_bits, 128); /* 127 blocks and one unused bit */
 };
 
 /*----------------------------------------------------------------------------*/
@@ -306,7 +293,7 @@ struct wb_device {
 	 **********************/
 
 	u32 nr_segments; /* Const */
-	struct large_array *segment_header_array;
+	struct segment_header *segment_header_array;
 
 	/*--------------------------------------------------------------------*/
 
@@ -315,14 +302,8 @@ struct wb_device {
 	 ********************/
 
 	u32 nr_caches; /* Const */
-	struct large_array *htable;
-	size_t htsize; /* Number of buckets in the hash table */
-
-	/*
-	 * Our hashtable has one special bucket called null head.
-	 * Orphan metablocks are linked to the null head.
-	 */
-	struct ht_head *null_head;
+	struct wb_map map;
+	u8 *data_bits;
 
 	/*--------------------------------------------------------------------*/
 
@@ -482,9 +463,11 @@ void cursor_init(struct wb_device *);
 void flush_current_buffer(struct wb_device *);
 void inc_nr_dirty_caches(struct wb_device *);
 void dec_nr_dirty_caches(struct wb_device *);
-bool mark_clean_mb(struct wb_device *, struct metablock *);
-struct dirtiness read_mb_dirtiness(struct wb_device *, struct segment_header *, struct metablock *);
-int prepare_overwrite(struct wb_device *, struct segment_header *, struct metablock *old_mb, struct write_io *, u8 overwrite_bits);
+bool mark_clean_mb(struct wb_device *wb, u32 cache_idx);
+struct dirtiness read_mb_dirtiness(struct wb_device *wb, struct segment_header *seg,
+				 u32 cache_idx);
+int prepare_overwrite(struct wb_device *wb, struct segment_header *seg,
+		      u32 old_idx, struct write_io *wio, u8 overwrite_bits);
 
 /*----------------------------------------------------------------------------*/
 

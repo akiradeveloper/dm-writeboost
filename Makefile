@@ -11,3 +11,11 @@ install:
 uninstall:
 	dkms remove --all $(DKMS_KEY)
 	rm -rf $(DKMS_DIR)
+
+.PHONY: test test-sanitize
+
+test:
+	$(MAKE) -C tests/unit test
+
+test-sanitize:
+	$(MAKE) -C tests/unit test-sanitize
